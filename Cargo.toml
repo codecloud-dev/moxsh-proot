@@ -1,0 +1,33 @@
+[package]
+name = "moxsh-proot"
+version = "1.0.0"
+edition = "2021"
+description = "ProOT 容器引擎：五语言融合（Rust ptrace 核心 / Go 安装器 / Python 脚本运行时 / Lua 钩子 / C JNI 桥）的无 root Linux 容器引擎，moxsh 系列专用。"
+license = "GPL-3.0"
+repository = "https://github.com/codecloud-dev/moxsh-proot"
+readme = "README.md"
+
+[lib]
+name = "moxsh_proot"
+# cdylib 产出 libmoxsh_proot.so（内含 Rust 引擎 + C JNI 桥接，由 build.rs 链接）；
+# rlib 供本机 `cargo test` 与独立二进制使用（cdylib-only 无法承载测试 harness）。
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# 只依赖 libc：所有内存安全敏感逻辑均在 Rust 内自研，避免外部 crate 在 NDK target 下的编译不确定性。
+# 版本全部用 "=x.y.z" 精确锁定（与 Cargo.lock 双保险）：上游小版本更新不会意外改变 CI 构建输入。
+libc = "=0.2.189"
+# rootfs 归档解压/备份打包。两 crate 均纯 Rust（flate2 默认 miniz_oxide 后端），NDK target 可编。
+# ProotError 为手写展开风格（不引 thiserror/reqwest/sha2 等，校验复用 crypto::sha256）。
+tar = "=0.4.46"
+flate2 = "=1.1.10"
+
+# 构建脚本依赖：cc 用于在 Android 目标下把 c/proot_bridge.c 编入 cdylib（见 build.rs）。
+[build-dependencies]
+cc = "=1.5.1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

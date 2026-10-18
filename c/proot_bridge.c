@@ -13,6 +13,13 @@
 // jbyteArray ↔ char* 缓冲（GetByteArrayElements + Release 传 0 提交）。
 // 返回值统一为 Rust C-ABI 的错误码/长度：>0 所需长度 / 0 缓冲不足 / <0 错误码。
 //
+// C 与 C++ 的 JNIEnv 形态差异（本文件编不过的经典坑，勿改回 env-> 写法）：
+//   C   ：typedef const struct JNINativeInterface *JNIEnv;（指针）
+//         → 调用必须是 (*env)->Func(env, ...)
+//   C++ ：typedef _JNIEnv JNIEnv;（类，成员函数 + operator->）
+//         → 调用才是 env->Func(...)
+// build.rs 以 -std=c11 编译本文件，故全程 (*env)-> 形式。
+//
 // 本文件不承载任何业务逻辑；仅在 Android 目标由 build.rs 编入
 // libmoxsh_proot.so（见 Cargo.toml 的 crate-type = cdylib）。
 
@@ -35,11 +42,11 @@ extern int moxsh_proot_translate_selftest(void);
 
 // 取 jstring 的 UTF-8；可选参数（null 透传 null，与 Rust 侧 read_opt_cstr 对应）。
 static const char* proot_jstr(JNIEnv* env, jstring s) {
-    return s == NULL ? NULL : env->GetStringUTFChars(s, NULL);
+    return s == NULL ? NULL : (*env)->GetStringUTFChars(env, s, NULL);
 }
 
 static void proot_jstr_free(JNIEnv* env, jstring s, const char* c) {
-    if (s != NULL && c != NULL) env->ReleaseStringUTFChars(s, c);
+    if (s != NULL && c != NULL) (*env)->ReleaseStringUTFChars(env, s, c);
 }
 
 // 字符串返回约定：Rust 经 GetByteArrayElements 指针直接写入（Release 传 0 提交），
@@ -79,10 +86,10 @@ Java_com_moxsh_core_ProotNative_nativeLogin(JNIEnv* env, jobject,
                                             jstring id, jstring moxshRoot, jbyteArray buf) {
     const char* i = proot_jstr(env, id);
     const char* r = proot_jstr(env, moxshRoot);
-    jsize cap = env->GetArrayLength(buf);
-    jbyte* p = env->GetByteArrayElements(buf, NULL);
+    jsize cap = (*env)->GetArrayLength(env, buf);
+    jbyte* p = (*env)->GetByteArrayElements(env, buf, NULL);
     int n = moxsh_proot_login(i, r, (char*)p, (size_t)cap);
-    env->ReleaseByteArrayElements(buf, p, 0);
+    (*env)->ReleaseByteArrayElements(env, buf, p, 0);
     proot_jstr_free(env, id, i); proot_jstr_free(env, moxshRoot, r);
     return proot_string_return(n);
 }
@@ -91,10 +98,10 @@ JNIEXPORT jint JNICALL
 Java_com_moxsh_core_ProotNative_nativeListInstalled(JNIEnv* env, jobject,
                                                     jstring moxshRoot, jbyteArray buf) {
     const char* r = proot_jstr(env, moxshRoot);
-    jsize cap = env->GetArrayLength(buf);
-    jbyte* p = env->GetByteArrayElements(buf, NULL);
+    jsize cap = (*env)->GetArrayLength(env, buf);
+    jbyte* p = (*env)->GetByteArrayElements(env, buf, NULL);
     int n = moxsh_proot_list_installed(r, (char*)p, (size_t)cap);
-    env->ReleaseByteArrayElements(buf, p, 0);
+    (*env)->ReleaseByteArrayElements(env, buf, p, 0);
     proot_jstr_free(env, moxshRoot, r);
     return proot_string_return(n);
 }

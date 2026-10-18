@@ -2422,9 +2422,8 @@ impl Tracer {
         }
         #[cfg(not(target_arch = "x86_64"))]
         {
-            // aarch64 无 orig_rax/rax 混叠：x8 恒为号、x0..x5 恒为参数槽，
-            // enter/exit 两停的寄存器布局同构，无需 entering 区分。
-            let _ = entering;
+            // aarch64：pc 字段走 GETREGSET/SETREGSET 读-改-写（与 x86_64 的
+            // rip 同构）——只回退 PC 一个字段，与 enter/exit 停语义无关。
             let mut regs = Regs::default();
             let mut iov = libc::iovec {
                 iov_base: &mut regs as *mut Regs as *mut libc::c_void,

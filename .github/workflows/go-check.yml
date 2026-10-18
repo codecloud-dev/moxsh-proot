@@ -1,0 +1,42 @@
+name: Go 检查（安装器质量门）
+
+# Go 安装器（go/）的快速质量门：
+#   - go vet 静态检查
+#   - go test 单元测试
+#   - gofmt 格式检查（-l 列出未格式化文件，非空即失败）
+on:
+  push:
+    branches: [main]
+    paths:
+      - "go/**"
+      - ".github/workflows/go-check.yml"
+  pull_request:
+    paths:
+      - "go/**"
+      - ".github/workflows/go-check.yml"
+  workflow_dispatch:
+
+jobs:
+  go-check:
+    name: vet + test + fmt
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.21"
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+      - name: gofmt -l（非空即失败）
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "以下文件未格式化："
+            echo "$unformatted"
+            exit 1
+          fi

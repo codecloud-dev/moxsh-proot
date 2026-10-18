@@ -1,0 +1,27 @@
+name: Release proot-latest（滚动）
+
+# push 到 main 且源码/装器/CI 有变更时，调用可复用发布工作流刷新
+# `proot-latest`——scripts/install-moxsh-proot.sh 与 moxsh-installer 的
+# 默认 RELEASE 都是 proot-latest，该 release 不存在 = 一键安装死链。
+#
+# 版本发布走 release.yml 自己的 tag 触发器（proot-v*），不经本文件。
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "c/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "go/**"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/release-latest.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-latest:
+    uses: ./.github/workflows/release.yml

@@ -1,0 +1,69 @@
+name: 🐛 问题报告
+description: 报告 moxsh-proot 引擎或安装器的 bug / 异常行为
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈！请先搜索已有 issue，避免重复。
+        提交前建议先跑一遍复现命令确认现象稳定，日志越全越好定位。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本 / 安装来源
+      description: 一键脚本还是 Go 安装器？哪个 release / commit？
+      placeholder: 例如 proot-latest（curl 一键脚本）/ proot-v1.0.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 问题范围
+      options:
+        - 引擎核心（路径翻译 / exec / 符号链接）
+        - moxsh-proot 单命令容器
+        - moxsh-proot-distro（安装 / 登录 / 备份 / 恢复）
+        - 网络栈（DNS / IPv6 / 出网探测）
+        - 钩子（post-install / pre-login）
+        - 安装器（bash 脚本 / moxsh-installer）
+        - 文档
+        - 其他
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 期望行为与实际行为
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. moxsh-proot-distro install alpine
+        2. moxsh-proot -R ~/alpine -0 -- ls /bin
+        3. 出现 …
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志 / 截图
+      description: 终端输出、报错截图等（涉及路径请保留完整上下文）
+    validations:
+      required: false
+
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统
+      placeholder: 例如 Pixel 8 / Android 15 / aarch64 / Termux 0.118
+    validations:
+      required: true

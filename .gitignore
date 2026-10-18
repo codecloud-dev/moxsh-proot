@@ -1,0 +1,17 @@
+# ── Rust 构建产物（不入库；Cargo.lock 保留以保证 CI 可复现）──────────
+/target/
+
+# ── Go 构建产物 ────────────────────────────────────────────────
+go/dist/
+*.test
+
+# ── 本地安装演练残留（moxsh-installer 试装目录）────────────────
+/moxsh-root/
+
+# ── OS / editor noise ─────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*~
+
+# ── Agent / IDE internals ─────────────────────────────────────
+.codebuddy/

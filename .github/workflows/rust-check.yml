@@ -1,0 +1,100 @@
+name: Rust 检查（引擎质量门）
+
+# 引擎内核的快速质量门（push 到 main / PR 均执行）：
+#   - cargo test（单元 + 集成）
+#   - clippy 静态检查（-D warnings 严格模式：存量警告已清零，新增警告即失败）
+#   - cargo audit 依赖漏洞扫描（libc/tar/flate2/cc 全部精确钉版本，仍留扫描兜底）
+#   - Android aarch64 交叉编译检查——build.rs 在 android target 下会经 cc 编译
+#     c/proot_bridge.c，必须有真实 NDK 工具链（aarch64-linux-android*-clang wrapper）
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "c/**"
+      - "tests/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust-check.yml"
+  pull_request:
+    paths:
+      - "src/**"
+      - "c/**"
+      - "tests/**"
+      - "build.rs"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/rust-check.yml"
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 测试（host target）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # 与 moxsh-terminal 内核一致：钉死 1.86.0（sandbox 与 CI 同版本，避免本地过、CI 挂）
+      - name: 安装工具链（1.86.0）
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.86.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test（lib + bins + 集成）
+        run: cargo test
+  clippy:
+    name: Clippy 静态检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.86.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy（-D warnings）
+        run: cargo clippy --all-targets -- -D warnings
+
+  audit:
+    name: 依赖漏洞扫描
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # audit 是独立工具（不参与构建），用预编译二进制安装，
+      # 避免受项目钉死的 1.86.0 工具链限制（新版 cargo-audit 需更高 rustc）
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: cargo audit
+        run: cargo audit
+
+  ndk-cross:
+    name: Android aarch64 交叉编译检查
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.86.0"
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      # GitHub 托管 runner 已预装完整 Android SDK（含 cmdline-tools），
+      # 无需 android-actions/setup-android —— 该 Action 在新版 cmdline-tools 上
+      # 会因安装过时包名 "tools" 而失败（sdkmanager exit 1）。
+      - name: Install NDK 26.1.10909125
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
+          if [ ! -d "$ANDROID_HOME/ndk/26.1.10909125" ]; then
+            yes | "$SDKMANAGER" "ndk;26.1.10909125" > /dev/null
+          else
+            echo "NDK 26.1.10909125 已预装，跳过安装"
+          fi
+      - name: cargo check --target aarch64-linux-android
+        run: cargo check --lib --target aarch64-linux-android
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          # cc crate 1.5.1 认 <var>_<target>（带横杠）形式；AR 同步指定，
+          # 避免回退到宿主 binutils 链错架构的 .o
+          CC_aarch64-linux-android: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang
+          AR_aarch64-linux-android: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar

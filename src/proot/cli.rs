@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use crate::proot::distro::DistroManager;
 use crate::proot::elf::{resolve_exec_chain, ExecPlan};
+use crate::proot::launcher;
 use crate::proot::links::{self, ResolvedLink};
 use crate::proot::net;
 use crate::proot::ptrace::Tracer;
@@ -540,23 +541,57 @@ fn cmd_install(mgr: &DistroManager, args: &[&str]) -> String {
         let _ = (msg, done, total); // 文本 CLI 简化：完成时统一输出
     });
     match mgr.install(&spec, cache.as_deref(), &mut progress) {
-        Ok(()) => install_hint(spec.id),
+        Ok(()) => install_hint(spec.id, mgr),
         Err(e) => format!("proot-distro: 安装失败: {}", e),
     }
 }
 
-/// 安装后的换源提示（国内优化，尊重发行版默认源，只提示不代改）。
-fn install_hint(id: &str) -> String {
+/// 安装后的收尾（换源提示 + 落盘启动器 + shell 函数刷新，0.2.0）。
+fn install_hint(id: &str, mgr: &DistroManager) -> String {
     let repo = match id {
         "ubuntu" | "debian" => "sed -i 's|deb.debian.org\\|archive.ubuntu.com|mirrors.tuna.tsinghua.edu.cn|g' /etc/apt/sources.list*",
         "kali" => "sed -i 's|http.kali.org|mirrors.ustc.edu.cn|g' /etc/apt/sources.list",
         "alpine" => "sed -i 's|dl-cdn.alpinelinux.org|mirrors.tuna.tsinghua.edu.cn|g' /etc/apk/repositories",
-        _ => return "安装完成".into(),
+        _ => "",
     };
-    format!(
-        "安装完成。\n提示：国内网络建议切换镜像源（登录后执行）：\n  {}",
-        repo
-    )
+    let mut out = String::from("安装完成。\n");
+    if !repo.is_empty() {
+        out.push_str(&format!(
+            "提示：国内网络建议切换镜像源（登录后执行）：\n  {}\n",
+            repo
+        ));
+    }
+    // 落盘启动器 + shell 函数（roadmap §1：装了 kali 输 kali 就进容器）。
+    // 失败仅警告——启动器是便利层，不该阻断安装本身。
+    let bin_dir = launcher::default_bin_dir();
+    match launcher::write_launcher(&bin_dir, id) {
+        Ok(p) => out.push_str(&format!("启动器已就绪：直接输入 {} 即可进容器（{}）\n", id, p.display())),
+        Err(e) => out.push_str(&format!(
+            "警告：启动器写入失败（{}），可用 moxsh-proot-distro launch mx:{} 进入\n",
+            e, id
+        )),
+    }
+    // 函数块覆盖全部已装容器（旧块整块替换，幂等）。
+    let ids: Vec<String> = mgr
+        .list_installed()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    let mut injected = Vec::new();
+    for rc in launcher::shell_rc_paths() {
+        if launcher::inject_shell_functions(&rc, &ids).unwrap_or(false) {
+            injected.push(rc.display().to_string());
+        }
+    }
+    if !injected.is_empty() {
+        out.push_str(&format!(
+            "shell 函数已刷新（{}）：新开终端或 source 后，输入 {} 直接进容器\n",
+            injected.join("、"),
+            id
+        ));
+    }
+    out
 }
 
 /// `login <id>`：输出可执行的 proot 命令行（由 PTY 层执行）。

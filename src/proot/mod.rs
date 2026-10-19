@@ -27,6 +27,7 @@
 pub mod cli;
 pub mod distro;
 pub mod elf;
+pub mod launcher;
 pub mod links;
 pub mod net;
 pub mod ptrace;

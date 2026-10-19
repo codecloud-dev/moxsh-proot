@@ -70,8 +70,17 @@ moxsh-proot is the infrastructure piece of the **MoX tool series**: the "PRoot d
 | **moxsh** | Released | Android liquid-glass terminal, Termux-compatible |
 | **mox-site** | Released | The series' official portal ([site](https://codecloud-dev.github.io/mox-site/)) |
 | **moxsh-proot** | Released | This repo: from-scratch Rust PRoot engine (the distro core of moxsh, standalone) |
-| **moxbox** | Planned · tentative | File manager & system suite in the same glass UI; may or may not happen |
-| **moxcode** | Planned · tentative | Lightweight mobile IDE: terminal + editor + preview; may or may not happen |
+
+### 🗺️ Roadmap (0.2.0 in progress)
+
+| Milestone | Contents | Status |
+| :--- | :--- | :--- |
+| 0.2.0 | `mx:` shortlinks (`mx:alpine` installs on demand), on-disk launchers (type `kali` to enter), in-container Chinese environment (locale/fonts/IME), in-container console, base64 short command + CN/global auto-routing | In progress |
+| 0.3.0 | Recipe system (`mx:xfce` one-command desktops: XFCE/LXQt/KDE/MATE + dual VNC channels) | Planned |
+| 0.4.0 | TUI console (ratatui full-featured panel) | Planned |
+| 1.0.0 | First stable release with shortlinks/recipes/TUI all in | Planned |
+
+Full decision log: [docs/roadmap.md](docs/roadmap.md).
 
 ---
 

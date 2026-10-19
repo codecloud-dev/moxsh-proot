@@ -69,8 +69,17 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 |   **moxsh**  |  已上线 | Android 液态玻璃终端，兼容 Termux 生态                                      |
 | **mox-site** |  已上线 | 本系列官方门户（[官网](https://codecloud-dev.github.io/mox-site/)）              |
 | **moxsh-proot** | 已上线 | 本仓库：Rust 自研 PRoot 容器引擎（moxsh 的发行版内核，独立可用）                 |
-|  **moxbox**  | 规划中 · 待定 | 文件管理与系统套件，同款玻璃界面；**可能做，也可能不做**                            |
-|  **moxcode** | 规划中 · 待定 | 移动端轻量 IDE：终端 + 编辑器 + 预览一体；**可能做，也可能不做**                      |
+
+### 🗺️ 路线图（0.2.0 进行中）
+
+| 里程碑 | 内容 | 状态 |
+| :--- | :--- | :--- |
+| 0.2.0 | `mx:` 短链系统（`mx:alpine` 即装即进）、落盘启动器（装了 kali 输 `kali` 就进）、容器内中文环境（locale/字体/输入法）、容器内控制台、base64 短命令 + 国内外自动分流 | 进行中 |
+| 0.3.0 | 配方系统（`mx:xfce` 一键桌面，XFCE/LXQt/KDE/MATE + VNC 双通道） | 规划中 |
+| 0.4.0 | TUI 控制台（ratatui 全功能面板） | 规划中 |
+| 1.0.0 | 短链/配方/TUI 全齐的首个正式版 | 规划中 |
+
+完整决策记录见 [docs/roadmap.md](docs/roadmap.md)。
 
 ---
 

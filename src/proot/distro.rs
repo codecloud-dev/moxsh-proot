@@ -21,6 +21,7 @@ use std::process::Command;
 use flate2::read::GzDecoder;
 
 use crate::crypto::sha256;
+use crate::proot::locale;
 use crate::proot::net;
 use crate::proot::script;
 use crate::proot::symlink_fix::normalize_rootfs_symlinks;
@@ -454,9 +455,14 @@ impl DistroManager {
         // 让 guest 内解析天然不出 rootfs——之后运行时零开销。
         normalize_installed_rootfs(&rootfs);
 
-        // 4) 初始化：DNS + 换源提示（对齐 proot-distro 安装后行为）
+        // 4) 初始化：DNS + 换源提示 + 容器 env 文件（LANG 兜底，中文不乱码）
         cb("初始化 DNS 与源", 0, 1);
         self.init_dns_and_repos(&rootfs);
+        // 容器 env 文件（etc/moxsh/env）：装完即 C.UTF-8；用户可改它定制
+        // （roadmap §2）。已存在则不覆盖（restore 回来的 rootfs 尊重原值）。
+        if locale::write_default_env_file(&rootfs).unwrap_or(false) {
+            cb("写入容器环境文件（etc/moxsh/env）", 0, 1);
+        }
 
         // 4.5) post-install 钩子（Python/Lua，引擎内执行；无解释器则优雅跳过）
         let report = script::run_hooks(&self.root, &rootfs, spec.id, script::HookKind::PostInstall)?;
@@ -506,6 +512,10 @@ impl DistroManager {
         normalize_installed_rootfs(&rootfs);
         // 初始化 DNS（与预置发行版安装路径一致：guest glibc 依赖 rootfs 内 resolv.conf）
         self.init_dns_and_repos(&rootfs);
+        // 容器 env 文件（与预置发行版路径一致：LANG 兜底防中文乱码）
+        if locale::write_default_env_file(&rootfs).unwrap_or(false) {
+            cb("写入容器环境文件（etc/moxsh/env）", 0, 1);
+        }
         // post-install 钩子（自定义 rootfs 同样生效）
         let report = script::run_hooks(&self.root, &rootfs, id, script::HookKind::PostInstall)?;
         if !report.ran.is_empty() || !report.skipped.is_empty() {

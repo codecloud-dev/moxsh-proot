@@ -29,6 +29,7 @@ pub mod distro;
 pub mod elf;
 pub mod launcher;
 pub mod links;
+pub mod locale;
 pub mod net;
 pub mod ptrace;
 pub mod script;
@@ -330,23 +331,185 @@ impl ProotConfig {
     }
 
     /// 生成进入发行版的 `/usr/bin/env -i ...` 前缀（对齐 proot-distro login）。
+    ///
+    /// 环境优先级（低 → 高，同 key 后者覆盖前者，见 [`locale::upsert`]）：
+    /// 引擎默认（HOME/PATH/LANG/TERM） < 宿主透传（LANG/LC_ALL/LC_CTYPE/TERM）
+    /// < 容器 env 文件（`<rootfs>/etc/moxsh/env`，见 [`locale`]） < 用户显式 `-e`。
+    ///
+    /// 0.2.0 起补 LANG/TERM：`env -i` 清空继承后早年只给 HOME/PATH，
+    /// 容器内中文必乱码、TUI 必降级——roadmap §2 的根治点。
     pub fn env_command(&self) -> Vec<String> {
-        let mut cmd = vec!["/usr/bin/env".to_string(), "-i".to_string()];
-        let has_home = self.env.iter().any(|(k, _)| k == "HOME");
-        let has_path = self.env.iter().any(|(k, _)| k == "PATH");
-        if !has_home {
-            cmd.push("HOME=/root".to_string());
+        let mut env: Vec<(String, String)> = Vec::new();
+        // 1) 引擎默认垫底（宿主与文件都没说时兜底）。
+        locale::upsert(&mut env, "HOME", "/root");
+        locale::upsert(
+            &mut env,
+            "PATH",
+            // 对齐上游 proot-distro 的默认 PATH
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        );
+        locale::upsert(&mut env, "LANG", "C.UTF-8");
+        locale::upsert(&mut env, "TERM", "xterm-256color");
+        // 2) 宿主透传：用户机器上的 locale/终端选择优先于引擎默认。
+        for key in ["LANG", "LC_ALL", "LC_CTYPE", "TERM"] {
+            if let Ok(v) = std::env::var(key) {
+                if !v.is_empty() {
+                    locale::upsert(&mut env, key, v);
+                }
+            }
         }
-        if !has_path {
-            cmd.push(format!(
-                "PATH={}",
-                // 对齐上游 proot-distro 的默认 PATH
-                "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-            ));
+        // 3) 容器 env 文件：随 rootfs 走的定制点（覆盖宿主透传）。
+        for (k, v) in locale::load_container_env(&self.rootfs) {
+            locale::upsert(&mut env, &k, v);
         }
+        // 4) 用户显式 -e 最高。
         for (k, v) in &self.env {
+            locale::upsert(&mut env, k, v.clone());
+        }
+
+        let mut cmd = vec!["/usr/bin/env".to_string(), "-i".to_string()];
+        for (k, v) in &env {
             cmd.push(format!("{}={}", k, v));
         }
         cmd
+    }
+}
+
+#[cfg(test)]
+mod env_command_tests {
+    use super::ProotConfig;
+
+    /// 把 env_command() 输出还原成 KEY=VALUE 键值表（跳过前两个前缀词）。
+    fn kv(cfg: &ProotConfig) -> Vec<(String, String)> {
+        cfg.env_command()
+            .into_iter()
+            .skip(2)
+            .filter_map(|s| {
+                s.split_once('=')
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+            })
+            .collect()
+    }
+
+    fn get<'a>(env: &'a [(String, String)], key: &str) -> Option<&'a str> {
+        env.iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    fn tmp_rootfs(tag: &str) -> std::path::PathBuf {
+        let p = std::env::temp_dir().join(format!("moxsh-envtest-{}", tag));
+        let _ = std::fs::remove_dir_all(&p);
+        std::fs::create_dir_all(&p).unwrap();
+        p
+    }
+
+    /// 默认四项齐全（清掉宿主 LANG/TERM 家族后断言引擎默认值本身）。
+    #[test]
+    fn env_command_defaults_present() {
+        let saved: Vec<(String, Option<std::ffi::OsString>)> = ["LANG", "LC_ALL", "LC_CTYPE", "TERM"]
+            .iter()
+            .map(|k| (k.to_string(), std::env::var_os(k)))
+            .collect();
+        for (k, _) in &saved {
+            std::env::remove_var(k);
+        }
+
+        let rf = tmp_rootfs("defaults");
+        let env = kv(&ProotConfig::with_distro_defaults(&rf));
+        for key in ["HOME", "PATH", "LANG", "TERM"] {
+            assert!(get(&env, key).is_some(), "默认 env 缺 {}：{:?}", key, env);
+        }
+        assert_eq!(get(&env, "HOME"), Some("/root"));
+        assert_eq!(
+            get(&env, "PATH"),
+            Some("/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        );
+        assert_eq!(get(&env, "LANG"), Some("C.UTF-8"));
+        assert_eq!(get(&env, "TERM"), Some("xterm-256color"));
+
+        for (k, v) in &saved {
+            match v {
+                Some(v) => std::env::set_var(k, v),
+                None => std::env::remove_var(k),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&rf);
+    }
+
+    /// 宿主透传优先于引擎默认；容器 env 文件再覆盖宿主；用户 -e 最高。
+    ///
+    /// 本测试是进程内唯一读写 LANG/TERM 的地方（其余测试不碰这两个变量），
+    /// 用保存/恢复包裹；CI runner 上这两个变量设什么都不影响断言。
+    #[test]
+    fn env_command_passthrough_then_file_then_user() {
+        let saved_lang = std::env::var_os("LANG");
+        let saved_term = std::env::var_os("TERM");
+        let saved_lc_all = std::env::var_os("LC_ALL");
+
+        let rf = tmp_rootfs("layers");
+
+        // 宿主透传：宿主设了 LANG/TERM，引擎默认让位。
+        std::env::set_var("LANG", "zh_CN.UTF-8");
+        std::env::set_var("TERM", "screen-256color");
+        std::env::remove_var("LC_ALL");
+        let env = kv(&ProotConfig::with_distro_defaults(&rf));
+        assert_eq!(get(&env, "LANG"), Some("zh_CN.UTF-8"));
+        assert_eq!(get(&env, "TERM"), Some("screen-256color"));
+
+        // 容器 env 文件覆盖宿主透传（rootfs 内定制点说话）。
+        std::fs::create_dir_all(rf.join("etc/moxsh")).unwrap();
+        std::fs::write(rf.join("etc/moxsh/env"), "LANG=ja_JP.UTF-8\n").unwrap();
+        let env = kv(&ProotConfig::with_distro_defaults(&rf));
+        assert_eq!(get(&env, "LANG"), Some("ja_JP.UTF-8"));
+        // 文件没提 TERM，宿主透传值仍在。
+        assert_eq!(get(&env, "TERM"), Some("screen-256color"));
+
+        // 用户显式 -e 最高（覆盖文件）。
+        let mut cfg = ProotConfig::with_distro_defaults(&rf);
+        cfg.env = vec![("LANG".to_string(), "C".to_string())];
+        let env = kv(&cfg);
+        assert_eq!(get(&env, "LANG"), Some("C"));
+
+        // 恢复宿主环境。
+        match saved_lang {
+            Some(v) => std::env::set_var("LANG", v),
+            None => std::env::remove_var("LANG"),
+        }
+        match saved_term {
+            Some(v) => std::env::set_var("TERM", v),
+            None => std::env::remove_var("TERM"),
+        }
+        match saved_lc_all {
+            Some(v) => std::env::set_var("LC_ALL", v),
+            None => std::env::remove_var("LC_ALL"),
+        }
+    }
+
+    /// 用户 -e 给 HOME/PATH 时同样覆盖引擎默认（回归旧语义）。
+    #[test]
+    fn env_command_user_overrides_home_path() {
+        let rf = tmp_rootfs("userhp");
+        let mut cfg = ProotConfig::with_distro_defaults(&rf);
+        cfg.env = vec![
+            ("HOME".to_string(), "/home/u".to_string()),
+            ("PATH".to_string(), "/bin".to_string()),
+        ];
+        let env = kv(&cfg);
+        assert_eq!(get(&env, "HOME"), Some("/home/u"));
+        assert_eq!(get(&env, "PATH"), Some("/bin"));
+        // 同名 key 只出现一次（upsert 不产生重复项）。
+        assert_eq!(env.iter().filter(|(k, _)| k == "HOME").count(), 1);
+        let _ = std::fs::remove_dir_all(&rf);
+    }
+
+    /// env 文件缺失（老 rootfs）不炸：回落宿主/引擎默认。
+    #[test]
+    fn env_command_missing_file_falls_back() {
+        let rf = tmp_rootfs("nofile");
+        let cfg = ProotConfig::with_distro_defaults(&rf);
+        let env = kv(&cfg);
+        assert!(env.iter().all(|(k, _)| !k.is_empty()));
+        let _ = std::fs::remove_dir_all(&rf);
     }
 }

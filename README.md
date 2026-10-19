@@ -175,6 +175,21 @@ moxsh-proot-distro install alpine     # Ubuntu / Debian / Kali / Alpine
 moxsh-proot-distro login alpine       # 进登录 shell
 ```
 
+也可以直接短链启动（未装自动装，装完直接进）：
+
+```bash
+moxsh-proot-distro launch mx:alpine
+```
+
+**中文环境开箱即用**：登录时引擎自动注入 `LANG`/`TERM`（宿主中文环境会
+透传进容器；兜底 `C.UTF-8`，不乱码）。想要完整中文显示：容器内装
+locales 包并 `locale-gen zh_CN.UTF-8`，然后编辑 rootfs 里的
+`etc/moxsh/env` 把 `LANG` 改成 `zh_CN.UTF-8`。随时可查当前生效环境：
+
+```bash
+moxsh-proot-distro env alpine
+```
+
 ### 🔹 系统要求
 
 - Linux 或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）

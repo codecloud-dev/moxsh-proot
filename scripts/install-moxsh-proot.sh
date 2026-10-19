@@ -89,6 +89,16 @@ set_source_gitee() {
   log "下载源：Gitee 国内镜像（${BASE_URL}）"
 }
 
+# 下载源回退切换（github ↔ gitee；custom 不可切——用户显式镜像不擅自换）。
+# 用于「选错源 / 该端 Release 缺资产」时的自救：切一次，防乒乓。
+switch_source() {
+  case "$SOURCE" in
+    github) set_source_gitee; warn "下载受阻，已回退切换到 Gitee 源重试" ;;
+    gitee)  set_source_github; warn "下载受阻，已回退切换到 GitHub 源重试" ;;
+    *)      return 1 ;;
+  esac
+}
+
 
 # ---------------------------------------------------------------- 环境探测
 # PREFIX：Termux 会话必然设置；裸跑（如 ssh 进 Termux）时按已知路径兜底。
@@ -138,20 +148,31 @@ fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/moxsh-proot.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
+# 带一次切源重试的资产下载（$1 = 资产名，$2 = 输出路径）。
+# 当前源缺资产（404）/ 不通时，自动回退另一端重试一次（见 switch_source）。
+fetch_asset_file() {
+  local asset="$1" out="$2"
+  if curl -fSL --retry 3 --connect-timeout 15 -o "$out" "${BASE_URL}/${asset}"; then
+    return 0
+  fi
+  if switch_source; then
+    curl -fSL --retry 3 --connect-timeout 15 -o "$out" "${BASE_URL}/${asset}"
+    return $?
+  fi
+  return 1
+}
+
 # 下载并校验单个资产（$1 = 资产名）；失败即 die（"放不下就不装"）。
 fetch_asset() {
   local asset="$1"
   log "下载 ${asset}（${RELEASE}）…"
-  # --retry 3：Termux 移动网络抖动比桌面常见；-f 让 404 等也走失败分支。
-  curl -fSL --retry 3 --connect-timeout 15 \
-    -o "${TMP}/${asset}" "${BASE_URL}/${asset}" \
-    || die "下载失败：${BASE_URL}/${asset}
+  fetch_asset_file "$asset" "${TMP}/${asset}" \
+    || die "下载失败：${asset}（已尝试 ${SOURCE} 及回退源）
 可能原因：网络不通 / Release 尚未发布（滚动发布 proot-latest 由 CI 在 main 更新时自动重建）。
 可尝试：MOXSH_PROOT_SOURCE=github|gitee 强制选端，或 MOXSH_PROOT_BASE_URL 指向自建镜像。"
 
-  curl -fSL --retry 3 --connect-timeout 15 \
-    -o "${TMP}/${asset}.sha256" "${BASE_URL}/${asset}.sha256" \
-    || die "下载校验文件失败：${BASE_URL}/${asset}.sha256"
+  fetch_asset_file "${asset}.sha256" "${TMP}/${asset}.sha256" \
+    || die "下载校验文件失败：${asset}.sha256"
 
   log "校验 sha256…"
   # 校验文件内为 "<hash>  <文件名>"（无路径），cd 到 TMP 后按文件名核对。

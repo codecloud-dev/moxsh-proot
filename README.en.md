@@ -183,6 +183,23 @@ moxsh-proot-distro install alpine     # Ubuntu / Debian / Kali / Alpine
 moxsh-proot-distro login alpine       # drop into a login shell
 ```
 
+Or launch by short link (auto-installs on first run, drops you straight in):
+
+```bash
+moxsh-proot-distro launch mx:alpine
+```
+
+**Chinese locale works out of the box**: on login the engine injects
+`LANG`/`TERM` (your host locale passes through; falls back to `C.UTF-8`,
+so no mojibake). For full Chinese UI: install the `locales` package inside
+the container, run `locale-gen zh_CN.UTF-8`, then edit `etc/moxsh/env`
+inside the rootfs and set `LANG=zh_CN.UTF-8`. Inspect the effective
+environment any time:
+
+```bash
+moxsh-proot-distro env alpine
+```
+
 ### 🔹 Requirements
 
 - Linux or Termux (Android 9+, aarch64 / x86_64; 32-bit ARM needs a source build)

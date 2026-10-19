@@ -55,10 +55,30 @@ moxsh-proot-distro remove alpine
 moxsh-proot-distro backup alpine ~/a.tar.gz
 moxsh-proot-distro restore alpine ~/a.tar.gz
 moxsh-proot-distro net                   # 网络边界报告（DNS/IPv6/出网）
+moxsh-proot-distro env alpine            # 预览登录时注入的环境（中文排查）
+moxsh-proot-distro launch mx:alpine      # 短链启动（未装自动装，装完直接进）
 ```
 
 内置四大发行版规格：Ubuntu 24.04 LTS / Debian 12 / Kali rolling /
 Alpine 3.20（minirootfs）。
+
+### 2.1 容器内中文环境
+
+登录时引擎注入 `LANG` / `LC_ALL` / `LC_CTYPE` / `TERM`——宿主设了就透传，
+没设才回落 `C.UTF-8` / `xterm-256color`，保证不乱码。合并优先级
+（低到高）：引擎默认 < 宿主透传 < 容器 env 文件 < 命令行 `-e`。
+
+容器 env 文件在 rootfs 内 `etc/moxsh/env`，每行 `KEY=VALUE`（`#` 注释），
+安装时自动创建，改完下次登录生效，随 backup/restore 一起走：
+
+```bash
+# 完整中文：容器内先装 locales 并生成 locale
+apt install locales && locale-gen zh_CN.UTF-8
+# 然后编辑（宿主侧直接改 rootfs 内文件，或进容器改）：
+#   ~/.moxsh/containers/alpine/rootfs/etc/moxsh/env
+#   LANG=C.UTF-8  →  LANG=zh_CN.UTF-8
+moxsh-proot-distro env alpine   # 确认生效值
+```
 
 ## 3. 钩子（容器内脚本运行时）
 
@@ -77,7 +97,7 @@ Alpine 3.20（minirootfs）。
 
 ```bash
 cargo build --release          # 引擎 + 两个二进制（需 Rust 1.86+）
-cargo test                    # 134 单测 + 1 集成
+cargo test                    # 166 单测 + 1 集成
 cargo clippy --all-targets -- -D warnings
 
 go -C go build ./...          # Go 安装器（install/update/probe）

@@ -12,10 +12,10 @@ SRC="scripts/install-moxsh-proot.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-# 提取分流段：从「国内外分流」注释开始，到 set_source_gitee 函数闭合结束。
+# 提取分流段：从「国内外分流」注释开始，到 switch_source 函数闭合结束。
 awk '/^# -+ 国内外分流/{f=1}
      f{print}
-     f&&/^set_source_gitee\(\) \{/{g=1}
+     f&&/^switch_source\(\) \{/{g=1}
      g&&/^}/{exit}' "$SRC" > "$TMP/pick.sh"
 
 if [ ! -s "$TMP/pick.sh" ]; then
@@ -51,6 +51,36 @@ mock_pick() {
 }
 
 fail=0
+
+# mock_switch <gh探测> <gt探测> <MOXSH_PROOT_SOURCE> <pick后执行的动作> [额外env...]
+# 与 mock_pick 同款 mock，但支持在 pick_source 之后执行一段动作（测 switch_source）。
+mock_switch() {
+  local gh="$1" gt="$2" src="$3" post="$4"; shift 4
+  env "$@" MOXSH_PROOT_SOURCE="$src" GH_PROBE="$gh" GITEE_PROBE="$gt" \
+    GITHUB_REPO="codecloud-dev/moxsh-proot" \
+    GITEE_REPO="thousand-code-crafts/moxsh-proot" \
+    RELEASE="proot-latest" \
+    bash -c '
+      curl() {
+        local url="" a
+        for a in "$@"; do case "$a" in http*) url="$a";; esac; done
+        case "$url" in
+          *raw.githubusercontent.com*)
+            [ -n "$GH_PROBE" ] && { echo "$GH_PROBE"; return 0; }; return 22 ;;
+          *gitee.com*)
+            [ -n "$GITEE_PROBE" ] && { echo "$GITEE_PROBE"; return 0; }; return 22 ;;
+        esac
+        return 22
+      }
+      log() { :; }
+      warn() { :; }
+      source "'"$TMP"'/pick.sh"
+      pick_source >/dev/null 2>&1
+      '"$post"'
+      echo "$SOURCE|$BASE_URL|$ARCHIVE_URL"
+    '
+}
+
 check() {
   local desc="$1" got="$2" want_source="$3" want_url_frag="$4" want_archive_frag="${5:-}"
   local source base archive
@@ -103,8 +133,21 @@ check "自定义镜像" \
 check "未知 source 值按自动" \
   "$(mock_pick "" 0.30 MOXSH_PROOT_SOURCE=bogus)" gitee "gitee.com/thousand-code-crafts/moxsh-proot/releases/download"
 
+# 9) 回退切换：github ↔ gitee 互换（下载受阻时的自救）
+check "回退切换 github→gitee" \
+  "$(mock_switch 0.10 0.10 github 'switch_source')" \
+  gitee "gitee.com/thousand-code-crafts/moxsh-proot/releases/download" "/repository/archive/"
+check "回退切换 gitee→github" \
+  "$(mock_switch 0.10 0.10 gitee 'switch_source')" \
+  github "github.com/codecloud-dev/moxsh-proot/releases/download" "/archive/refs/tags/"
+
+# 10) custom 源不可切换（用户显式镜像，不擅自换端）：SOURCE/BASE_URL 原样不动
+check "custom 源拒绝切换" \
+  "$(mock_switch 0.10 0.10 custom 'switch_source || true' MOXSH_PROOT_BASE_URL=https://mirror.example.com/moxsh)" \
+  custom "https://mirror.example.com/moxsh"
+
 if [ "$fail" -ne 0 ]; then
   echo "分流回归：有用例失败" >&2
   exit 1
 fi
-echo "分流回归：8/8 通过"
+echo "分流回归：全部通过"

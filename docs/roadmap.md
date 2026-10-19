@@ -30,13 +30,15 @@
   防误触示例：`enter = "echo 确认进入？&& read"`。**控制台命令不开放自定义**（见 §3）。
 - **下载路径**：安装时询问（默认 `~/.moxsh`）+ 配置文件 + 环境变量三层。
 
-## 2. 容器内中文环境（0.2.0）
+## 2. 容器内中文环境（0.2.0）✅ 引擎侧已完成
 
 现状：引擎只注入 `HOME`/`PATH`，**无 `LANG`/`LC_ALL`/`TERM`**——中文乱码根因。
 
-- **locale 注入**：进容器默认注入 `LANG`/`LC_ALL`（`zh_CN.UTF-8` 优先、缺失时 `C.UTF-8` 兜底）+ `TERM`。
-- **env 文件机制**：rootfs 内可放 env 文件（`KEY=VALUE`），proot 启动时 `-e` 逐个传入
-  （社区标准范式，见 `docs/usage.md` 行为差异清单）。
+- **locale 注入** ✅：`ProotConfig::env_command()` 注入 `LANG`/`LC_ALL`/`LC_CTYPE`/`TERM`——
+  宿主透传优先，宿主没设才回落 `C.UTF-8` / `xterm-256color`；用户 `-e` 显式值最高。
+- **env 文件机制** ✅：`<rootfs>/etc/moxsh/env`（每行 `KEY=VALUE`，`#` 注释），登录时读入合并；
+  安装后自动写默认文件（`LANG=C.UTF-8`），已存在不覆盖。随 backup/restore 走。
+- **排查入口** ✅：`moxsh-proot-distro env <id>` 预览登录时实际注入的完整环境。
 - **中文字体**：配方装 Noto CJK / 文泉驿（配方形态，见 §4）。
 - **中文输入法**：fcitx5 配方（配合 VNC 桌面打中文）。
 - **安装器自身**：安装过程中文不乱码（两层都要：安装器层 + 容器层）。

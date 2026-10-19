@@ -20,6 +20,7 @@ use crate::proot::distro::DistroManager;
 use crate::proot::elf::{resolve_exec_chain, ExecPlan};
 use crate::proot::launcher;
 use crate::proot::links::{self, ResolvedLink};
+use crate::proot::locale;
 use crate::proot::net;
 use crate::proot::ptrace::Tracer;
 use crate::proot::script;
@@ -466,6 +467,7 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "backup" => cmd_backup(&mgr, rest),
         "restore" => cmd_restore(&mgr, rest, moxsh_root),
         "net" => cmd_net(&mgr, rest),
+        "env" => cmd_env(&mgr, rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
         // 走到这里（App 内嵌文本路由）只给用法提示。
@@ -493,6 +495,40 @@ fn cmd_net(mgr: &DistroManager, args: &[&str]) -> String {
             Err(e) => format!("proot-distro net: {}\n", e),
         },
     }
+}
+
+/// `env <id>`：预览登录该容器时**实际注入**的环境变量（0.2.0，roadmap §2）。
+///
+/// 中文乱码排查第一站：看 LANG 是不是 `*.UTF-8`。合并口径与登录路径
+/// 完全同源（[`ProotConfig::env_command`]），所见即所得。
+fn cmd_env(mgr: &DistroManager, args: &[&str]) -> String {
+    let Some(id) = args.first().copied() else {
+        return "用法: moxsh-proot-distro env <id>".to_string();
+    };
+    let rootfs = mgr.distro_rootfs(id);
+    if !rootfs.is_dir() {
+        return format!("proot-distro: 发行版未安装: {}（先 install {}）", id, id);
+    }
+    let cfg = ProotConfig::with_distro_defaults(&rootfs);
+    let mut out = format!(
+        "容器 {} 登录时注入的环境（引擎默认 < 宿主透传 < 容器 env 文件 < 命令行 -e）：\n",
+        id
+    );
+    for kv in cfg.env_command().into_iter().skip(2) {
+        out.push_str(&format!("  {}\n", kv));
+    }
+    let file = locale::env_file_path(&rootfs);
+    out.push_str(&format!("\n容器 env 文件：{}", file.display()));
+    if file.exists() {
+        out.push_str("（存在，可编辑定制——改完下次登录生效）");
+    } else {
+        out.push_str("（未创建，当前用引擎默认值）");
+    }
+    out.push_str(
+        "\n中文乱码排查：LANG 应为 *.UTF-8；容器内安装 locales 包并\n\
+         locale-gen zh_CN.UTF-8 后，把该文件里的 LANG 改成 zh_CN.UTF-8 即完整中文。",
+    );
+    out
 }
 
 /// `list`：已装/可装一览。
@@ -869,7 +905,10 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro shell <id>                进入发行版非登录 shell
   proot-distro remove <id>               删除发行版
   proot-distro backup <id> <out.tar.gz>  备份
-  proot-distro restore <id> <tar.tar.gz> 恢复";
+  proot-distro restore <id> <tar.tar.gz> 恢复
+  proot-distro net [id]                  网络边界报告（不带 id 看宿主）
+  proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
+  proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）";
 
 /// proot 原生参数帮助。
 const PROOT_HELP: &str = "proot（moxsh 引擎内嵌版，支持参数：-r/--rootfs -0/--root-id -b/--bind -w/--cwd）";
@@ -1131,5 +1170,31 @@ mod launch_tests {
             tail_after_dashdash(&v(&["--", "a", "--", "b"])),
             vec!["a".to_string(), "--".to_string(), "b".to_string()]
         );
+    }
+
+    /// `env` 子命令：未安装报错；装好后预览含 LANG 与 env 文件路径提示。
+    #[test]
+    fn env_subcommand_preview() {
+        let root = std::env::temp_dir().join("moxsh-cli-envtest");
+        let _ = std::fs::remove_dir_all(&root);
+        let rootfs = root.join("containers/fake/rootfs");
+        std::fs::create_dir_all(rootfs.join("etc/moxsh")).unwrap();
+        std::fs::write(rootfs.join("etc/moxsh/env"), "LANG=zh_CN.UTF-8\n").unwrap();
+
+        // 未安装 id：明确报错。
+        let out = proot_distro(&["env", "nosuch"], &root);
+        assert!(out.contains("未安装"), "{}", out);
+
+        // 已安装：预览里应含文件里的 LANG 与文件路径提示。
+        let out = proot_distro(&["env", "fake"], &root);
+        assert!(out.contains("LANG=zh_CN.UTF-8"), "env 文件值应进预览: {}", out);
+        assert!(out.contains("etc/moxsh/env"), "应提示 env 文件路径: {}", out);
+        assert!(out.contains("存在"), "应标记文件已存在: {}", out);
+
+        // 无参数：用法提示。
+        let out = proot_distro(&["env"], &root);
+        assert!(out.contains("用法"), "{}", out);
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -39,8 +39,6 @@ I read every issue and fix what I can, fast. Let's grow this from "runs" to "del
 
 <p align="center">💛 Found it useful? <a href="https://afdian.com/a/cloudharbor">Buy the author a coffee on AfDian</a> — CN payments (WeChat / Alipay) supported, the biggest encouragement for an indie dev.</p>
 
-<p align="center"><img src="assets/afdian-qr.jpg" width="200" alt="Afdian sponsorship QR code"></p>
-
 <details>
 
 <summary>Contents</summary>

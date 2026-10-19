@@ -39,8 +39,6 @@
 
 <p align="center">💛 觉得好用？欢迎到 <a href="https://afdian.com/a/cloudharbor">爱发电</a> 请作者喝杯咖啡 —— 国内可直接微信 / 支付宝收款，是独立开发最大的鼓励。</p>
 
-<p align="center"><img src="assets/afdian-qr.jpg" width="200" alt="爱发电赞助码"></p>
-
 <details>
 
 <summary>目录</summary>

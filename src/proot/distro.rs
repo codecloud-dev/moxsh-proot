@@ -660,9 +660,17 @@ impl DistroManager {
         };
         let cfg = ProotConfig::with_distro_defaults(&rootfs);
         let mut cmd: Vec<String> = Vec::new();
+        // 输出**绝对路径**的引擎兄弟二进制：调用方（含 App 终端会话）无需依赖 PATH，
+        // 也避免下载模型下引擎位于独立目录（$filesDir/proot/bin）时裸名 `proot` 解析不到。
+        // moxsh-proot-distro 与引擎 moxsh-proot 同目录部署（App 的 ensureEngine 即如此落盘）。
+        let engine_abs = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.join("moxsh-proot")))
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "moxsh-proot".into());
         // 对齐上游 proot-distro：kill-on-exit 防孤儿 tracee；link2symlink 兼容
         // 不支持硬链接的 sdcardfs/fuse 文件系统。
-        cmd.push("proot".into());
+        cmd.push(engine_abs);
         cmd.push("--kill-on-exit".into());
         cmd.push("--link2symlink".into());
         if cfg.fake_root {

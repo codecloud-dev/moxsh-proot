@@ -189,6 +189,59 @@ pub fn parse_config_toml(text: &str) -> Settings {
     s
 }
 
+/// 在 config.toml 文本里 upsert `[general] root_dir`（保留其余一切内容）。
+///
+/// 规则：
+/// - `[general]` 段内已有 `root_dir` 行 → 替换（重复行去重留一）；
+/// - `[general]` 段内没有 → 段尾补一行；
+/// - 全文没有 `[general]` 段 → 文末追加一段；
+/// - 其余行原样保留（含注释与未知段——手写 TOML 子集的写侧对称）。
+pub fn upsert_general_root_dir(text: &str, root: &str) -> String {
+    let new_line = format!("root_dir = \"{}\"", root);
+    let mut out: Vec<String> = Vec::new();
+    let mut section = String::new();
+    let mut done = false;
+    for line in text.lines() {
+        let t = strip_comment(line).trim();
+        if let Some(inner) = t.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            // 离开 general 段时还没写 → 在段尾补一行
+            if section == "general" && !done {
+                out.push(new_line.clone());
+                done = true;
+            }
+            section = inner.trim().to_string();
+            out.push(line.to_string());
+            continue;
+        }
+        if section == "general" {
+            if let Some((k, _)) = t.split_once('=') {
+                if k.trim() == "root_dir" {
+                    if !done {
+                        out.push(new_line.clone());
+                        done = true;
+                    }
+                    continue; // 替换旧行（含重复项去重）
+                }
+            }
+        }
+        out.push(line.to_string());
+    }
+    if !done {
+        if section == "general" {
+            out.push(new_line); // general 恰是最后一段
+        } else {
+            if !out.is_empty() {
+                out.push(String::new());
+            }
+            out.push("[general]".to_string());
+            out.push(new_line);
+        }
+    }
+    let mut result = out.join("\n");
+    result.push('\n');
+    result
+}
+
 /// 行内注释剥离（引号内 `#` 不切）。
 fn strip_comment(line: &str) -> &str {
     let mut in_str = false;
@@ -297,5 +350,56 @@ mod tests {
         assert_eq!(empty.root_dir(), None);
         // 默认值形状（HOME 可能未设，只验证不以 panic 返回）。
         let _ = default_root_dir();
+    }
+
+    #[test]
+    fn upsert_root_dir_empty_text_appends_section() {
+        let got = upsert_general_root_dir("", "/data/moxsh");
+        assert_eq!(got, "[general]\nroot_dir = \"/data/moxsh\"\n");
+        assert_eq!(
+            parse_config_toml(&got).root_dir.as_deref(),
+            Some("/data/moxsh")
+        );
+    }
+
+    #[test]
+    fn upsert_root_dir_replaces_and_dedups() {
+        let text = "# 我的配置\n[general]\nroot_dir = \"/old\"\nroot_dir = \"/dup\"\n[enter]\ndefault = \"echo hi\"\n";
+        let got = upsert_general_root_dir(text, "/new");
+        // 旧行被替换、重复行去重、其余内容原样。
+        assert_eq!(
+            got,
+            "# 我的配置\n[general]\nroot_dir = \"/new\"\n[enter]\ndefault = \"echo hi\"\n"
+        );
+        assert_eq!(parse_config_toml(&got).root_dir.as_deref(), Some("/new"));
+        assert_eq!(
+            parse_config_toml(&got).default_enter.as_deref(),
+            Some("echo hi")
+        );
+    }
+
+    #[test]
+    fn upsert_root_dir_inserts_at_section_end() {
+        // general 在中间：root_dir 补在段尾（[enter] 之前），不串段。
+        let text = "[general]\n# 没有 root_dir\n[enter]\ndefault = \"x\"\n";
+        let got = upsert_general_root_dir(text, "~/moxsh-data");
+        assert_eq!(
+            got,
+            "[general]\n# 没有 root_dir\nroot_dir = \"~/moxsh-data\"\n[enter]\ndefault = \"x\"\n"
+        );
+        assert_eq!(
+            parse_config_toml(&got).root_dir.as_deref(),
+            Some("~/moxsh-data")
+        );
+    }
+
+    #[test]
+    fn upsert_root_dir_general_is_last_section() {
+        let text = "[enter]\ndefault = \"x\"\n[general]\n";
+        let got = upsert_general_root_dir(text, "/data/moxsh");
+        assert_eq!(
+            got,
+            "[enter]\ndefault = \"x\"\n[general]\nroot_dir = \"/data/moxsh\"\n"
+        );
     }
 }

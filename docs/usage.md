@@ -57,6 +57,8 @@ moxsh-proot-distro restore alpine ~/a.tar.gz
 moxsh-proot-distro net                   # 网络边界报告（DNS/IPv6/出网）
 moxsh-proot-distro env alpine            # 预览登录时注入的环境（中文排查）
 moxsh-proot-distro launch mx:alpine      # 短链启动（未装自动装，装完直接进）
+moxsh-proot-distro wizard                # 一次性初始化（数据根 + 发行版 + 启动器）
+moxsh-proot-distro wizard --root /sd/moxsh --distro ubuntu   # 自定义数据根/发行版
 ```
 
 内置四大发行版规格：Ubuntu 24.04 LTS / Debian 12 / Kali rolling /
@@ -102,6 +104,23 @@ mox net                # 网络边界报告
 - `MOXSH_PROOT_CONSOLE=0` 关闭整套控制台注入；
 - 挂载点里能直接看到/编辑其他容器的 rootfs（排障神器）。
 
+### 2.3 一次性初始化向导（wizard）
+
+装完引擎后的第一步：`wizard` 把「选数据根 → 装发行版 → 落启动器 → 教学提示」
+一次做完，默认值驱动、无交互阻塞（脚本/CI 友好），重复跑只补缺失步骤：
+
+```bash
+moxsh-proot-distro wizard                          # 默认：~/.moxsh + alpine
+moxsh-proot-distro wizard --root /sd/moxsh-data    # 数据根自定义（写进 config.toml）
+moxsh-proot-distro wizard --distro ubuntu          # 换默认发行版
+```
+
+- 数据根写 `~/.config/moxsh-proot/config.toml` 的 `[general] root_dir`
+  （保留配置其余内容）；`MOXSH_ROOT` 环境变量仍优先于它；
+- 目标 rootfs 已存在则跳过安装，不会重复下载；
+- `--distro` 过 id 白名单（`..`/隐藏目录等直接拒绝），防启动器路径穿越；
+- 交互式体检与清单选择是 0.4.0 TUI 的事，届时 wizard 升级为主程序形态。
+
 ## 3. 钩子（容器内脚本运行时）
 
 安装后钩子种子在 `$MOXSH_ROOT/hooks`（默认 `~/.moxsh/hooks`），
@@ -119,7 +138,7 @@ mox net                # 网络边界报告
 
 ```bash
 cargo build --release          # 引擎 + 两个二进制（需 Rust 1.86+）
-cargo test                    # 166 单测 + 1 集成
+cargo test                    # 174 单测 + 2 集成
 cargo clippy --all-targets -- -D warnings
 
 go -C go build ./...          # Go 安装器（install/update/probe）

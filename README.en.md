@@ -189,6 +189,14 @@ Or launch by short link (auto-installs on first run, drops you straight in):
 moxsh-proot-distro launch mx:alpine
 ```
 
+One-shot setup (data root + distro + launchers + a guided tour; re-runs
+only fill in what's missing):
+
+```bash
+moxsh-proot-distro wizard                    # defaults: ~/.moxsh + alpine
+moxsh-proot-distro wizard --root /sd/data --distro ubuntu   # customize
+```
+
 **Chinese locale works out of the box**: on login the engine injects
 `LANG`/`TERM` (your host locale passes through; falls back to `C.UTF-8`,
 so no mojibake). For full Chinese UI: install the `locales` package inside

@@ -181,6 +181,13 @@ moxsh-proot-distro login alpine       # 进登录 shell
 moxsh-proot-distro launch mx:alpine
 ```
 
+一条命令初始化（数据根 + 发行版 + 启动器 + 教学提示，重复跑只补缺的）：
+
+```bash
+moxsh-proot-distro wizard                    # 默认 ~/.moxsh + alpine
+moxsh-proot-distro wizard --root /sd/data --distro ubuntu   # 自定义
+```
+
 **中文环境开箱即用**：登录时引擎自动注入 `LANG`/`TERM`（宿主中文环境会
 透传进容器；兜底 `C.UTF-8`，不乱码）。想要完整中文显示：容器内装
 locales 包并 `locale-gen zh_CN.UTF-8`，然后编辑 rootfs 里的

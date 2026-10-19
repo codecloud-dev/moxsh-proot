@@ -469,6 +469,7 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "restore" => cmd_restore(&mgr, rest, moxsh_root),
         "net" => cmd_net(&mgr, rest),
         "env" => cmd_env(&mgr, rest),
+        "wizard" => cmd_wizard(rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
         // 走到这里（App 内嵌文本路由）只给用法提示。
@@ -641,6 +642,130 @@ fn install_hint(id: &str, mgr: &DistroManager) -> String {
             id
         ));
     }
+    out
+}
+
+/// `wizard [--root <目录>] [--distro <id>]`：一次性初始化向导（0.2.0，roadmap §5）。
+///
+/// 默认值驱动、**无 stdin 阻塞**（脚本/CI 友好；交互式问答是 0.4.0 TUI 的事）：
+///   ① 数据根：`--root` 或保持现值（默认 `~/.moxsh`）→ upsert 进 config.toml；
+///   ② 发行版：`--distro`（默认 alpine）→ 已装跳过，未装走完整安装链路；
+///   ③ 教学提示：换源 / 中文 / 控制台 / 启动器一次说清。
+/// 幂等：重复跑只补缺失步骤，不重复下载、不重复提问。
+fn cmd_wizard(args: &[&str]) -> String {
+    let mut root_arg: Option<String> = None;
+    let mut distro = "alpine".to_string();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i] {
+            "--root" => match args.get(i + 1) {
+                Some(v) => {
+                    root_arg = Some(v.to_string());
+                    i += 2;
+                }
+                None => {
+                    return "用法: moxsh-proot-distro wizard [--root <目录>] [--distro <id>]（--root 缺参数）"
+                        .to_string()
+                }
+            },
+            "--distro" => match args.get(i + 1) {
+                Some(v) => {
+                    distro = v.to_string();
+                    i += 2;
+                }
+                None => {
+                    return "用法: moxsh-proot-distro wizard [--root <目录>] [--distro <id>]（--distro 缺参数）"
+                        .to_string()
+                }
+            },
+            other => {
+                return format!(
+                    "wizard: 未知参数 {}\n用法: moxsh-proot-distro wizard [--root <目录>] [--distro <id>]",
+                    other
+                )
+            }
+        }
+    }
+
+    // P1：distro id 路径白名单。install_hint 会拿 id 拼启动器/控制台文件名
+    // （`bin/<id>`），不校验会把 `../evil` 写出 bin 目录。
+    if !DistroManager::valid_id(&distro) {
+        return format!(
+            "wizard: 非法发行版 id {}（仅允许字母数字与 . _ -，且不以 . 开头）",
+            distro
+        );
+    }
+
+    let mut out = String::from("moxsh-proot 初始化向导\n\n");
+
+    // 1) 数据根：upsert 进 config.toml（保留用户其余配置）。
+    let cfg_path = Settings::user_path();
+    let settings = Settings::load_user().unwrap_or_default();
+    let current = settings.resolve_root_dir();
+    let target = root_arg
+        .as_deref()
+        .map(settings::expand_tilde)
+        .unwrap_or_else(|| current.clone());
+    let target_disp = target.display().to_string();
+    let existing = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    let new_text = settings::upsert_general_root_dir(&existing, &target_disp);
+    if new_text != existing {
+        if let Some(parent) = cfg_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        match std::fs::write(&cfg_path, &new_text) {
+            Ok(()) => out.push_str(&format!(
+                "① 数据根目录：{}（已写入 {}）\n",
+                target_disp,
+                cfg_path.display()
+            )),
+            Err(e) => out.push_str(&format!(
+                "① 警告：配置写入失败（{}），数据根仍为 {}\n",
+                e,
+                current.display()
+            )),
+        }
+    } else {
+        out.push_str(&format!("① 数据根目录：{}（配置未变）\n", target_disp));
+    }
+
+    // 2) 发行版：按目标数据根管理（config 可能刚改，mgr 要按新 root 建）。
+    let mgr = DistroManager::new(&target);
+    if mgr.distro_rootfs(&distro).is_dir() {
+        out.push_str(&format!("② 发行版 {}：已安装，跳过\n", distro));
+    } else {
+        match DistroManager::find_spec(&distro) {
+            Ok(spec) => {
+                out.push_str(&format!(
+                    "② 安装发行版 {}（{} {}）…\n",
+                    spec.id, spec.name, spec.version
+                ));
+                let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
+                    if total > 0 && done >= total {
+                        eprintln!("[安装] {}", msg);
+                    } else {
+                        eprintln!("[安装] {}（{}/{}）", msg, done, total);
+                    }
+                });
+                match mgr.install(&spec, None, &mut progress) {
+                    Ok(()) => out.push_str(&format!("② {} 安装完成\n", spec.id)),
+                    Err(e) => {
+                        return format!("{}② 安装失败：{}\n", out, e);
+                    }
+                }
+            }
+            Err(e) => {
+                out.push_str(&format!("② 未知发行版 {}（{}），跳过安装\n", distro, e));
+            }
+        }
+    }
+
+    // 3) 落盘启动器 + 控制台 + 教学提示（install_hint 复用同一套）。
+    out.push_str(&str::replace(&install_hint(&distro, &mgr), "安装完成。\n", ""));
+    out.push_str(&format!(
+        "\n接下来：\n  moxsh-proot-distro launch mx:{d}    # 直接进容器\n  {d}                                  # 启动器（已落盘）\n  moxsh-proot-distro env {d}            # 查中文环境\n  容器内输入 mox                        # 管理控制台（固定命令）\n",
+        d = distro
+    ));
     out
 }
 
@@ -925,7 +1050,8 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro restore <id> <tar.tar.gz> 恢复
   proot-distro net [id]                  网络边界报告（不带 id 看宿主）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
-  proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）";
+  proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
+  proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。
 const PROOT_HELP: &str = "proot（moxsh 引擎内嵌版，支持参数：-r/--rootfs -0/--root-id -b/--bind -w/--cwd）";

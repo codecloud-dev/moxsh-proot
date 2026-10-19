@@ -18,9 +18,13 @@ use std::path::{Path, PathBuf};
 
 use crate::proot::distro::DistroManager;
 use crate::proot::elf::{resolve_exec_chain, ExecPlan};
+use crate::proot::links::{self, ResolvedLink};
 use crate::proot::net;
 use crate::proot::ptrace::Tracer;
+use crate::proot::script;
+use crate::proot::settings::{self, Settings};
 use crate::proot::translate::TranslateRules;
+use crate::proot::{ProotConfig, ProotError, ProotResult};
 
 /// 命令路由入口：`command` 为 `proot` 或 `proot-distro`，`args` 为其余参数。
 pub fn route(command: &str, args: &[&str], moxsh_root: &Path) -> String {
@@ -41,6 +45,21 @@ pub fn route(command: &str, args: &[&str], moxsh_root: &Path) -> String {
 /// 与 [`route`] 的分工：`route` 服务 App 内嵌 shell 的**文本交互**；
 /// 本函数服务**真执行**（原版 Termux 用户直接 `moxsh-proot ...`）。
 pub fn run_native(args: &[String]) -> i32 {
+    // mx: 短链启动（0.2.0）：-r/-R/-S 的值是 mx: 形式时，本二进制直接从
+    // 短链走「未装自动装 → 进容器」，无需用户先跑 distro install。
+    if let Some(spec) = find_mx_rootfs_arg(args) {
+        let root = Settings::load_user()
+            .map(|s| s.resolve_root_dir())
+            .unwrap_or_else(|_| settings::default_root_dir());
+        let tail = tail_after_dashdash(args);
+        return match launch_spec(&root, &spec, &tail) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("moxsh-proot: mx: 启动失败: {}", e);
+                2
+            }
+        };
+    }
     let cfg = match parse_native_args(args) {
         Ok(c) => c,
         Err(e) => {
@@ -446,6 +465,12 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "backup" => cmd_backup(&mgr, rest),
         "restore" => cmd_restore(&mgr, rest, moxsh_root),
         "net" => cmd_net(&mgr, rest),
+        // launch 需真起引擎（未装自动装），不在文本路由内执行——
+        // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
+        // 走到这里（App 内嵌文本路由）只给用法提示。
+        "launch" => "用法: moxsh-proot-distro launch mx:<名字> [-- 命令...]\n\
+             （mx:alpine / mx:ubuntu / mx:debian / mx:kali；自定义见 ~/.config/moxsh-proot/links.toml）"
+            .to_string(),
         "help" | "--help" | "-h" | "" => HELP.to_string(),
         other => format!("proot-distro: 未知子命令 {}\n{}", other, HELP),
     }
@@ -599,6 +624,170 @@ fn cmd_restore(mgr: &DistroManager, args: &[&str], _moxsh_root: &Path) -> String
         Ok(()) => format!("已恢复 {}", id),
         Err(e) => format!("proot-distro: {}", e),
     }
+}
+
+// ==================== mx: 短链启动（0.2.0，docs/roadmap.md §1） ====================
+
+/// 短链启动核心：解析 `mx:xxx` → 未装自动装 → 起引擎进容器。
+///
+/// 两层调用方共用：`moxsh-proot -r mx:alpine -- bash`（选项值 scheme）与
+/// `moxsh-proot-distro launch mx:alpine`（子命令）。
+/// 返回进程退出码。
+pub fn launch_spec(root: &Path, spec: &str, tail: &[String]) -> ProotResult<i32> {
+    let user = links::load_user_links().unwrap_or_default();
+    let resolved = links::resolve(spec, &user)?;
+    let mgr = DistroManager::new(root);
+    let id = match resolved {
+        ResolvedLink::Distro(id) => {
+            if !mgr.distro_rootfs(&id).is_dir() {
+                let spec = DistroManager::find_spec(&id)?;
+                eprintln!("moxsh-proot: mx:{} 未安装，开始自动安装（{} {}）…", id, spec.name, spec.version);
+                let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
+                    if total > 0 && done >= total {
+                        eprintln!("[安装] {}", msg);
+                    } else {
+                        eprintln!("[安装] {}（{}/{}）", msg, done, total);
+                    }
+                });
+                mgr.install(&spec, None, &mut progress)?;
+            }
+            id
+        }
+        ResolvedLink::Url(urls) => {
+            let name = links::strip_mx(spec).unwrap_or("").to_string();
+            if !mgr.distro_rootfs(&name).is_dir() {
+                eprintln!("moxsh-proot: mx:{} 未安装，开始自动安装（自定义 rootfs）…", name);
+                let tar = download_first_available(&mgr, &urls)?;
+                let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
+                    if total > 0 && done >= total {
+                        eprintln!("[安装] {}", msg);
+                    } else {
+                        eprintln!("[安装] {}（{}/{}）", msg, done, total);
+                    }
+                });
+                mgr.install_custom(&name, &tar, None, &mut progress)?;
+            }
+            name
+        }
+    };
+    exec_into(root, &id, tail)
+}
+
+/// URL 型短链下载：按序尝试多源，全部失败报 `DownloadRequired`。
+fn download_first_available(mgr: &DistroManager, urls: &[String]) -> ProotResult<PathBuf> {
+    fs_create_dir_all(&mgr.cache_dir())?;
+    for url in urls {
+        // 资产名取 URL 末段（去 query）；重名缓存直接复用。
+        let fname = url
+            .rsplit('/')
+            .next()
+            .unwrap_or("rootfs.tar")
+            .split('?')
+            .next()
+            .unwrap_or("rootfs.tar");
+        let fname = if fname.is_empty() { "rootfs.tar" } else { fname };
+        let out = mgr.cache_dir().join(fname);
+        if out.exists() {
+            return Ok(out);
+        }
+        eprintln!("[下载] {}", url);
+        let st = std::process::Command::new("curl")
+            .args(["-fL", "--retry", "2", "-o"])
+            .arg(&out)
+            .arg(url)
+            .status();
+        if matches!(st, Ok(s) if s.success()) {
+            return Ok(out);
+        }
+        let _ = std::fs::remove_file(&out);
+    }
+    Err(ProotError::DownloadRequired(urls.first().cloned().unwrap_or_default()))
+}
+
+fn fs_create_dir_all(p: &Path) -> ProotResult<()> {
+    std::fs::create_dir_all(p).map_err(ProotError::Io)
+}
+
+/// 起引擎进容器（提炼自 `moxsh-proot-distro login/shell` 的 exec 路径，
+/// 叠加 0.2.0 的进/退命令语义，roadmap §1）：
+///
+/// - `tail` 非空 = 用户显式命令（`mx:alpine -- vim`），替代登录 shell；
+/// - 否则 `enter_cmd(id)`（每容器覆盖 > 全局默认）= 容器内首个命令
+///   （`/bin/sh -c` 执行，防误触确认写在这里面）；
+/// - 再否则引擎默认探测：bash -l 优先，sh -l 兜底；
+/// - 会话结束后 `exit_cmd(id)` 在**宿主侧**执行（收尾提示/清理）。
+pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
+    let mgr = DistroManager::new(root);
+    let rootfs = mgr.distro_rootfs(id);
+    if !rootfs.is_dir() {
+        return Err(ProotError::DistroNotInstalled(id.to_string()));
+    }
+    // pre-login 钩子：失败仅警告不阻断（钩子是用户脚本，不该把人挡在容器外）。
+    match script::run_hooks(root, &rootfs, id, script::HookKind::PreLogin) {
+        Ok(r) if r.has_failure() => {
+            eprintln!("moxsh-proot: pre-login 钩子存在失败项：{}", r.summary())
+        }
+        Ok(_) => {}
+        Err(e) => eprintln!("moxsh-proot: pre-login 钩子异常：{}", e),
+    }
+
+    // 命令三源：显式 tail > 配置 enter > 引擎默认探测。
+    let shell: Vec<String> = if !tail.is_empty() {
+        tail.to_vec()
+    } else if let Some(enter) = Settings::load_user()
+        .ok()
+        .as_ref()
+        .and_then(|s| s.enter_cmd(id).map(str::to_string))
+    {
+        vec!["/bin/sh".into(), "-c".into(), enter]
+    } else if rootfs.join("bin/bash").exists() {
+        vec!["/bin/bash".into(), "-l".into()]
+    } else {
+        vec!["/bin/sh".into(), "-l".into()]
+    };
+
+    let cfg = ProotConfig::with_distro_defaults(&rootfs);
+    // env_command() 形如 ["/usr/bin/env", "-i", "HOME=...", ...]，跳过前两个
+    // 前缀词即纯 KEY=VALUE 列表（spawn 直接 execve 用）。
+    let env: Vec<String> = cfg.env_command().into_iter().skip(2).collect();
+    let code = run_config(&cfg, &shell, &env);
+
+    // 宿主侧收尾（exit 语义降级说明见 settings.rs 模块文档）。
+    if let Ok(s) = Settings::load_user() {
+        if let Some(exit) = s.exit_cmd(id) {
+            let _ = std::process::Command::new("sh").arg("-c").arg(exit).status();
+        }
+    }
+    Ok(code)
+}
+
+/// 在参数表里找 `mx:` 形式的 rootfs 值（-r/-R/-S 的后一个词，或 --rootfs=）。
+/// 找到即短链启动路径（`moxsh-proot -r mx:alpine`）。
+pub fn find_mx_rootfs_arg(args: &[String]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i].as_str();
+        let v = if matches!(a, "-r" | "--rootfs" | "-R" | "-S") {
+            args.get(i + 1).map(String::as_str)
+        } else {
+            a.strip_prefix("--rootfs=")
+        };
+        if let Some(v) = v {
+            if links::is_mx(v) {
+                return Some(v.to_string());
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// 提取 `--` 之后的用户命令（短链启动的 tail）。
+pub fn tail_after_dashdash(args: &[String]) -> Vec<String> {
+    args.iter()
+        .position(|a| a == "--")
+        .map(|p| args[p + 1..].to_vec())
+        .unwrap_or_default()
 }
 
 /// `proot` 原生参数面：识别 -r/-0/-b/-w 并输出等效 moxsh 引擎配置预览。
@@ -847,5 +1036,65 @@ mod tests {
         assert_eq!(initial_cwd_for(&cfg, &rules), None);
 
         std::fs::remove_dir_all(&rf).ok();
+    }
+}
+
+// ==================== mx: 短链参数识别单测（0.2.0） ====================
+
+#[cfg(test)]
+mod launch_tests {
+    use super::*;
+
+    fn v(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn find_mx_rootfs_all_option_forms() {
+        assert_eq!(
+            find_mx_rootfs_arg(&v(&["-r", "mx:alpine"])),
+            Some("mx:alpine".into())
+        );
+        assert_eq!(
+            find_mx_rootfs_arg(&v(&["--rootfs", "mx:ubuntu"])),
+            Some("mx:ubuntu".into())
+        );
+        assert_eq!(
+            find_mx_rootfs_arg(&v(&["-R", "mx:kali", "--", "bash"])),
+            Some("mx:kali".into())
+        );
+        assert_eq!(
+            find_mx_rootfs_arg(&v(&["-S", "mx:debian"])),
+            Some("mx:debian".into())
+        );
+        assert_eq!(
+            find_mx_rootfs_arg(&v(&["--rootfs=mx:alpine"])),
+            Some("mx:alpine".into())
+        );
+    }
+
+    #[test]
+    fn find_mx_rootfs_ignores_plain_paths() {
+        assert_eq!(find_mx_rootfs_arg(&v(&["-r", "/data/rootfs"])), None);
+        assert_eq!(find_mx_rootfs_arg(&v(&["--rootfs=./ubuntu"])), None);
+        assert_eq!(find_mx_rootfs_arg(&v(&["-r"])), None); // 缺参数不 panic
+        assert_eq!(find_mx_rootfs_arg(&v(&[])), None);
+        // -b/-w/-e 的值哪怕长得像 mx: 也不算（只认 rootfs 位）。
+        assert_eq!(find_mx_rootfs_arg(&v(&["-w", "mx:alpine"])), None);
+    }
+
+    #[test]
+    fn tail_after_dashdash_extraction() {
+        assert_eq!(
+            tail_after_dashdash(&v(&["-r", "mx:alpine", "--", "vim", "-R"])),
+            vec!["vim".to_string(), "-R".to_string()]
+        );
+        assert_eq!(tail_after_dashdash(&v(&["-r", "mx:alpine"])), Vec::<String>::new());
+        assert_eq!(tail_after_dashdash(&v(&["--"])), Vec::<String>::new());
+        // 只认第一个 --。
+        assert_eq!(
+            tail_after_dashdash(&v(&["--", "a", "--", "b"])),
+            vec!["a".to_string(), "--".to_string(), "b".to_string()]
+        );
     }
 }

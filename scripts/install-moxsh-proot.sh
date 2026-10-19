@@ -6,8 +6,9 @@
 #
 #   moxsh-proot -R ~/ubuntu -0 -- bash
 #
-# 安装方式（原版 Termux）：
+# 安装方式（原版 Termux，二选一，脚本自动探测国内外线路）：
 #   curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-moxsh-proot.sh | bash
+#   curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
 #
 # 本脚本是安装体系的 **bash 探测层**（零依赖、可 curl|bash）；
 # richer 安装/更新体验走 Go 安装器（仓库 go/ 目录，Release 资产
@@ -26,15 +27,68 @@
 
 set -euo pipefail
 
-REPO="${MOXSH_PROOT_REPO:-codecloud-dev/moxsh-proot}"
+GITHUB_REPO="${MOXSH_PROOT_REPO:-codecloud-dev/moxsh-proot}"
+GITEE_REPO="${MOXSH_GITEE_REPO:-thousand-code-crafts/moxsh-proot}"
 RELEASE="${MOXSH_PROOT_RELEASE:-proot-latest}"
-# 默认走 GitHub Release；国内网络慢时可用 MOXSH_PROOT_BASE_URL 指向镜像
-# （镜像需保持相同的 <BASE_URL>/<ASSET> 与 <BASE_URL>/<ASSET>.sha256 布局）。
-BASE_URL="${MOXSH_PROOT_BASE_URL:-https://github.com/${REPO}/releases/download/${RELEASE}}"
 
 log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m警告:\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- 国内外分流
+# 自动选源（0.2.0）：探测 GitHub 与 Gitee 的可达性 + 握手延迟，国内走
+# Gitee、国外走 GitHub。覆盖方式（优先级从高到低）：
+#   1. MOXSH_PROOT_BASE_URL 显式指定（镜像自建场景，需保持
+#      <BASE_URL>/<ASSET> 与 <BASE_URL>/<ASSET>.sha256 布局）；
+#   2. MOXSH_PROOT_SOURCE=github|gitee 强制选端（不猜 URL）；
+#   3. 自动探测（默认）。
+#
+# 探测端点选轻量 raw README（几十 KB，不计速只计可达与握手耗时）；
+# 两端都不可达时默认 GitHub——错误信息指向标准源，且瞬时抖动下
+# GitHub 的全球可达性通常更好。
+probe_seconds() {
+  # $1 = URL；成功输出耗时（秒），失败输出空。
+  curl -fsS -o /dev/null --connect-timeout 4 --max-time 8 -w '%{time_total}' "$1" 2>/dev/null || true
+}
+
+pick_source() {
+  if [ -n "${MOXSH_PROOT_BASE_URL:-}" ]; then
+    SOURCE="custom"
+    BASE_URL="$MOXSH_PROOT_BASE_URL"
+    ARCHIVE_URL=""
+    log "下载源：自定义镜像 ${BASE_URL}"
+    return
+  fi
+  if [ "${MOXSH_PROOT_SOURCE:-auto}" = "github" ]; then
+    set_source_github; return
+  fi
+  if [ "${MOXSH_PROOT_SOURCE:-auto}" = "gitee" ]; then
+    set_source_gitee; return
+  fi
+  local gh_s gitee_s
+  gh_s="$(probe_seconds "https://raw.githubusercontent.com/${GITHUB_REPO}/main/README.md")"
+  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/raw/main/README.md")"
+  if [ -n "$gitee_s" ] && { [ -z "$gh_s" ] || awk -v g="$gitee_s" -v h="$gh_s" 'BEGIN{exit !(g<h)}'; }; then
+    set_source_gitee
+  else
+    set_source_github
+  fi
+}
+
+set_source_github() {
+  SOURCE="github"
+  BASE_URL="https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}"
+  ARCHIVE_URL="https://github.com/${GITHUB_REPO}/archive/refs/tags/${RELEASE}.tar.gz"
+  log "下载源：GitHub（${BASE_URL}）"
+}
+
+set_source_gitee() {
+  SOURCE="gitee"
+  BASE_URL="https://gitee.com/${GITEE_REPO}/releases/download/${RELEASE}"
+  ARCHIVE_URL="https://gitee.com/${GITEE_REPO}/repository/archive/${RELEASE}.tar.gz"
+  log "下载源：Gitee 国内镜像（${BASE_URL}）"
+}
+
 
 # ---------------------------------------------------------------- 环境探测
 # PREFIX：Termux 会话必然设置；裸跑（如 ssh 进 Termux）时按已知路径兜底。
@@ -57,7 +111,7 @@ case "$(uname -m)" in
   x86_64|amd64)   TRIPLE_ARCH="x86_64" ;;
   armv7l|armv8l|arm)
     die "检测到 32 位 ARM（$(uname -m)），暂不提供预编译二进制。
-请从源码构建：https://github.com/${REPO}#从源码构建" ;;
+请从源码构建：https://github.com/${GITHUB_REPO}#从源码构建" ;;
   *) die "不支持的架构: $(uname -m)" ;;
 esac
 
@@ -67,6 +121,9 @@ BINDIR="${PREFIX}/bin"
 
 command -v curl >/dev/null 2>&1 || die "未找到 curl（pkg install curl）"
 command -v sha256sum >/dev/null 2>&1 || die "未找到 sha256sum（pkg install coreutils）"
+
+# 选源（探测 GitHub/Gitee 延迟；需 curl 就位后执行）。
+pick_source
 
 # MOXSH_ROOT：钩子与容器数据根目录（对齐引擎 DistroManager 约定：
 # $MOXSH_ROOT > $HOME/.moxsh）。
@@ -89,7 +146,8 @@ fetch_asset() {
   curl -fSL --retry 3 --connect-timeout 15 \
     -o "${TMP}/${asset}" "${BASE_URL}/${asset}" \
     || die "下载失败：${BASE_URL}/${asset}
-可能原因：网络不通 / Release 尚未发布（首次发布由 CI 推送 tag proot-v* 触发）。"
+可能原因：网络不通 / Release 尚未发布（滚动发布 proot-latest 由 CI 在 main 更新时自动重建）。
+可尝试：MOXSH_PROOT_SOURCE=github|gitee 强制选端，或 MOXSH_PROOT_BASE_URL 指向自建镜像。"
 
   curl -fSL --retry 3 --connect-timeout 15 \
     -o "${TMP}/${asset}.sha256" "${BASE_URL}/${asset}.sha256" \
@@ -130,17 +188,19 @@ log "安装完成：${BINDIR}/moxsh-proot-distro"
 # ---------------------------------------------------------------- 钩子种子
 # 从仓库 tarball 提取 py/runtime + lua/ 到 $MOXSH_ROOT/hooks（引擎
 # post-install / pre-login 钩子的默认内容）。失败仅警告——钩子是增强项。
-log "种子钩子目录 ${MOXSH_ROOT}/hooks …"
-HOOKS_TARBALL="https://github.com/${REPO}/archive/refs/tags/${RELEASE}.tar.gz"
-if curl -fSL --retry 2 --connect-timeout 15 -o "${TMP}/repo.tar.gz" "${HOOKS_TARBALL}" 2>/dev/null; then
-  mkdir -p "${MOXSH_ROOT}/hooks"
-  # tarball 顶层目录为 <repo>-<release>/；strip 后按相对路径取钩子相关文件。
-  if tar -xzf "${TMP}/repo.tar.gz" -C "${TMP}" --strip-components=1 \
-      "moxsh-proot-${RELEASE}/py/runtime/provision.py" \
-      "moxsh-proot-${RELEASE}/py/runtime/login_hook.py" \
-      "moxsh-proot-${RELEASE}/lua/proot.lua" \
-      "moxsh-proot-${RELEASE}/lua/hooks/post-install.lua" \
-      "moxsh-proot-${RELEASE}/lua/hooks/pre-login.lua" 2>/dev/null; then
+# custom 源无 ARCHIVE_URL（用户镜像通常只放二进制），跳过种子。
+if [ -n "$ARCHIVE_URL" ]; then
+  log "种子钩子目录 ${MOXSH_ROOT}/hooks …"
+  if curl -fSL --retry 2 --connect-timeout 15 -o "${TMP}/repo.tar.gz" "${ARCHIVE_URL}" 2>/dev/null; then
+    mkdir -p "${MOXSH_ROOT}/hooks"
+    # 顶层目录名两端不同（GitHub: <repo>-<release>/；Gitee: <repo>/），
+    # 用 --wildcards '*/...' 通配兼容；--strip-components=1 去掉顶层。
+    if tar -xzf "${TMP}/repo.tar.gz" -C "${TMP}" --strip-components=1 --wildcards \
+        '*/py/runtime/provision.py' \
+        '*/py/runtime/login_hook.py' \
+        '*/lua/proot.lua' \
+        '*/lua/hooks/post-install.lua' \
+        '*/lua/hooks/pre-login.lua' 2>/dev/null; then
     cp "${TMP}/py/runtime/provision.py" "${TMP}/py/runtime/login_hook.py" \
        "${MOXSH_ROOT}/hooks/" 2>/dev/null || true
     mkdir -p "${MOXSH_ROOT}/hooks/lua"
@@ -153,7 +213,17 @@ if curl -fSL --retry 2 --connect-timeout 15 -o "${TMP}/repo.tar.gz" "${HOOKS_TAR
     warn "tarball 内未找到钩子文件，跳过种子——引擎无钩子照常工作。"
   fi
 else
-  warn "钩子 tarball 下载失败（${HOOKS_TARBALL}），跳过种子——引擎无钩子照常工作。"
+  warn "钩子 tarball 下载失败（${ARCHIVE_URL}），跳过种子——引擎无钩子照常工作。"
+fi
+else
+  log "自定义镜像源，跳过钩子种子（镜像通常只放二进制）。"
+fi
+
+# 反馈链接按源切换（Gitee 源的用户去 Gitee 提 issue）。
+if [ "$SOURCE" = "gitee" ]; then
+  ISSUES_URL="https://gitee.com/${GITEE_REPO}/issues"
+else
+  ISSUES_URL="https://github.com/${GITHUB_REPO}/issues"
 fi
 
 cat <<EOF
@@ -176,5 +246,5 @@ rootfs 未安装？用 distro 管理器装一个（引擎同一套）：
  richer 更新体验（Go 安装器，支持 update/probe）：
   moxsh-installer update
 
-有问题反馈：https://github.com/${REPO}/issues
+有问题反馈：${ISSUES_URL}
 EOF

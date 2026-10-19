@@ -17,15 +17,15 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use moxsh_proot::proot::distro::DistroManager;
-use moxsh_proot::proot::script;
-use moxsh_proot::proot::{cli, ProotConfig};
+use moxsh_proot::proot::cli;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let root = default_root();
     let code = match args.first().map(String::as_str) {
-        // login/shell 需要真起引擎（其余子命令是文本输出，走共享路由）。
+        // login/shell/launch 需要真起引擎（其余子命令是文本输出，走共享路由）。
         Some("login") | Some("shell") => exec_login(&root, &args),
+        Some("launch") => exec_launch(&root, &args),
         _ => {
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             print!("{}", cli::proot_distro(&refs, &root));
@@ -49,14 +49,16 @@ fn default_root() -> PathBuf {
 
 /// login/shell：解析 rootfs → 结构化配置 → 交引擎执行（不 textualize 成
 /// 上游 proot 命令行再解析——结构化路径少一层往返，也不会丢选项）。
+///
+/// 0.2.0 起与 `launch` 共用 [`cli::exec_into`]（进/退命令、钩子、shell
+/// 探测同源）；本函数只保留 login/shell 的 shell 形态差异（-l 登录 shell）。
 fn exec_login(root: &Path, args: &[String]) -> i32 {
     let sub = args[0].as_str();
     let Some(id) = args.get(1) else {
         eprintln!("用法: moxsh-proot-distro {} <id>", sub);
         return 2;
     };
-    let mgr = DistroManager::new(root);
-    let rootfs = mgr.distro_rootfs(id);
+    let rootfs = DistroManager::new(root).distro_rootfs(id);
     if !rootfs.is_dir() {
         eprintln!(
             "moxsh-proot-distro: 发行版未安装: {}（先 install {}）",
@@ -64,17 +66,9 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
         );
         return 2;
     }
-    // pre-login 钩子（Python/Lua，引擎内执行）：失败仅警告不阻断登录——
-    // 钩子是用户脚本，不该把用户挡在容器外。
-    match script::run_hooks(root, &rootfs, id, script::HookKind::PreLogin) {
-        Ok(r) if r.has_failure() => {
-            eprintln!("moxsh-proot-distro: pre-login 钩子存在失败项：{}", r.summary())
-        }
-        Ok(_) => {}
-        Err(e) => eprintln!("moxsh-proot-distro: pre-login 钩子异常：{}", e),
-    }
-    // 登录 shell 探测：有 bash 用 bash -l，否则 sh -l（与 login_cmd 一致）。
-    let shell: Vec<String> = if rootfs.join("bin/bash").exists() {
+    // login 语义固定为登录 shell（-l）；shell 语义为非登录——均不经配置
+    // enter 覆盖（login/shell 是显式传统入口，mx: 短链才走配置）。
+    let tail: Vec<String> = if rootfs.join("bin/bash").exists() {
         if sub == "login" {
             vec!["/bin/bash".into(), "-l".into()]
         } else {
@@ -85,10 +79,42 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
     } else {
         vec!["/bin/sh".into()]
     };
+    match cli::exec_into(root, id, &tail) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("moxsh-proot-distro: {}", e);
+            2
+        }
+    }
+}
 
-    let cfg = ProotConfig::with_distro_defaults(&rootfs);
-    // env_command() 形如 ["/usr/bin/env", "-i", "HOME=...", ...]，跳过前两个
-    // 前缀词即纯 KEY=VALUE 列表（spawn 直接 execve 用，无需再包一层 env）。
-    let env: Vec<String> = cfg.env_command().into_iter().skip(2).collect();
-    cli::run_config(&cfg, &shell, &env)
+/// `launch mx:<名字> [-- 命令...]`：短链启动（0.2.0）——未装自动装，
+/// 装完直接进容器。见 [`cli::launch_spec`]。
+fn exec_launch(root: &Path, args: &[String]) -> i32 {
+    let Some(spec) = args.get(1) else {
+        eprintln!("用法: moxsh-proot-distro launch mx:<名字> [-- 命令...]");
+        return 2;
+    };
+    if !spec.starts_with("mx:") {
+        eprintln!(
+            "moxsh-proot-distro: launch 只接受 mx: 短链（如 mx:alpine），得到 {}。\n\
+             传统登录请用 login <id>。",
+            spec
+        );
+        return 2;
+    }
+    // `--` 之后的命令作为 tail（与 run_native 的口径一致）。
+    let tail: Vec<String> = args
+        .iter()
+        .skip(2)
+        .position(|a| a == "--")
+        .map(|p| args[2 + p + 1..].to_vec())
+        .unwrap_or_default();
+    match cli::launch_spec(root, spec, &tail) {
+        Ok(code) => code,
+        Err(e) => {
+            eprintln!("moxsh-proot-distro: {}", e);
+            2
+        }
+    }
 }

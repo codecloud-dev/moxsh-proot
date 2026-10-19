@@ -21,15 +21,25 @@ if [ "$decoded" != "$(cat scripts/bootstrap.sh)" ]; then
 fi
 
 if [ "${1:-}" = "--check" ]; then
-  cmd="echo '${B64}' | base64 -d | gzip -d | sh"
+  # 校验语义：README 里的短命令**解码后**必须与 bootstrap.sh 逐字节一致。
+  # 注意不能重算 base64 再比对——gzip 输出跨版本/跨平台不稳定（XFL/OS 头字节），
+  # 而解码是确定的。任何机器上「解码 == 源文件」才是文档同步的硬标准。
   rc=0
   for f in README.md README.en.md; do
-    if ! grep -qF "$cmd" "$f"; then
-      echo "不同步：$f 里的短命令与 scripts/bootstrap.sh 对不上，请重跑 scripts/gen-shortcmd.sh 并更新文档" >&2
+    # 整行锚定（^...$）：行尾多一个注释字符都算不同步。
+    line="$(grep -m1 -E "^echo '[A-Za-z0-9+/=]+' \| base64 -d \| gzip -d \| sh$" "$f" || true)"
+    if [ -z "$line" ]; then
+      echo "未找到短命令行：$f" >&2
+      rc=1
+      continue
+    fi
+    b64="$(printf '%s' "$line" | sed "s/^echo '//; s/' | base64 -d | gzip -d | sh$//")"
+    if [ "$(printf '%s' "$b64" | base64 -d | gzip -dc)" != "$(cat scripts/bootstrap.sh)" ]; then
+      echo "不同步：$f 里的短命令解码后与 scripts/bootstrap.sh 不一致，请重跑 scripts/gen-shortcmd.sh 并更新文档" >&2
       rc=1
     fi
   done
-  [ "$rc" -eq 0 ] && echo "OK: README 短命令与 bootstrap.sh 同步"
+  [ "$rc" -eq 0 ] && echo "OK: README 短命令解码后与 bootstrap.sh 一致"
   exit "$rc"
 fi
 

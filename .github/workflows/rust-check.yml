@@ -78,23 +78,24 @@ jobs:
           toolchain: "1.86.0"
           targets: aarch64-linux-android
       - uses: Swatinem/rust-cache@v2
-      # GitHub 托管 runner 已预装完整 Android SDK（含 cmdline-tools），
-      # 无需 android-actions/setup-android —— 该 Action 在新版 cmdline-tools 上
-      # 会因安装过时包名 "tools" 而失败（sdkmanager exit 1）。
-      - name: Install NDK 26.1.10909125
+      # 直下官方 NDK zip（r26b 即 26.1.10909125），不依赖 runner 预装
+      # Android SDK——镜像的 ANDROID_HOME / sdkmanager 布局多次变动，
+      # 直下是最稳路径。zip ~650MB，解压落在 ~/android-ndk。
+      - name: 安装 NDK 26.1.10909125（r26b）
         run: |
-          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
-          if [ ! -d "$ANDROID_HOME/ndk/26.1.10909125" ]; then
-            yes | "$SDKMANAGER" "ndk;26.1.10909125" > /dev/null
-          else
-            echo "NDK 26.1.10909125 已预装，跳过安装"
+          NDK_DIR="$HOME/android-ndk"
+          if [ ! -d "$NDK_DIR/ndk/26.1.10909125" ]; then
+            curl -fsSL --retry 3 -o /tmp/ndk.zip \
+              "https://dl.google.com/android/repository/android-ndk-r26b-linux.zip"
+            mkdir -p "$NDK_DIR"
+            unzip -q /tmp/ndk.zip -d "$NDK_DIR"
           fi
+          echo "NDK_HOME=$NDK_DIR/ndk/26.1.10909125" >> "$GITHUB_ENV"
       - name: cargo check --target aarch64-linux-android
         run: cargo check --lib --target aarch64-linux-android
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125
+          ANDROID_NDK_HOME: ${{ env.NDK_HOME }}
           # cc crate 1.5.1 认 <var>_<target>（带横杠）形式；AR 同步指定，
           # 避免回退到宿主 binutils 链错架构的 .o
-          CC_aarch64-linux-android: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
-          AR_aarch64-linux-android: ${{ env.ANDROID_HOME }}/ndk/26.1.10909125/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+          CC_aarch64-linux-android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android28-clang
+          AR_aarch64-linux-android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar

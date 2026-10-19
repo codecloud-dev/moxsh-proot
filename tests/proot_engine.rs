@@ -75,22 +75,38 @@ fn proot_engine_e2e() {
         assert_eq!(uid.trim(), "0", "fake root 下 id -u 应为 0，实得 {:?}", uid.trim());
 
         // 对照组：不开 fake root → setpriv 真实降权生效 → 1000。
-        let out2 = dir.join("uid-ctrl.txt");
-        let rules = TranslateRules::new(Path::new("/"));
-        let t = Tracer::new(rules);
-        let child =
-            Tracer::spawn_traced(&["/bin/sh", "-c", &format!("{} > {}", cmd, out2.display())])
+        // 环境探测：测试进程无权降权时（GitHub runner 容器无 CAP_SETUID
+        // 常见），对照组失去验证意义——打印说明并跳过，主断言 a 不受影响。
+        let can_demote = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(cmd)
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim() == "1000")
+            .unwrap_or(false);
+        if !can_demote {
+            println!(
+                "跳过对照组：本环境不允许 setpriv 降权到 1000（如无 CAP_SETUID 的\
+                 容器），fake root 主断言已生效"
+            );
+        } else {
+            let out2 = dir.join("uid-ctrl.txt");
+            let rules = TranslateRules::new(Path::new("/"));
+            let t = Tracer::new(rules);
+            let child = Tracer::spawn_traced(&["/bin/sh", "-c", &format!("{} > {}", cmd, out2.display())])
                 .expect("spawn");
-        let code = t.run(child).expect("run");
-        assert_eq!(code, 0);
-        let uid2 = fs::read_to_string(&out2).expect("读对照组 uid 文件");
-        assert_eq!(
-            uid2.trim(),
-            "1000",
-            "对照组（无 fake root）应真实降权为 1000，实得 {:?}——\
-             若为 0 说明测试环境不允许降权，本用例失去意义",
-            uid2.trim()
-        );
+            let code = t.run(child).expect("run");
+            assert_eq!(code, 0);
+            let uid2 = fs::read_to_string(&out2).expect("读对照组 uid 文件");
+            assert_eq!(
+                uid2.trim(),
+                "1000",
+                "对照组（无 fake root）应真实降权为 1000，实得 {:?}——\
+                 若为 0 说明测试环境不允许降权，本用例失去意义",
+                uid2.trim()
+            );
+        }
 
         let _ = fs::remove_dir_all(&dir);
     }

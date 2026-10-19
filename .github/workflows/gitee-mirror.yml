@@ -1,0 +1,90 @@
+name: Mirror to Gitee（国内镜像源）
+
+# 把 GitHub Release 资产镜像到 Gitee，作为国内下载源（moxsh App 的
+# proot 引擎/安装器默认从 Gitee 拉取最新版）。每次打 tag（proot-v*）
+# 或 proot-latest 滚动发布后可手动 workflow_dispatch 触发。
+#
+# 需要仓库 Secret：GITEE_TOKEN（Gitee 私人令牌，需 releases 写权限）。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要镜像的 GitHub 源 release 标签（默认 proot-latest）"
+        required: false
+        default: "proot-latest"
+
+permissions:
+  contents: read
+
+env:
+  GITHUB_REPO: codecloud-dev/moxsh-proot
+  GITEE_OWNER: thousand-code-crafts
+  GITEE_REPO: moxsh-proot
+  GITEE_TAG: ${{ github.event.release.tag_name || inputs.tag || 'proot-latest' }}
+  GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 下载 GitHub release 资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p assets
+          gh release download "$GITEE_TAG" --repo "$GITHUB_REPO" --pattern '*' --dir assets --clobber
+          echo "下载资产："; ls -la assets
+
+      - name: 解析 Gitee release 并清理旧资产
+        run: |
+          python3 - <<'PY'
+          import os, json, urllib.request
+          owner=os.environ['GITEE_OWNER']; repo=os.environ['GITEE_REPO']
+          tag=os.environ['GITEE_TAG']; tok=os.environ['GITEE_TOKEN']
+          base=f"https://gitee.com/api/v5/repos/{owner}/{repo}"
+          hdr={"Authorization": f"token {tok}"}
+          try:
+              req=urllib.request.Request(f"{base}/releases/tags/{tag}", headers=hdr)
+              rid=json.load(urllib.request.urlopen(req, timeout=30))["id"]
+              print(f"已存在 release id={rid}")
+          except Exception:
+              data=json.dumps({"tag_name":tag,"name":tag,
+                              "body":"auto-mirror from GitHub","prerelease":False,
+                              "draft":False}).encode()
+              req=urllib.request.Request(f"{base}/releases", data=data,
+                  headers={**hdr,"Content-Type":"application/json"}, method="POST")
+              rid=json.load(urllib.request.urlopen(req, timeout=30))["id"]
+              print(f"已创建 release id={rid}")
+          req=urllib.request.Request(f"{base}/releases/{rid}/assets?per_page=100", headers=hdr)
+          for a in json.load(urllib.request.urlopen(req, timeout=30)):
+              aid=a.get("id")
+              if aid:
+                  d=urllib.request.Request(f"{base}/releases/{rid}/assets/{aid}?access_token={tok}", method="DELETE")
+                  try: urllib.request.urlopen(d, timeout=30).read()
+                  except Exception as e: print("  del warn", aid, e)
+                  print(f"  deleted old {aid} {a.get('name')}")
+          with open(os.environ['GITHUB_ENV'], 'a') as f:
+              f.write(f"GITEE_RID={rid}\n")
+          PY
+
+      - name: 上传资产到 Gitee
+        run: |
+          ok=0; fail=0
+          for f in assets/*; do
+            name="$(basename "$f")"
+            code="$(curl -s -o /tmp/up.json -w '%{http_code}' -X POST \
+              -H "Authorization: token $GITEE_TOKEN" \
+              "https://gitee.com/api/v5/repos/$GITEE_OWNER/$GITEE_REPO/releases/$GITEE_RID/attach_files" \
+              -F "file=@$f")"
+            if [ "$code" = "200" ] || [ "$code" = "201" ]; then
+              echo "OK   $name"; ok=$((ok+1))
+            else
+              echo "FAIL $name (HTTP $code): $(head -c 150 /tmp/up.json)"; fail=$((fail+1))
+            fi
+          done
+          echo "=== 上传 $ok 成功 / $fail 失败 ==="
+          [ "$fail" -eq 0 ]

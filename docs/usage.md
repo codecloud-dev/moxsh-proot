@@ -80,6 +80,28 @@ apt install locales && locale-gen zh_CN.UTF-8
 moxsh-proot-distro env alpine   # 确认生效值
 ```
 
+### 2.2 容器内控制台（固定命令 `mox`）
+
+进任意容器后直接输入 `mox`（**固定命令，不开放自定义**——与进/退命令的
+可定制语义区分）拉起管理控制台：
+
+```bash
+# 容器内：
+mox                    # = moxsh-proot-distro（反穿透到宿主 MOXSH_ROOT）
+mox install kali       # 容器里再装一个发行版（落到宿主）
+mox net                # 网络边界报告
+```
+
+实现：启动时引擎把宿主 bin 目录 bind 到容器内 `/moxsh-host`、
+`MOXSH_ROOT` bind 到 `/moxsh-root`，并注入 `MOXSH_ROOT=/moxsh-root`
+与 `MOXSH_CONTAINER=1`。`mox` 脚本先 `unset LD_PRELOAD`（Termux-exec
+与 proot 冲突）再 exec 同目录的 `moxsh-proot-distro`——它看到的
+`/moxsh-root` 经 proot 翻译回宿主真实目录，管理操作天然穿透。
+
+- 容器内 `mox login/shell/launch` 会被劝退（ptrace 不支持 proot 套娃）；
+- `MOXSH_PROOT_CONSOLE=0` 关闭整套控制台注入；
+- 挂载点里能直接看到/编辑其他容器的 rootfs（排障神器）。
+
 ## 3. 钩子（容器内脚本运行时）
 
 安装后钩子种子在 `$MOXSH_ROOT/hooks`（默认 `~/.moxsh/hooks`），

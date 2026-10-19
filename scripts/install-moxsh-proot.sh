@@ -206,6 +206,37 @@ fetch_asset "moxsh-proot-distro-${TRIPLE_ARCH}-linux-android"
 install_bin "moxsh-proot-distro-${TRIPLE_ARCH}-linux-android" "moxsh-proot-distro"
 log "安装完成：${BINDIR}/moxsh-proot-distro"
 
+# ---------------------------------------------------------------- 控制台入口
+# 容器内固定命令 mox（roadmap §3：不开放自定义；与引擎 console::CONSOLE_SCRIPT
+# 同源——bind-mount 反穿透到宿主 MOXSH_ROOT 执行管理子命令）。
+if cat > "${BINDIR}/mox" <<'MOXEOF'
+#!/bin/sh
+# moxsh 容器内控制台（固定命令 mox，不开放自定义——roadmap §3）。
+# 由引擎/安装器自动生成；删除本文件不影响宿主侧其他命令。
+unset LD_PRELOAD
+if [ -n "${MOXSH_CONTAINER:-}" ]; then
+  # 容器内：反穿透到宿主真实 MOXSH_ROOT（bind-mount 挂载点）。
+  case "${1:-}" in
+    login|shell|launch)
+      echo "mox: 已在容器内，不能嵌套进入其他容器（ptrace 不支持套娃）。" >&2
+      echo "mox: 请先退出当前容器，在宿主侧执行：mox $*" >&2
+      exit 1
+      ;;
+  esac
+  ROOT=/moxsh-root
+else
+  # 宿主侧直接跑：普通 distro CLI 包装。
+  ROOT="${MOXSH_ROOT:-$HOME/.moxsh}"
+fi
+exec env MOXSH_ROOT="$ROOT" "$(dirname "$0")/moxsh-proot-distro" "$@"
+MOXEOF
+then
+  chmod 0755 "${BINDIR}/mox"
+  log "控制台入口就绪：${BINDIR}/mox（进容器后固定命令，管理全部容器）"
+else
+  warn "mox 脚本写入失败——容器内控制台不可用，其余功能不受影响"
+fi
+
 # ---------------------------------------------------------------- 钩子种子
 # 从仓库 tarball 提取 py/runtime + lua/ 到 $MOXSH_ROOT/hooks（引擎
 # post-install / pre-login 钩子的默认内容）。失败仅警告——钩子是增强项。
@@ -258,6 +289,10 @@ cat <<EOF
 rootfs 未安装？用 distro 管理器装一个（引擎同一套）：
   moxsh-proot-distro install ubuntu
   moxsh-proot-distro login ubuntu
+
+容器内控制台（固定命令，进任意容器后直接输入）：
+  mox                     # 拉起管理控制台（list/install/remove/net/env）
+  mox install kali        # 在容器里再装一个发行版（反穿透到宿主）
 
 钩子（安装/登录时自动执行，可编辑）：
   ${MOXSH_ROOT}/hooks/post-install.py     # 装完后供给检查（DNS/hosts）

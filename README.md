@@ -190,6 +190,21 @@ locales 包并 `locale-gen zh_CN.UTF-8`，然后编辑 rootfs 里的
 moxsh-proot-distro env alpine
 ```
 
+### 🔹 容器内控制台
+
+进任意容器后，固定命令 `mox`（不开放自定义）直接拉起管理控制台——
+bind-mount 反穿透到宿主，装新发行版、查网络、看环境都不用退出容器：
+
+```bash
+# 容器内（任意发行版里）：
+mox                 # 管理控制台（list / install / remove / net / env）
+mox install kali    # 在容器里再装一个发行版（落到宿主 MOXSH_ROOT）
+mox net             # 网络边界报告
+```
+
+容器内不能再嵌套进其他容器（ptrace 不支持套娃），`mox login/shell/launch`
+会提示你先退出。`MOXSH_PROOT_CONSOLE=0` 可关闭整套控制台注入。
+
 ### 🔹 系统要求
 
 - Linux 或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）

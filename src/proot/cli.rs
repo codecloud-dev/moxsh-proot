@@ -16,6 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::proot::console;
 use crate::proot::distro::DistroManager;
 use crate::proot::elf::{resolve_exec_chain, ExecPlan};
 use crate::proot::launcher;
@@ -607,6 +608,19 @@ fn install_hint(id: &str, mgr: &DistroManager) -> String {
             e, id
         )),
     }
+    // 容器内控制台入口 mox（roadmap §3：固定命令，不开放自定义）。
+    // 与启动器同目录落盘；失败仅警告（老安装无 mox 也有 launch/login）。
+    match console::write_console_script(&bin_dir) {
+        Ok(p) => out.push_str(&format!(
+            "容器内控制台已就绪：进容器后输入 {} 即可管理（{}）\n",
+            console::CONSOLE_CMD,
+            p.display()
+        )),
+        Err(e) => out.push_str(&format!(
+            "警告：控制台脚本写入失败（{}），容器内可用 moxsh-proot-distro 排障\n",
+            e
+        )),
+    }
     // 函数块覆盖全部已装容器（旧块整块替换，幂等）。
     let ids: Vec<String> = mgr
         .list_installed()
@@ -817,7 +831,10 @@ pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
         vec!["/bin/sh".into(), "-l".into()]
     };
 
-    let cfg = ProotConfig::with_distro_defaults(&rootfs);
+    let mut cfg = ProotConfig::with_distro_defaults(&rootfs);
+    // 容器内控制台：bind 宿主 bin + MOXSH_ROOT，注入 mox 固定命令
+    // （roadmap §3；MOXSH_PROOT_CONSOLE=0 可关）。
+    console::bind_console(&mut cfg, root, &console::host_bin_dir());
     // env_command() 形如 ["/usr/bin/env", "-i", "HOME=...", ...]，跳过前两个
     // 前缀词即纯 KEY=VALUE 列表（spawn 直接 execve 用）。
     let env: Vec<String> = cfg.env_command().into_iter().skip(2).collect();

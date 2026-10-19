@@ -33,5 +33,7 @@ jobs:
         run: sh -n scripts/install-moxsh-proot.sh
       - name: 短命令与 README 同步检查
         run: bash scripts/gen-shortcmd.sh --check
-      - name: 分流逻辑自测（6 用例）
+      - name: 分流逻辑自测（用例集）
         run: bash scripts/test-source-pick.sh
+      - name: mox 脚本两端一致性
+        run: bash scripts/test-console-sync.sh

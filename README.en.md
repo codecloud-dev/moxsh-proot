@@ -200,6 +200,24 @@ environment any time:
 moxsh-proot-distro env alpine
 ```
 
+### 🔹 In-container console
+
+Inside any container, the fixed command `mox` (not customizable) brings up
+the management console — bind-mounted reverse-tunneling back to the host,
+so installing distros, checking the network, or inspecting the environment
+all works without leaving the container:
+
+```bash
+# inside the container (any distro):
+mox                 # management console (list / install / remove / net / env)
+mox install kali    # install another distro from inside (lands in host MOXSH_ROOT)
+mox net             # network boundary report
+```
+
+Nesting is not allowed (ptrace can't stack proot on proot), so
+`mox login/shell/launch` inside a container asks you to exit first.
+Set `MOXSH_PROOT_CONSOLE=0` to disable console injection entirely.
+
 ### 🔹 Requirements
 
 - Linux or Termux (Android 9+, aarch64 / x86_64; 32-bit ARM needs a source build)

@@ -21,6 +21,7 @@ use std::process::Command;
 use flate2::read::GzDecoder;
 
 use crate::crypto::sha256;
+use crate::proot::console;
 use crate::proot::locale;
 use crate::proot::net;
 use crate::proot::script;
@@ -478,6 +479,9 @@ impl DistroManager {
 
         // 5) 完成标记
         fs::write(self.ok_marker(spec.id), spec.version.as_bytes())?;
+        // 容器内控制台入口 mox（roadmap §3；与安装器落盘同源）。
+        // 失败不阻断安装——容器内排障还有 moxsh-proot-distro 全路径可用。
+        let _ = console::write_console_script(&console::host_bin_dir());
         cb(&format!("安装完成：{}", spec.id), 1, 1);
         Ok(())
     }
@@ -522,6 +526,8 @@ impl DistroManager {
             cb(&format!("钩子：{}", report.summary()), 0, 1);
         }
         fs::write(self.ok_marker(id), "custom")?;
+        // 容器内控制台入口 mox（与预置发行版路径一致；失败不阻断）。
+        let _ = console::write_console_script(&console::host_bin_dir());
         cb("自定义 rootfs 安装完成", 1, 1);
         Ok(())
     }

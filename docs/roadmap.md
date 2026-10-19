@@ -43,16 +43,21 @@
 - **中文输入法**：fcitx5 配方（配合 VNC 桌面打中文）。
 - **安装器自身**：安装过程中文不乱码（两层都要：安装器层 + 容器层）。
 
-## 3. 容器内控制台（0.2.0）
+## 3. 容器内控制台（0.2.0）✅ 引擎+安装器已完成（TUI 化属 0.4.0）
 
-- **固定命令名**：控制台命令固定不可自定义，定名 **`mox`**（安装时写 `~/.local/bin` + shell 函数）。
-- **容器内可见（两层都做）**：
-  ① bind-mount 宿主 bin 目录进容器（tmoe/社区标准做法：`--bind=$PREFIX:/termux-prefix`
-  让容器内零安装用宿主命令）；
-  ② 引擎自动反穿透：容器内经绑定路径/`/proc` 反查回宿主引擎视角。
-- **容器内边界**：全命令可用，但 TUI 标题栏常显**所在容器名**防迷失。
-- **`unset LD_PRELOAD`**：Termux-exec 的 execve hook 与 proot 冲突，启动/容器内执行必须清掉。
-- **容器内执行短链零依赖**：直接复用 bind-mount 进来的宿主二进制，不装任何东西。
+- **固定命令名** ✅：控制台命令固定不可自定义，定名 **`mox`**（安装时写 bin 目录 + 引擎 install 时同源落盘）。
+- **容器内可见（两层都做）** ✅：
+  ① bind-mount 宿主 bin 目录进容器固定挂载点 `/moxsh-host`（tmoe/社区标准做法的
+  精准化——只绑 bin 不绑整个 PREFIX）；
+  ② 引擎自动反穿透：`MOXSH_ROOT` 绑到 `/moxsh-root`，mox 脚本 exec 时把
+  `MOXSH_ROOT=/moxsh-root` 交给 distro 程序——它经 proot 翻译回宿主真实目录，
+  管理操作天然穿透（**不绕过翻译，让翻译为我们工作**）。
+- **容器内边界**：全命令可用，但 TUI 标题栏常显**所在容器名**防迷失（TUI 0.4.0）。
+- **`unset LD_PRELOAD`** ✅：Termux-exec 的 execve hook 与 proot 冲突，mox 脚本启动即清。
+- **容器内执行短链零依赖** ✅：直接复用 bind-mount 进来的宿主二进制，不装任何东西。
+- **嵌套保护** ✅：ptrace 不支持 proot 套 proot，容器内 `mox login/shell/launch` 劝退
+  （靠 `MOXSH_CONTAINER=1` 标记；管理类子命令照常）。
+- **可关**：`MOXSH_PROOT_CONSOLE=0` 关闭全部控制台注入（回归老行为）。
 
 ## 4. 配方系统（0.3.0）
 

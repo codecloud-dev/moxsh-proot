@@ -25,6 +25,7 @@
 //! 约束见 Cargo.toml：本阶段仅允许新增 `tar`/`flate2` 两个依赖，不引入 thiserror。
 
 pub mod cli;
+pub mod console;
 pub mod distro;
 pub mod elf;
 pub mod launcher;
@@ -210,6 +211,10 @@ pub fn translate_selftest() -> usize {
     pass
 }
 
+/// 容器内默认 PATH（对齐上游 proot-distro；[`console`] 会前置挂载点）。
+pub const DEFAULT_CONTAINER_PATH: &str =
+    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
 /// 一次 PRoot 会话的完整配置（`proot` 原生参数的结构化等价物）。
 ///
 /// 字段与上游 CLI 一一对应：
@@ -346,7 +351,7 @@ impl ProotConfig {
             &mut env,
             "PATH",
             // 对齐上游 proot-distro 的默认 PATH
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            DEFAULT_CONTAINER_PATH,
         );
         locale::upsert(&mut env, "LANG", "C.UTF-8");
         locale::upsert(&mut env, "TERM", "xterm-256color");

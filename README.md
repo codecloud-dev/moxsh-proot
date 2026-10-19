@@ -126,12 +126,32 @@ moxsh-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，�
 
 ### 🔹 一键安装（原版 Termux / Linux）
 
+**方式一：短命令**（推荐）——整条安装引导压成一段 base64 内嵌，复制即跑，
+不挑域名；GitHub raw 不通自动回退 Gitee（国内免折腾镜像）：
+
+<details>
+<summary>展开短命令（约 1.5 KB，点开复制整段粘贴执行）</summary>
+
+```bash
+echo 'H4sICPqs1WoCA2Jvb3RzdHJhcC5zaACNVG1P21YU/u5fcWYYbEzGpGzVBIIP0yaotknTRqVJ7T6YxCHWYjuynZatrWRYeUkT3qrAWpLysoTSsTUBDbpAEpD2U8D32v7EX9i5dnjROk2TIjv3+t7nOed5zjlt74ijiiaaCa4NVH3cTAgpQ9ctIMcVspYljWVSbZw3Zkdxz7QMKXXeyJzaefyNSqZ880Mg01PkIOedFM7snFOz/XyFVDJeaerMnvMnS/TFprv+miw1nXrZn8md2ZNcGxJ5Ezlvv+QdH7rLOQQ3dCmmSin4a/sjhD9vrNLi795j9iQLO2RiFaFpyabrWxBNG0k4nX4KNJshU6/8mYWQjTx/FWzL43IUnKMyLT3FAM4bOSTr6nJqc/7MHCnPkcqaO78bXvHtune81NWFMYVIISPdrXknRac+D6qkaIwHUUj5V/fxG1q06couLunPG37R9mZ2aGE/2CkgDSk0UQuRvcorTi3rNZv0aJHMTtODCTe/949oMWszaigpyxQVzbSkZFK4pn63mUAhkMDbzNH5X+hBNkyFKbI3iaK4lU0UZUixhtOjYEj3gaVor5LdPVJY820b8JMssy8oA33y5JKXKXv0G82ekNldmsleGOLUjpy67RzO0mdVp1ZGEnQhtPa6OHBh+uK8e/QSIj2ff8LUOXyD9OgzChHeYXEGlYPQmOnYj0rqg6ureBjZIcIuZ7ztkrsxQeb+uHQ0LK+wZgJQrKt86FZoTujDRejMs5UZp/4GRYYLTcdkTTATumFF1RiKCW5+nc4uYpatnAJwhnxSoflDjImcTPmbdawSRA4Pk8Ucfb3FWDhTtkBIc9zQ8ACfsKyU2SeKKG33mGIl0qNpUzaiumbJmtUd1VUxqsfkaFJPx4SYfE+85qrIKkr8b9t5bmjkimSMuRiAWgk9bUpaTGDoQtSQ4ghxHRvj+X/4nCn98N778ABShqJZcei829PbeyfS33tTHRgYDBY9Krxr3tU6gW/v4vvhERdT5H+9ElH9/HOvWu17+xoMdtzox35ULIgwCA6zUDEBEO6FXTwoMnm0dDIJNwY7IvDwISAN8LS4QzPHrEDYMayeEdlQ0+OA44NmtrEh+iD1/Ri00msdymBeI19+NcC3P8DXp7e+7hNES009aknUOiwb3e3tPMfGGHQaKghxDBXP853w2be3RgJpMAAsxIWVy445tV/yXFw34DZy4vmhYZ49R1CYmM4BKPEwHyFufvMFCGiQpslRS7AUVdbTmH0PbqrSeLABkY978PZtHgS9xY3ZXynR0QF3QDAvPn3XD1ZC1pAFIIgtHG1vzxLn+IV3sNIakiL4dgZnTziEcEk3Nv2dHP7xFptu4VkwwjEphhoMTGyQkBC34goX0zWZ4wIzcBY4tZ3LaYZMrZkjhhMGofyfmi3Fynve/hY2lVf9M4zEbS659SJ2F/aVV13mub8BMf/E3W0GAAA=' | base64 -d | gzip -d | sh
+```
+
+</details>
+
+**方式二：标准命令**：
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-moxsh-proot.sh | bash
 ```
 
-零依赖（只要 curl + coreutils），二进制从 GitHub Release 下载并做
-sha256 校验，自动落盘 `moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
+**国内备援**（Gitee raw，直连）：
+
+```bash
+curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
+```
+
+零依赖（只要 curl + coreutils）。二进制按国内/国外自动探测选源下载，
+逐文件 sha256 校验，自动落盘 `moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
 
 装完就能用：
 

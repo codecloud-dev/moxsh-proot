@@ -87,8 +87,11 @@ jobs:
           if [ ! -d "$NDK_DIR/ndk/26.1.10909125" ]; then
             curl -fsSL --retry 3 -o /tmp/ndk.zip \
               "https://dl.google.com/android/repository/android-ndk-r26b-linux.zip"
-            mkdir -p "$NDK_DIR"
+            mkdir -p "$NDK_DIR/ndk"
             unzip -q /tmp/ndk.zip -d "$NDK_DIR"
+            rm -f /tmp/ndk.zip
+            # Google zip 顶层目录名是 android-ndk-r26b，挪成带版本号的路径。
+            mv "$NDK_DIR/android-ndk-r26b" "$NDK_DIR/ndk/26.1.10909125"
           fi
           echo "NDK_HOME=$NDK_DIR/ndk/26.1.10909125" >> "$GITHUB_ENV"
       - name: cargo check --target aarch64-linux-android

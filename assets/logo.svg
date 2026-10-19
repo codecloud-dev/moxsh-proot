@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="moxsh logo">
+<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="moxsh-proot 品牌图标：无根之根（rootless root）">
   <defs>
     <linearGradient id="mg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#37d5d3"/>
@@ -11,14 +11,14 @@
       <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
     </radialGradient>
   </defs>
-  <rect x="16" y="16" width="128" height="128" rx="36" fill="url(#mg)"/>
-  <rect x="16" y="16" width="128" height="128" rx="36" fill="url(#sheen)"/>
-  <rect x="16.75" y="16.75" width="126.5" height="126.5" rx="35.25" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.5"/>
-  <g fill="none" stroke="#0b0e1a" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity="0.94">
-    <path d="M50 54 L50 108"/>
-    <path d="M50 54 L80 94"/>
-    <path d="M80 94 L110 54"/>
-    <path d="M110 54 L110 108"/>
+  <rect x="14" y="14" width="132" height="132" rx="38" fill="url(#mg)"/>
+  <rect x="14" y="14" width="132" height="132" rx="38" fill="url(#sheen)"/>
+  <rect x="14.75" y="14.75" width="130.5" height="130.5" rx="37.25" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.5"/>
+  <rect x="32" y="32" width="96" height="96" rx="26" fill="#0b0e1a" fill-opacity="0.92"/>
+  <g fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round">
+    <path d="M80 58 L80 88"/>
+    <path d="M80 88 L56 112"/>
+    <path d="M80 88 L104 112"/>
   </g>
-  <path d="M50 120 L110 120" stroke="#0b0e1a" stroke-width="7" stroke-linecap="round" opacity="0.94"/>
+  <circle cx="80" cy="52" r="11" fill="#37d5d3"/>
 </svg>

@@ -27,9 +27,11 @@
 pub mod cli;
 pub mod distro;
 pub mod elf;
+pub mod links;
 pub mod net;
 pub mod ptrace;
 pub mod script;
+pub mod settings;
 pub mod symlink_fix;
 pub mod translate;
 

@@ -1,0 +1,47 @@
+# moxsh-proot 配方索引（0.3.0，docs/roadmap.md §4）
+#
+# 每个 [[recipe]] = 元数据 + 逃生舱脚本（recipes/<script>）。
+# 新增配方：在这里加一段 + 在 recipes/ 放一个同名 .sh 即可，无需改 Rust。
+# 解析：src/proot/recipe.rs 的手写极简 TOML 子集（不引 serde/toml）。
+
+[[recipe]]
+id = "xfce"
+name = "XFCE 桌面"
+description = "轻量 GTK 桌面环境，适合移动设备与低配机，含中文与字体"
+tags = "desktop,gui,中文"
+script = "xfce.sh"
+
+[[recipe]]
+id = "lxqt"
+name = "LXQt 桌面"
+description = "轻量 Qt 桌面环境，内存占用低"
+tags = "desktop,gui"
+script = "lxqt.sh"
+
+[[recipe]]
+id = "kde"
+name = "KDE Plasma 桌面"
+description = "功能完整的 Qt 桌面环境"
+tags = "desktop,gui"
+script = "kde.sh"
+
+[[recipe]]
+id = "mate"
+name = "MATE 桌面"
+description = "GNOME 2 风格经典桌面，稳定清爽"
+tags = "desktop,gui"
+script = "mate.sh"
+
+[[recipe]]
+id = "vnc"
+name = "VNC 服务（tigervnc）"
+description = "容器内 VNC 服务，端口=5900+display，支持中文与音频转发"
+tags = "gui,remote"
+script = "vnc.sh"
+
+[[recipe]]
+id = "novnc"
+name = "noVNC 网页访问"
+description = "websockify 桥接 VNC 到浏览器 WebSocket，免客户端"
+tags = "gui,remote,web"
+script = "novnc.sh"

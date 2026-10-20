@@ -23,6 +23,7 @@ use crate::proot::launcher;
 use crate::proot::links::{self, ResolvedLink};
 use crate::proot::locale;
 use crate::proot::net;
+use crate::proot::recipe::RecipeIndex;
 use crate::proot::ptrace::Tracer;
 use crate::proot::script;
 use crate::proot::settings::{self, Settings};
@@ -469,6 +470,7 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "restore" => cmd_restore(&mgr, rest, moxsh_root),
         "net" => cmd_net(&mgr, rest),
         "env" => cmd_env(&mgr, rest),
+        "recipe" => cmd_recipe(rest, moxsh_root),
         "wizard" => cmd_wizard(rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
@@ -531,6 +533,55 @@ fn cmd_env(mgr: &DistroManager, args: &[&str]) -> String {
          locale-gen zh_CN.UTF-8 后，把该文件里的 LANG 改成 zh_CN.UTF-8 即完整中文。",
     );
     out
+}
+
+/// `recipe list|show <id>|apply <id> <distro>`：配方系统（0.3.0，roadmap §4）。
+///
+/// - `list`：枚举可用配方（id/名称/描述）。
+/// - `show <id>`：配方详情 + 应用命令。
+/// - `apply <id> <distro>`：把脚本落进容器 /tmp 后在容器内执行（复用引擎）。
+fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
+    let idx = RecipeIndex::load();
+    match args.first().copied() {
+        None | Some("list") => {
+            if idx.all().is_empty() {
+                return "配方：当前无可用配方（recipes/index.toml 为空）".to_string();
+            }
+            let mut out = String::from(
+                "可用配方（应用：moxsh-proot-distro recipe apply <id> <distro>）：\n",
+            );
+            for r in idx.all() {
+                out.push_str(&format!("  {:<8} {:<16} {}\n", r.id, r.name, r.description));
+            }
+            out
+        }
+        Some("show") => match args.get(1) {
+            Some(id) => match idx.find(id) {
+                Ok(r) => format!(
+                    "配方 {}\n  名称：{}\n  描述：{}\n  标签：{}\n  脚本：{}\n  应用：moxsh-proot-distro recipe apply {} <distro>",
+                    r.id, r.name, r.description, r.tags.join("/"), r.script, r.id
+                ),
+                Err(e) => format!("recipe: {}", e),
+            },
+            None => "用法: moxsh-proot-distro recipe show <id>".to_string(),
+        },
+        Some("apply") => {
+            let rid = args.get(1).copied();
+            let did = args.get(2).copied();
+            match (rid, did) {
+                (Some(rid), Some(did)) => match idx.apply(moxsh_root, rid, did) {
+                    Ok(code) => return format!("配方 {} 已应用（容器内退出码 {}）", rid, code),
+                    Err(e) => return format!("recipe: 应用失败: {}", e),
+                },
+                _ => return "用法: moxsh-proot-distro recipe apply <id> <distro>".to_string(),
+            }
+        }
+        Some(other) => format!(
+            "recipe: 未知子命令 {}\n{}",
+            other,
+            "用法: moxsh-proot-distro recipe list|show <id>|apply <id> <distro>"
+        ),
+    }
 }
 
 /// `list`：已装/可装一览。
@@ -1051,6 +1102,7 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro net [id]                  网络边界报告（不带 id 看宿主）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
   proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
+  proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。

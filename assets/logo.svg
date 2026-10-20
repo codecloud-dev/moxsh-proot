@@ -1,24 +1,38 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160" role="img" aria-label="moxsh-proot 品牌图标：无根之根（rootless root）">
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-label="moxsh-proot">
   <defs>
-    <linearGradient id="mg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#37d5d3"/>
-      <stop offset="0.55" stop-color="#8a7bff"/>
-      <stop offset="1" stop-color="#ff7ac3"/>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#13243f"/>
+      <stop offset="1" stop-color="#0a1322"/>
     </linearGradient>
-    <radialGradient id="sheen" cx="0.32" cy="0.26" r="0.8">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
-      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0.06"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
-    </radialGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1fd1bf"/>
+      <stop offset="1" stop-color="#3a86ff"/>
+    </linearGradient>
   </defs>
-  <rect x="14" y="14" width="132" height="132" rx="38" fill="url(#mg)"/>
-  <rect x="14" y="14" width="132" height="132" rx="38" fill="url(#sheen)"/>
-  <rect x="14.75" y="14.75" width="130.5" height="130.5" rx="37.25" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="1.5"/>
-  <rect x="32" y="32" width="96" height="96" rx="26" fill="#0b0e1a" fill-opacity="0.92"/>
-  <g fill="none" stroke="#ffffff" stroke-width="16" stroke-linecap="round">
-    <path d="M80 58 L80 88"/>
-    <path d="M80 88 L56 112"/>
-    <path d="M80 88 L104 112"/>
+
+  <!-- 应用磁贴：圆角方块，扁平深底 -->
+  <rect x="24" y="24" width="208" height="208" rx="48" fill="url(#bg)"/>
+  <rect x="24.5" y="24.5" width="207" height="207" rx="47.5" fill="none" stroke="#2a3b57" stroke-width="1"/>
+
+  <!-- 终端窗口 -->
+  <rect x="62" y="70" width="132" height="116" rx="16" fill="#0c1a2e" stroke="url(#accent)" stroke-width="3"/>
+  <!-- 标题栏三点 -->
+  <circle cx="82" cy="90" r="5" fill="#ff5f56"/>
+  <circle cx="98" cy="90" r="5" fill="#ffbd2e"/>
+  <circle cx="114" cy="90" r="5" fill="#27c93f"/>
+
+  <!-- 提示符 > （品牌主视觉：终端 + 无根之根语义的渐变） -->
+  <path d="M88 126 L108 146 L88 166" fill="none" stroke="url(#accent)" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 光标：竖向方块 -->
+  <rect x="122" y="128" width="9" height="36" rx="3" fill="url(#accent)">
+    <animate attributeName="opacity" values="1;1;0;0" dur="1.2s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- 无根之根：从窗口底部发出的细根（rootless root —— 不取特权而获 root 能力） -->
+  <g stroke="url(#accent)" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.9">
+    <path d="M128 186 C128 198 128 204 128 214"/>
+    <path d="M128 200 C118 204 112 208 106 214"/>
+    <path d="M128 200 C138 204 144 208 150 214"/>
   </g>
-  <circle cx="80" cy="52" r="11" fill="#37d5d3"/>
 </svg>

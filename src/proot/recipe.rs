@@ -32,6 +32,9 @@ pub struct Recipe {
     pub tags: Vec<String>,
     /// 逃生舱脚本文件名（相对配方目录）。
     pub script: String,
+    /// 粉丝专属门禁：true 时 `apply` 需 `fan::is_fan` 解锁才放行
+    /// （index.toml 里 `fan_only = true`；见 fan.rs「脚本↔官网」握手）。
+    pub fan_only: bool,
 }
 
 /// 配方索引（解析结果）。
@@ -75,6 +78,7 @@ impl RecipeIndex {
                                 .filter(|s| !s.is_empty())
                                 .collect()
                         }
+                        "fan_only" => r.fan_only = val == "true",
                         _ => {}
                     }
                 }
@@ -164,6 +168,13 @@ impl RecipeIndex {
     /// 执行后由引擎 env 决定的 HOME 无关，幂等可重跑。
     pub fn apply(&self, root: &Path, recipe_id: &str, distro_id: &str) -> ProotResult<i32> {
         let recipe = self.find(recipe_id)?;
+        // 粉丝专属门禁（fan_only）：未解锁直接拒，不碰引擎、不落盘。
+        if recipe.fan_only && !crate::proot::fan::is_fan(root) {
+            return Err(ProotError::InvalidArg(format!(
+                "配方 {} 为粉丝专属，需先解锁：mox fan login 领兑换码 → mox fan redeem <code>",
+                recipe_id
+            )));
+        }
         let mgr = DistroManager::new(root);
         let rootfs = mgr.distro_rootfs(distro_id);
         if !rootfs.is_dir() {
@@ -270,5 +281,33 @@ script = "vnc.sh"
         let err = idx.apply(&root, "xfce", "ubuntu").unwrap_err();
         assert!(matches!(err, ProotError::DistroNotInstalled(_)));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_fan_only_flag() {
+        let on = RecipeIndex::parse(
+            "[[recipe]]\nid=\"fb\"\nname=\"x\"\nscript=\"fb.sh\"\nfan_only = true\n",
+        );
+        assert!(on.find("fb").unwrap().fan_only);
+        // 未标注 → 默认 false（普通配方不受影响）。
+        let off = RecipeIndex::parse("[[recipe]]\nid=\"a\"\nname=\"x\"\nscript=\"a.sh\"\n");
+        assert!(!off.find("a").unwrap().fan_only);
+    }
+
+    #[test]
+    fn apply_fan_only_locked_without_unlock() {
+        // fan_only 且未解锁 → 粉丝门禁先于 rootfs 检查触发（InvalidArg），不碰引擎。
+        let idx = RecipeIndex::parse(
+            "[[recipe]]\nid=\"fb\"\nname=\"x\"\nscript=\"fb.sh\"\nfan_only = true\n",
+        );
+        let root = std::env::temp_dir().join("moxsh-recipe-fan-gate");
+        let _ = std::fs::remove_dir_all(&root);
+        let err = idx.apply(&root, "fb", "ubuntu").unwrap_err();
+        assert!(
+            matches!(err, ProotError::InvalidArg(_)),
+            "未解锁的 fan_only 配方应被门禁挡下：{:?}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

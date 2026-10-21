@@ -30,5 +30,22 @@ EOF
 chmod +x "$HOME/.vnc/start"
 
 moxsh_ok "VNC 已配置：display=:${MOXSH_VNC_DISPLAY} 端口=${MOXSH_VNC_PORT} 分辨率=${MOXSH_VNC_RES} 密码=${VNC_PASS}"
+
+# 融合点：把图形会话变量写进我们的持久 env 文件（引擎登录时自动注入，
+# 且随 backup 走）——下次 launch 无需再手动 export。幂等 upsert。
+ENVF=/etc/moxsh/env
+if [ -w "$(dirname "$ENVF")" ] 2>/dev/null || [ -w "$ENVF" ] 2>/dev/null; then
+    mkdir -p "$(dirname "$ENVF")" 2>/dev/null || true
+    for key in DISPLAY PULSE_SERVER; do
+        sed -i "/^${key}=/d" "$ENVF" 2>/dev/null || true
+    done
+    {
+        echo "DISPLAY=:${MOXSH_VNC_DISPLAY}"
+        echo "PULSE_SERVER=127.0.0.1:4713"
+    } >> "$ENVF" 2>/dev/null || true
+    moxsh_ok "已写入 ${ENVF}（登录即注入，随备份走）"
+fi
+
 moxsh_info "在容器内启动："
 echo "  vncserver :${MOXSH_VNC_DISPLAY} -geometry ${MOXSH_VNC_RES} -localhost no -rfbauth \$HOME/.vnc/passwd && \$HOME/.vnc/start"
+moxsh_info "管理全部容器：容器内固定命令 mox（反穿透到宿主，list/install/env…）"

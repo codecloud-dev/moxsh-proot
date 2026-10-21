@@ -45,3 +45,12 @@ name = "noVNC 网页访问"
 description = "websockify 桥接 VNC 到浏览器 WebSocket，免客户端"
 tags = "gui,remote,web"
 script = "novnc.sh"
+
+# 粉丝专属（fan_only）：需 mox fan redeem <兑换码> 解锁后才可 apply。
+[[recipe]]
+id = "fanbox"
+name = "粉丝专属锦囊"
+description = "一键全家桶：XFCE + 浏览器 + 中文 + VNC，感谢支持"
+tags = "desktop,gui,fan"
+fan_only = true
+script = "fanbox.sh"

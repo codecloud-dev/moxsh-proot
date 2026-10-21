@@ -28,6 +28,7 @@ pub mod cli;
 pub mod console;
 pub mod distro;
 pub mod elf;
+pub mod fan;
 pub mod launcher;
 pub mod links;
 pub mod locale;

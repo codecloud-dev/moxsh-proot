@@ -299,6 +299,11 @@ rootfs 未安装？用 distro 管理器装一个（引擎同一套）：
   ${MOXSH_ROOT}/hooks/pre-login.py        # 登录时环境快照
   ${MOXSH_ROOT}/hooks/proot.lua           # 声明式配置（motd / DNS 偏好）
 
+粉丝专属（官网登录领取兑换码，解锁专属配方）：
+  mox fan login                       # 唤起手机浏览器打开官网粉丝专区
+  mox fan redeem <兑换码>              # 验签解锁粉丝专属配方
+  mox fan status                       # 查看粉丝状态
+
  richer 更新体验（Go 安装器，支持 update/probe）：
   moxsh-installer update
 

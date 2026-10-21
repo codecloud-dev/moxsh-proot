@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 use crate::proot::console;
 use crate::proot::distro::DistroManager;
 use crate::proot::elf::{resolve_exec_chain, ExecPlan};
+use crate::proot::fan;
 use crate::proot::launcher;
 use crate::proot::links::{self, ResolvedLink};
 use crate::proot::locale;
@@ -471,6 +472,7 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "net" => cmd_net(&mgr, rest),
         "env" => cmd_env(&mgr, rest),
         "recipe" => cmd_recipe(rest, moxsh_root),
+        "fan" => cmd_fan(rest, moxsh_root),
         "wizard" => cmd_wizard(rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
@@ -551,16 +553,41 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                 "可用配方（应用：moxsh-proot-distro recipe apply <id> <distro>）：\n",
             );
             for r in idx.all() {
-                out.push_str(&format!("  {:<8} {:<16} {}\n", r.id, r.name, r.description));
+                let lock = if r.fan_only {
+                    if fan::is_fan(moxsh_root) {
+                        " [粉丝✓]"
+                    } else {
+                        " [粉丝🔒 mox fan redeem]"
+                    }
+                } else {
+                    ""
+                };
+                out.push_str(&format!(
+                    "  {:<8} {:<16} {}{}\n",
+                    r.id, r.name, r.description, lock
+                ));
             }
             out
         }
         Some("show") => match args.get(1) {
             Some(id) => match idx.find(id) {
-                Ok(r) => format!(
-                    "配方 {}\n  名称：{}\n  描述：{}\n  标签：{}\n  脚本：{}\n  应用：moxsh-proot-distro recipe apply {} <distro>",
-                    r.id, r.name, r.description, r.tags.join("/"), r.script, r.id
-                ),
+                Ok(r) => {
+                    let mut s = format!(
+                        "配方 {}\n  名称：{}\n  描述：{}\n  标签：{}\n  脚本：{}\n  应用：moxsh-proot-distro recipe apply {} <distro>",
+                        r.id, r.name, r.description, r.tags.join("/"), r.script, r.id
+                    );
+                    if r.fan_only {
+                        s.push_str(&format!(
+                            "\n  粉丝专属：{}",
+                            if fan::is_fan(moxsh_root) {
+                                "已解锁".to_string()
+                            } else {
+                                "未解锁（mox fan login 领兑换码 → mox fan redeem <code>）".to_string()
+                            }
+                        ));
+                    }
+                    s
+                }
                 Err(e) => format!("recipe: {}", e),
             },
             None => "用法: moxsh-proot-distro recipe show <id>".to_string(),
@@ -580,6 +607,70 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
             "recipe: 未知子命令 {}\n{}",
             other,
             "用法: moxsh-proot-distro recipe list|show <id>|apply <id> <distro>"
+        ),
+    }
+}
+
+/// `fan login|redeem <code>|status`：粉丝专属（官网领取 + 兑换码解锁）。
+///
+/// - `login`（默认）：唤起手机浏览器打开官网「粉丝专区」领取页——登录 +
+///   确认领取后拿到兑换码；
+/// - `redeem <code>`：验签并落盘 `$MOXSH_ROOT/fan.toml`，解锁 fan_only 配方；
+/// - `status`：当前粉丝状态与验签模式。
+fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
+    let url = fan::claim_url();
+    match args.first().copied() {
+        None | Some("login") => {
+            let mut out = String::new();
+            match fan::open_browser(&url) {
+                fan::Opened::Via(via) => {
+                    out.push_str(&format!("已通过 {} 打开官网粉丝专区：\n  {}\n", via, url));
+                }
+                fan::Opened::Failed => {
+                    out.push_str("未能自动唤起浏览器，请手动打开官网粉丝专区：\n");
+                    out.push_str(&format!("  {}\n", url));
+                }
+            }
+            out.push_str(
+                "\n步骤：\n\
+                 \x20 1) 在页面登录（需强制登录才能领取粉丝福利）；\n\
+                 \x20 2) 点击「确认领取」→ 获得兑换码；\n\
+                 \x20 3) 回到这里执行：mox fan redeem <兑换码>\n\
+                 \x20    （输入后即解锁粉丝专属配方）",
+            );
+            out
+        }
+        Some("redeem") => match args.get(1).copied() {
+            Some(code) => match fan::redeem(moxsh_root, code) {
+                Ok(tier) => format!(
+                    "兑换成功，粉丝专属已解锁（档位：{}）。\n\
+                     \x20 mox fan status                        # 查看状态\n\
+                     \x20 moxsh-proot-distro recipe list        # 粉丝专属配方已亮起",
+                    tier
+                ),
+                Err(e) => format!("fan: {}", e),
+            },
+            None => "用法: mox fan redeem <兑换码>\n（先 mox fan login 去官网领取）".to_string(),
+        },
+        Some("status") => {
+            let mode = fan::verify_mode();
+            match fan::load_state(moxsh_root) {
+                Some(st) => format!(
+                    "粉丝专属：已解锁\n  档位：{}\n  验签模式：{}\n  兑换码：{}\n  令牌文件：{}",
+                    st.tier,
+                    mode,
+                    st.code,
+                    fan::fan_file_path(moxsh_root).display()
+                ),
+                None => format!(
+                    "粉丝专属：未解锁\n  验签模式：{}\n  mox fan login    # 去官网粉丝专区领取兑换码",
+                    mode
+                ),
+            }
+        }
+        Some(other) => format!(
+            "fan: 未知子命令 {}\n用法: mox fan login|redeem <code>|status",
+            other
         ),
     }
 }
@@ -1103,6 +1194,7 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
   proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
   proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
+  proot-distro fan login|redeem <code>|status  粉丝专属（浏览器领取+兑换码解锁）
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。

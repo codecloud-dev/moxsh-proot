@@ -611,35 +611,50 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
     }
 }
 
-/// `fan login|redeem <code>|status`：粉丝专属（官网领取 + 兑换码解锁）。
+/// `fan login|redeem <code>|status`：粉丝专属（隐藏粉丝页 + 回环自动收码 + 在线校验）。
 ///
-/// - `login`（默认）：唤起手机浏览器打开官网「粉丝专区」领取页——登录 +
-///   确认领取后拿到兑换码；
-/// - `redeem <code>`：验签并落盘 `$MOXSH_ROOT/fan.toml`，解锁 fan_only 配方；
-/// - `status`：当前粉丝状态与验签模式。
+/// - `login`（默认）：本机 `127.0.0.1` 起一次性回环监听 → 唤起手机浏览器打开
+///   **隐藏粉丝页**（官网导航点不到那个，入口命令由公众号告知）→ 页内 GitHub
+///   登录 + 点「确认领取」= 后端签发激活码 → 页面带 `code` 跳回回环，脚本
+///   **自动收码** → `POST /fan/verify` 经官方服务端**联网真实校验** → 落盘
+///   `$MOXSH_ROOT/fan.toml` 解锁 fan_only 配方。全程无需手输兑换码；
+/// - `redeem <code>`：手动路径（桌面 Linux 没浏览器可调时）——官网粉丝页
+///   手动领取后回来 `mox fan redeem <code>`，同样联网验；
+/// - `status`：当前粉丝状态与验签模式（纯在线，客户端零密钥）。
+///
+/// 灰度：`MOXSH_FAN_ENABLE=1` 才开放（后端 `/fan/issue` 另有白名单，双保险）。
 fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
-    let url = fan::claim_url();
+    if !fan::fan_enabled() {
+        return format!(
+            "粉丝专属：灰度测试中（{}=1 开启，正式版自动开放）。\n\
+             \x20 领取入口与激活方式请关注公众号，按自动回复指引操作。",
+            fan::FAN_ENABLE_ENV
+        );
+    }
     match args.first().copied() {
-        None | Some("login") => {
-            let mut out = String::new();
-            match fan::open_browser(&url) {
-                fan::Opened::Via(via) => {
-                    out.push_str(&format!("已通过 {} 打开官网粉丝专区：\n  {}\n", via, url));
+        None | Some("login") => match fan::login(moxsh_root) {
+            Ok(o) => {
+                let mut out = String::new();
+                match o.opened {
+                    fan::Opened::Via(via) => {
+                        out.push_str(&format!("已通过 {} 打开官网粉丝专区：\n  {}\n", via, o.url))
+                    }
+                    fan::Opened::Failed => out.push_str(&format!(
+                        "未能自动唤起浏览器，请手动打开：\n  {}\n",
+                        o.url
+                    )),
                 }
-                fan::Opened::Failed => {
-                    out.push_str("未能自动唤起浏览器，请手动打开官网粉丝专区：\n");
-                    out.push_str(&format!("  {}\n", url));
-                }
+                out.push_str(&format!(
+                    "\n页面步骤：登录（GitHub）→ 点「确认领取」→ 自动回到本终端。\n\
+                     ✅ 官方在线校验已通过，粉丝专属已解锁（档位：{}）。\n\
+                     \x20 mox fan status                   # 查看状态\n\
+                     \x20 moxsh-proot-distro recipe list   # 粉丝专属配方已亮起 🔓",
+                    o.tier
+                ));
+                out
             }
-            out.push_str(
-                "\n步骤：\n\
-                 \x20 1) 在页面登录（需强制登录才能领取粉丝福利）；\n\
-                 \x20 2) 点击「确认领取」→ 获得兑换码；\n\
-                 \x20 3) 回到这里执行：mox fan redeem <兑换码>\n\
-                 \x20    （输入后即解锁粉丝专属配方）",
-            );
-            out
-        }
+            Err(e) => format!("fan: {}\n（重试：mox fan login；桌面 Linux 可先开粉丝页 URL 手动领取，再 mox fan redeem <code>）", e),
+        },
         Some("redeem") => match args.get(1).copied() {
             Some(code) => match fan::redeem(moxsh_root, code) {
                 Ok(tier) => format!(
@@ -650,20 +665,20 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
                 ),
                 Err(e) => format!("fan: {}", e),
             },
-            None => "用法: mox fan redeem <兑换码>\n（先 mox fan login 去官网领取）".to_string(),
+            None => "用法: mox fan redeem <兑换码>\n（桌面 Linux：mox fan login 会给出粉丝页 URL，手动领取后回来兑换）".to_string(),
         },
         Some("status") => {
             let mode = fan::verify_mode();
             match fan::load_state(moxsh_root) {
                 Some(st) => format!(
-                    "粉丝专属：已解锁\n  档位：{}\n  验签模式：{}\n  兑换码：{}\n  令牌文件：{}",
+                    "粉丝专属：已解锁\n  档位：{}\n  验签模式：{}\n  兑换码：{}\n  令牌文件：{}\n  （删除本文件 = 解除绑定，需重新 mox fan login）",
                     st.tier,
                     mode,
                     st.code,
                     fan::fan_file_path(moxsh_root).display()
                 ),
                 None => format!(
-                    "粉丝专属：未解锁\n  验签模式：{}\n  mox fan login    # 去官网粉丝专区领取兑换码",
+                    "粉丝专属：未解锁\n  验签模式：{}\n  mox fan login    # 唤起浏览器 → 登录 → 确认领取 → 自动收码解锁",
                     mode
                 ),
             }
@@ -1194,7 +1209,7 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
   proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
   proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
-  proot-distro fan login|redeem <code>|status  粉丝专属（浏览器领取+兑换码解锁）
+  proot-distro fan login|redeem <code>|status  粉丝专属（回环自动收码+在线校验）
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。
@@ -1232,6 +1247,38 @@ mod tests {
     fn help_and_unknown() {
         assert!(proot_distro(&["help"], Path::new("/x")).contains("proot-distro"));
         assert!(proot_distro(&["frobnicate"], Path::new("/x")).contains("未知子命令"));
+    }
+
+    /// fan 子命令：灰度关时任何子命令都给灰度提示（默认关，不误触粉丝流）。
+    #[test]
+    fn fan_grey_gate_closed_by_default() {
+        std::env::set_var(fan::FAN_ENABLE_ENV, "0");
+        let out = proot_distro(&["fan", "login"], Path::new("/tmp"));
+        assert!(out.contains("灰度"), "应提示灰度中：{}", out);
+        assert!(!out.contains("127.0.0.1"), "灰度关不得起回环/给 URL");
+        let out = proot_distro(&["fan", "status"], Path::new("/tmp"));
+        assert!(out.contains("灰度"));
+        std::env::remove_var(fan::FAN_ENABLE_ENV);
+    }
+
+    /// fan 未知子命令：给用法（灰度开时才看得到，先开开关）。
+    #[test]
+    fn fan_unknown_subcommand() {
+        std::env::set_var(fan::FAN_ENABLE_ENV, "1");
+        let out = proot_distro(&["fan", "frobnicate"], Path::new("/tmp"));
+        assert!(out.contains("未知子命令"));
+        assert!(out.contains("mox fan login|redeem <code>|status"));
+        std::env::remove_var(fan::FAN_ENABLE_ENV);
+    }
+
+    /// fan status：未解锁时提示 login 入口（灰度开）。
+    #[test]
+    fn fan_status_unlocked_hint() {
+        std::env::set_var(fan::FAN_ENABLE_ENV, "1");
+        let out = proot_distro(&["fan", "status"], Path::new("/nonexistent-root"));
+        assert!(out.contains("未解锁"));
+        assert!(out.contains("mox fan login"));
+        std::env::remove_var(fan::FAN_ENABLE_ENV);
     }
 
     /// proot 原生参数组装预览。

@@ -168,10 +168,10 @@ impl RecipeIndex {
     /// 执行后由引擎 env 决定的 HOME 无关，幂等可重跑。
     pub fn apply(&self, root: &Path, recipe_id: &str, distro_id: &str) -> ProotResult<i32> {
         let recipe = self.find(recipe_id)?;
-        // 粉丝专属门禁（fan_only）：未解锁直接拒，不碰引擎、不落盘。
+        // 专属门禁（fan_only）：未解锁直接拒，不碰引擎、不落盘。
         if recipe.fan_only && !crate::proot::fan::is_fan(root) {
             return Err(ProotError::InvalidArg(format!(
-                "配方 {} 为粉丝专属，需先解锁：mox fan login 领兑换码 → mox fan redeem <code>",
+                "配方 {} 为专属内容，需先解锁",
                 recipe_id
             )));
         }

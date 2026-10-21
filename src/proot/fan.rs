@@ -1,16 +1,16 @@
-//! 粉丝专属客户端（0.6.0）——「脚本 ↔ 官网」握手，**在线校验 + localhost 回环自动收码**。
+//! 专属解锁客户端（0.6.0）——「脚本 ↔ 官网」握手，**在线校验 + localhost 回环自动收码**。
 //!
 //! 流程（手机 / Termux，灰度首发于 moxsh-proot 脚本，旗舰 moxsh 后上）：
-//!   1. 粉丝在终端敲 `mox fan login`（入口命令由公众号自动回复告知，**手动触发，
+//!   1. 在终端敲 `mox fan login`（入口命令由运营渠道自动回复告知，**手动触发，
 //!      不自动跳**）→ 脚本在 `127.0.0.1` 起一个一次性回环监听 → 唤起手机浏览器打开
-//!      **隐藏粉丝页**（官网导航点不到那个），URL 带上 `redirect=<回环地址>&state=<随机>`；
-//!   2. 粉丝页内 **GitHub 登录**（`/auth/github/start?redirect=<粉丝页>`，登录后回到粉丝页）；
+//!      专属页面（官网导航不可见），URL 带上 `redirect=<回环地址>&state=<随机>`；
+//!   2. 页面内 **GitHub 登录**（`/auth/github/start?redirect=<页面>`，登录后回到页面）；
 //!   3. 点「确认领取」= 后端 `POST /fan/issue` 用**服务端密钥**签发一个激活码，
 //!      页面带 `code` 跳回 `redirect`（回环）→ 脚本**自动收到**码；
-//!   4. 脚本 `POST /fan/verify {code}` **联网经官方真实校验**（服务端持密钥、可吊销）
+//!   4. 脚本 `POST /fan/verify {code}` **联网经服务端真实校验**（服务端持密钥、可吊销）
 //!      → 通过则把档位/到期落盘 `$MOXSH_ROOT/fan.toml` → 解锁 fan_only 配方。
 //!
-//! 桌面 Linux（没浏览器可调）：官网手动取激活码 → `mox fan redeem <code>`（同样联网验）。
+//! 桌面 Linux（没浏览器可调）：页面手动取激活码 → `mox fan redeem <code>`（同样联网验）。
 //!
 //! 设计约束（与全仓库一致）：
 //! - **零外部依赖**：不做任何客户端加解密——激活码由服务端签发、服务端校验，手机只
@@ -39,7 +39,7 @@ pub const FAN_FILE_REL: &str = "fan.toml";
 
 /// 灰度总开关：`MOXSH_FAN_ENABLE=1` 才启用登录/兑换（默认关）。
 pub const FAN_ENABLE_ENV: &str = "MOXSH_FAN_ENABLE";
-/// 隐藏粉丝页 URL（`MOXSH_FAN_PAGE` 覆盖；默认占位，部署后改或设环境变量）。
+/// 专属页面 URL（`MOXSH_FAN_PAGE` 覆盖；默认占位，部署后改或设环境变量）。
 pub const FAN_PAGE_ENV: &str = "MOXSH_FAN_PAGE";
 /// 后端验签端点（`MOXSH_REDEEM_API` 覆盖；默认占位）。
 pub const REDEEM_API_ENV: &str = "MOXSH_REDEEM_API";
@@ -73,7 +73,7 @@ pub fn verify_mode() -> &'static str {
     "online"
 }
 
-/// 隐藏粉丝页 URL（`MOXSH_FAN_PAGE` 覆盖）。
+/// 专属页面 URL（`MOXSH_FAN_PAGE` 覆盖）。
 /// 默认指向官网（GitHub Pages）的隐藏页 fan.html——导航里没有入口，
 /// 只能由本命令带 redirect/state 唤起（项目主人拍板：不给密钥 URL）。
 pub fn fan_page_url() -> String {
@@ -238,7 +238,7 @@ pub fn redeem(root: &Path, code: &str) -> ProotResult<String> {
 
 // ============================ localhost 回环（自动收码） ============================
 
-/// 由粉丝页 URL 拼出带回环 redirect + state 的 URL。
+/// 由专属页面 URL 拼出带回环 redirect + state 的 URL。
 /// `page` 形如 `https://site/fan`；拼成 `https://site/fan?redirect=..&state=..`
 /// （page 已带 query 则用 `&` 续）。
 pub fn build_fan_url(page: &str, loopback: &str, state: &str) -> String {
@@ -324,7 +324,7 @@ pub fn await_code(listener: &TcpListener, expect_state: &str) -> ProotResult<Str
     }
 }
 
-/// [`login`] 的结果：档位 + 实际打开的粉丝页 URL（浏览器唤起失败时 CLI 需
+/// [`login`] 的结果：档位 + 实际打开的专属页面 URL（浏览器唤起失败时 CLI 需
 /// 提示用户手动打开该 URL）。
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoginOutcome {

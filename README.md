@@ -93,8 +93,7 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 | **fake root** | uid/gid 显示为 0、chown/setuid 系伪装成功——不需要真 root，不碰系统分区 |
 | **网络栈** | DNS 统一 + IPv6 双栈探测 + 出网边界报告（`moxsh-proot-distro net`） |
 | **钩子运行时** | post-install / pre-login 生命周期，Python / Lua 双解释器，容器内脚本即插即用 |
-| **一键配方** | 声明式 TOML + shell 逃生舱，`recipe list/show/apply` 一键装桌面/VNC；`fan_only` 配方仅粉丝可应用 |
-| **粉丝专属（灰度）** | `mox fan login` 起 localhost 回环唤起官网隐藏粉丝页 → 登录确认领取 → 激活码自动跳回 → **服务端联网校验**解锁；客户端零密钥 |
+| **一键配方** | 声明式 TOML + shell 逃生舱，`recipe list/show/apply` 一键装桌面/VNC |
 | **一键安装** | bash 探测层（`curl \| bash` 零依赖）+ Go 安装器（install/update/probe），双层同源 |
 
 ---

@@ -555,9 +555,9 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
             for r in idx.all() {
                 let lock = if r.fan_only {
                     if fan::is_fan(moxsh_root) {
-                        " [粉丝✓]"
+                        " [✓]"
                     } else {
-                        " [粉丝🔒 mox fan redeem]"
+                        " [🔒]"
                     }
                 } else {
                     ""
@@ -578,11 +578,11 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                     );
                     if r.fan_only {
                         s.push_str(&format!(
-                            "\n  粉丝专属：{}",
+                            "\n  专属：{}",
                             if fan::is_fan(moxsh_root) {
                                 "已解锁".to_string()
                             } else {
-                                "未解锁（mox fan login 领兑换码 → mox fan redeem <code>）".to_string()
+                                "未解锁".to_string()
                             }
                         ));
                     }
@@ -611,23 +611,23 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
     }
 }
 
-/// `fan login|redeem <code>|status`：粉丝专属（隐藏粉丝页 + 回环自动收码 + 在线校验）。
+/// `fan login|redeem <code>|status`：专属解锁（回环自动收码 + 在线校验）。
 ///
 /// - `login`（默认）：本机 `127.0.0.1` 起一次性回环监听 → 唤起手机浏览器打开
-///   **隐藏粉丝页**（官网导航点不到那个，入口命令由公众号告知）→ 页内 GitHub
-///   登录 + 点「确认领取」= 后端签发激活码 → 页面带 `code` 跳回回环，脚本
-///   **自动收码** → `POST /fan/verify` 经官方服务端**联网真实校验** → 落盘
+///   专属页面（入口命令由运营渠道告知）→ 页内 GitHub 登录 + 点「确认领取」
+///   = 后端签发激活码 → 页面带 `code` 跳回回环，脚本 **自动收码** →
+///   `POST /fan/verify` 经服务端**联网真实校验** → 落盘
 ///   `$MOXSH_ROOT/fan.toml` 解锁 fan_only 配方。全程无需手输兑换码；
-/// - `redeem <code>`：手动路径（桌面 Linux 没浏览器可调时）——官网粉丝页
+/// - `redeem <code>`：手动路径（桌面 Linux 没浏览器可调时）——页面
 ///   手动领取后回来 `mox fan redeem <code>`，同样联网验；
-/// - `status`：当前粉丝状态与验签模式（纯在线，客户端零密钥）。
+/// - `status`：当前解锁状态与验签模式（纯在线，客户端零密钥）。
 ///
 /// 灰度：`MOXSH_FAN_ENABLE=1` 才开放（后端 `/fan/issue` 另有白名单，双保险）。
 fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
     if !fan::fan_enabled() {
         return format!(
             "粉丝专属：灰度测试中（{}=1 开启，正式版自动开放）。\n\
-             \x20 领取入口与激活方式请关注公众号，按自动回复指引操作。",
+             \x20 该功能灰度测试中，暂未开放。",
             fan::FAN_ENABLE_ENV
         );
     }
@@ -653,7 +653,7 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
                 ));
                 out
             }
-            Err(e) => format!("fan: {}\n（重试：mox fan login；桌面 Linux 可先开粉丝页 URL 手动领取，再 mox fan redeem <code>）", e),
+            Err(e) => format!("fan: {}\n（重试：mox fan login；桌面 Linux 可先开专属页面 URL 手动领取，再 mox fan redeem <code>）", e),
         },
         Some("redeem") => match args.get(1).copied() {
             Some(code) => match fan::redeem(moxsh_root, code) {
@@ -665,7 +665,7 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
                 ),
                 Err(e) => format!("fan: {}", e),
             },
-            None => "用法: mox fan redeem <兑换码>\n（桌面 Linux：mox fan login 会给出粉丝页 URL，手动领取后回来兑换）".to_string(),
+            None => "用法: mox fan redeem <兑换码>\n（桌面 Linux：mox fan login 会给出专属页面 URL，手动领取后回来兑换）".to_string(),
         },
         Some("status") => {
             let mode = fan::verify_mode();
@@ -1209,7 +1209,6 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
   proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
   proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
-  proot-distro fan login|redeem <code>|status  粉丝专属（回环自动收码+在线校验）
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。
@@ -1249,7 +1248,7 @@ mod tests {
         assert!(proot_distro(&["frobnicate"], Path::new("/x")).contains("未知子命令"));
     }
 
-    /// fan 子命令：灰度关时任何子命令都给灰度提示（默认关，不误触粉丝流）。
+    /// fan 子命令：灰度关时任何子命令都给灰度提示（默认关，不误触专属流）。
     ///
     /// 三个改 `MOXSH_FAN_ENABLE` 的用例共用一把测试锁串行化——env 是进程级
     /// 全局态，并行跑会互相覆盖（曾撞出「灰度关却进了 login 回环等 240s」）。

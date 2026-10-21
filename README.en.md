@@ -94,6 +94,8 @@ Full decision log: [docs/roadmap.md](docs/roadmap.md).
 | **fake root** | uid/gid show as 0; chown/setuid succeed in disguise — no real root, no system partition touched |
 | **Network stack** | Unified DNS + dual-stack IPv6 probing + egress boundary report (`moxsh-proot-distro net`) |
 | **Hook runtime** | post-install / pre-login lifecycle, Python / Lua dual interpreters, drop-in container scripts |
+| **One-key recipes** | Declarative TOML + shell escape hatch, `recipe list/show/apply` one-key desktop/VNC setups; `fan_only` recipes apply for fans only |
+| **Fan-exclusive (canary)** | `mox fan login` starts a localhost loopback, opens the hidden official-site fan page → sign in & confirm → the code bounces back automatically → **server-side online verification** unlocks; zero secrets on the client |
 | **One-line install** | bash probe layer (`curl \| bash`, zero deps) + Go installer (install/update/probe), two layers one source |
 
 ---

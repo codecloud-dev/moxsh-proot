@@ -74,11 +74,13 @@ pub fn verify_mode() -> &'static str {
 }
 
 /// 隐藏粉丝页 URL（`MOXSH_FAN_PAGE` 覆盖）。
+/// 默认指向官网（GitHub Pages）的隐藏页 fan.html——导航里没有入口，
+/// 只能由本命令带 redirect/state 唤起（项目主人拍板：不给密钥 URL）。
 pub fn fan_page_url() -> String {
     std::env::var(FAN_PAGE_ENV)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://www.moxsh.cn/fan".to_string())
+        .unwrap_or_else(|| "https://codecloud-dev.github.io/mox-site/fan.html".to_string())
         .trim_end_matches('/')
         .to_string()
 }
@@ -88,7 +90,7 @@ fn redeem_api() -> String {
     std::env::var(REDEEM_API_ENV)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://mox-id.YOUR-SUBDOMAIN.workers.dev/fan/verify".to_string())
+        .unwrap_or_else(|| "https://mox-id.3042980037.workers.dev/fan/verify".to_string())
 }
 
 /// 当前 unix 秒（时钟异常回落 0）。

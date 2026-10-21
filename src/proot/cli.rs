@@ -1250,8 +1250,14 @@ mod tests {
     }
 
     /// fan 子命令：灰度关时任何子命令都给灰度提示（默认关，不误触粉丝流）。
+    ///
+    /// 三个改 `MOXSH_FAN_ENABLE` 的用例共用一把测试锁串行化——env 是进程级
+    /// 全局态，并行跑会互相覆盖（曾撞出「灰度关却进了 login 回环等 240s」）。
+    static FAN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn fan_grey_gate_closed_by_default() {
+        let _g = FAN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(fan::FAN_ENABLE_ENV, "0");
         let out = proot_distro(&["fan", "login"], Path::new("/tmp"));
         assert!(out.contains("灰度"), "应提示灰度中：{}", out);
@@ -1264,6 +1270,7 @@ mod tests {
     /// fan 未知子命令：给用法（灰度开时才看得到，先开开关）。
     #[test]
     fn fan_unknown_subcommand() {
+        let _g = FAN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(fan::FAN_ENABLE_ENV, "1");
         let out = proot_distro(&["fan", "frobnicate"], Path::new("/tmp"));
         assert!(out.contains("未知子命令"));
@@ -1274,6 +1281,7 @@ mod tests {
     /// fan status：未解锁时提示 login 入口（灰度开）。
     #[test]
     fn fan_status_unlocked_hint() {
+        let _g = FAN_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var(fan::FAN_ENABLE_ENV, "1");
         let out = proot_distro(&["fan", "status"], Path::new("/nonexistent-root"));
         assert!(out.contains("未解锁"));

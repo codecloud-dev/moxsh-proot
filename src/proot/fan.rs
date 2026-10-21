@@ -37,7 +37,9 @@ use crate::proot::{ProotError, ProotResult};
 const TOKEN_VERSION: &str = "v1";
 
 /// 离线验签用的 HMAC 密钥（粉丝门禁，非安全边界；生产用 `MOXSH_FAN_KEY` 覆盖）。
-const DEFAULT_FAN_KEY: &[u8] = b"moxsh-fan-gate-v1-change-me";
+/// 必须与官网粉丝专区 `config.js` 的 `fanKey` 逐字一致——官网用 Web Crypto 签
+/// 设备兑换码，手机端用本密钥离线验签（见 `issue`/`verify` 与官网 README）。
+const DEFAULT_FAN_KEY: &[u8] = b"moxsh-fan-gate-v1-9f3a";
 
 /// 官网基础地址（`MOXSH_SITE_URL` 覆盖；默认占位，部署时改或设环境变量）。
 const DEFAULT_SITE_URL: &str = "https://www.moxsh.cn";
@@ -549,6 +551,18 @@ mod tests {
         assert!(verify("aaa.bbb").is_none());
         // 签名段非 base64url。
         assert!(verify("YWJj.###".replace("###", "!!!").as_str()).is_none());
+    }
+
+    #[test]
+    fn verify_accepts_webcrypto_issued_code() {
+        // 跨语言一致性：本码由 Node 的 Web Crypto（浏览器同款 crypto.subtle HMAC）
+        // 用官网 config.js 的同一 fanKey + 同一 payload 格式签发。
+        // 若本测试通过，即证明「官网粉丝专区签发的设备兑换码，手机端必能离线验过」。
+        // payload = "v1|fan|9999999999|xcheck-nonce"（exp 为 2286 年，不至过期）。
+        let code = "djF8ZmFufDk5OTk5OTk5OTl8eGNoZWNrLW5vbmNl.1MhDjjzdIfx-aUaYvZ8TDbDvL3kXJmLeaic8vVKNfbs";
+        let claims = verify(code).expect("Web Crypto 签的码应被 Rust 验过");
+        assert_eq!(claims.tier, "fan");
+        assert_eq!(claims.exp, 9999999999);
     }
 
     // ---- 落盘 / 状态 ----

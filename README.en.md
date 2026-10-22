@@ -1,4 +1,4 @@
-> **🌐 Canonical repository is on GitHub** — [`codecloud-dev/moxsh-proot`](https://github.com/codecloud-dev/moxsh-proot) is the single source of truth: please file all issues and pull requests there. The [Gitee mirror](https://gitee.com/thousand-code-crafts/moxsh-proot) is a read-only copy synced hourly for faster access in mainland China.
+> **🌐 Canonical repository is on GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go.html?r=moxsh-proot) is the single source of truth: please file all issues and pull requests there. The [Gitee mirror](https://gitee.com/thousand-code-crafts/moxsh-proot) is a read-only copy synced hourly for faster access in mainland China.
 
 <p align="center">
   <img src="assets/logo.svg" width="128" alt="moxsh liquid-glass logo">
@@ -24,7 +24,7 @@
 
 <p align="center"><a href="README.md">中文</a> · <a href="README.en.md">English</a></p>
 
-<p align="center"><b>⭐ If moxsh-proot is useful to you, please give it a <a href="https://github.com/codecloud-dev/moxsh-proot">star</a> — it helps more people get a smooth Linux on their phone and in containers!</b></p>
+<p align="center"><b>⭐ If moxsh-proot is useful to you, please give it a <a href="https://mox-site.pages.dev/go.html?r=moxsh-proot">star</a> — it helps more people get a smooth Linux on their phone and in containers!</b></p>
 
 
 
@@ -33,8 +33,8 @@
 > This is an early-stage project — **bugs exist, and probably plenty of them.** I'm not pretending it's perfect.
 > Every pitfall you hit and every gripe you have is a chance to help make it better.
 
-- 💥 Crashed / won't run / wrong results? → [File a bug report](https://github.com/codecloud-dev/moxsh-proot/issues)
-- 💡 Want a feature? → [Open a feature request](https://github.com/codecloud-dev/moxsh-proot/issues)
+- 💥 Crashed / won't run / wrong results? → [File a bug report](https://mox-site.pages.dev/go.html?r=moxsh-proot&p=issues)
+- 💡 Want a feature? → [Open a feature request](https://mox-site.pages.dev/go.html?r=moxsh-proot&p=issues)
 - 🗯️ Just want to rant or nitpick? → Issues are welcome too, label it whatever 😄
 
 I read every issue and fix what I can, fast. Let's grow this from "runs" to "delightful" 💪

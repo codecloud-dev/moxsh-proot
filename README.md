@@ -1,4 +1,4 @@
-> **🌐 主仓库在 GitHub** — [`codecloud-dev/moxsh-proot`](https://github.com/codecloud-dev/moxsh-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/moxsh-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
+> **🌐 主仓库在 GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go.html?r=moxsh-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/moxsh-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
 
 <p align="center">
   <img src="assets/logo.svg" width="128" alt="moxsh 液态玻璃标志">
@@ -24,7 +24,7 @@
 
 <p align="center"><a href="README.md">中文</a> · <a href="README.en.md">English</a></p>
 
-<p align="center"><b>⭐ 如果 moxsh-proot 对你有用，欢迎点个 <a href="https://github.com/codecloud-dev/moxsh-proot">Star</a> —— 它能让更多人在手机上、在容器里用上顺滑的 Linux!</b></p>
+<p align="center"><b>⭐ 如果 moxsh-proot 对你有用，欢迎点个 <a href="https://mox-site.pages.dev/go.html?r=moxsh-proot">Star</a> —— 它能让更多人在手机上、在容器里用上顺滑的 Linux!</b></p>
 
 
 
@@ -33,8 +33,8 @@
 > 这是个刚起步的项目，**bug 肯定有，而且不少**。我不装完美——
 > 你踩到的每一个坑、每一个槽点，都是帮我把它养好的机会。
 
-- 💥 遇到崩溃 / 跑不起来 / 结果不对？→ [提个 Bug 报告](https://github.com/codecloud-dev/moxsh-proot/issues)
-- 💡 有想要的功能？→ [开个需求](https://github.com/codecloud-dev/moxsh-proot/issues)
+- 💥 遇到崩溃 / 跑不起来 / 结果不对？→ [提个 Bug 报告](https://mox-site.pages.dev/go.html?r=moxsh-proot&p=issues)
+- 💡 有想要的功能？→ [开个需求](https://mox-site.pages.dev/go.html?r=moxsh-proot&p=issues)
 - 🗯️ 单纯想吐槽、挑刺？→ 也欢迎开 issue，标签随便打 😄
 
 每个 issue 我都会看，能修的尽快修。一起把它从“能跑”养到“好用” 💪

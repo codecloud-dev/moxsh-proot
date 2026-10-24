@@ -1474,6 +1474,9 @@ impl Tracer {
             }
             if let Ok(s) = read_child_cstr(pid, addr) {
                 if s == "/proc/self/exe" {
+                    if std::env::var("MOXSH_DBG").is_ok() {
+                        eprintln!("[dbg] pid={} self-exe-override prog={:?}", pid, prog);
+                    }
                     return Some(prog);
                 }
             }
@@ -1506,10 +1509,23 @@ impl Tracer {
         // 容量以原返回长度为安全下界（loader 宿主路径通常更长）。
         if let Some(prog) = exe_override {
             let cap = ret as usize + 1;
-            let mut bytes = prog.into_bytes();
+            let mut bytes = prog.clone().into_bytes();
             bytes.push(0);
+            if std::env::var("MOXSH_DBG").is_ok() {
+                eprintln!(
+                    "[dbg] pid={} exe-restore prog={:?} ret={} addr={:#x} fits={}",
+                    pid,
+                    prog,
+                    ret,
+                    addr,
+                    bytes.len() <= cap
+                );
+            }
             if bytes.len() <= cap {
-                let _ = write_child_bytes(pid, addr, &bytes);
+                let r = write_child_bytes(pid, addr, &bytes);
+                if std::env::var("MOXSH_DBG").is_ok() {
+                    eprintln!("[dbg] pid={} exe-restore write={:?}", pid, r.is_ok());
+                }
             }
             return;
         }

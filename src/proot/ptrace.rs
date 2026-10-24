@@ -1838,6 +1838,13 @@ impl Tracer {
 
             // ===== 退出事件 =====
             if libc::WIFEXITED(status) {
+                if std::env::var("MOXSH_DBG").is_ok() {
+                    eprintln!(
+                        "[dbg] pid={} exited code={}",
+                        pid,
+                        libc::WEXITSTATUS(status)
+                    );
+                }
                 tracees.remove(&pid);
                 in_syscall.remove(&pid);
                 self.neutered.borrow_mut().remove(&pid);
@@ -1854,6 +1861,13 @@ impl Tracer {
                 continue;
             }
             if libc::WIFSIGNALED(status) {
+                if std::env::var("MOXSH_DBG").is_ok() {
+                    eprintln!(
+                        "[dbg] pid={} killed sig={}",
+                        pid,
+                        libc::WTERMSIG(status)
+                    );
+                }
                 tracees.remove(&pid);
                 in_syscall.remove(&pid);
                 self.neutered.borrow_mut().remove(&pid);

@@ -616,10 +616,10 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
             let did = args.get(2).copied();
             match (rid, did) {
                 (Some(rid), Some(did)) => match idx.apply(moxsh_root, rid, did) {
-                    Ok(code) => return format!("配方 {} 已应用（容器内退出码 {}）", rid, code),
-                    Err(e) => return format!("recipe: 应用失败: {}", e),
+                    Ok(code) => format!("配方 {} 已应用（容器内退出码 {}）", rid, code),
+                    Err(e) => format!("recipe: 应用失败: {}", e),
                 },
-                _ => return "用法: moxsh-proot-distro recipe apply <id> <distro>".to_string(),
+                _ => "用法: moxsh-proot-distro recipe apply <id> <distro>".to_string(),
             }
         }
         Some(other) => format!(

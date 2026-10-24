@@ -43,6 +43,20 @@ use crate::proot::elf::{resolve_exec_chain, ExecPlan};
 use crate::proot::translate::{normalize, FakeRootAction, TranslateRules};
 use crate::proot::{ProotError, ProotResult};
 
+/// 引擎内部诊断日志（env 门控：`MOXSH_DBG=1` 开启，默认零开销）。
+///
+/// 覆盖引擎最难自证的三个暗面——syscall 拦截的 enter/exit 改写结果、
+/// 新 tracee 事件、scratch 偷换——排查「翻译为何静默失效」类问题
+/// （M5.1/M6 的教训：这类 bug 本地全绿、CI 才现形，没有现场日志等于
+/// 盲猜）。写 stderr，不混入 guest 输出流。
+macro_rules! dbg_log {
+    ($($arg:tt)*) => {
+        if std::env::var("MOXSH_DBG").is_ok() {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 /// 子进程路径参数上限（Linux PATH_MAX）。
 const MAX_PATH: usize = 4096;
 
@@ -233,6 +247,20 @@ pub enum Op {
     FakeRootExit,
     /// 直通（未拦截）——上游"未拦截即直通"语义。
     PassThrough,
+}
+
+/// 该 op 是否在 exit 停还原返回缓冲（getcwd 的 RestoreOnExit 与
+/// readlink(/at) 的 RewriteEnterRestoreExit）。
+///
+/// [`Tracer::self_exe_override_for`] 的 `/proc/self/exe` 覆盖门禁用它：
+/// 只有这类 syscall 的返回缓冲才可能读出 self/exe。**新增带
+/// ret_buf_slot 的 op 必须同步此处**——M6 CI 实证的教训：门禁早年只认
+/// RestoreOnExit，readlink 的 RewriteEnterRestoreExit 被漏掉，动态 exec
+/// 后 guest 读 self/exe 拿到宿主 loader 路径，自检型二进制直接退出 1
+/// （本地无此类二进制故本地全绿、CI 红）。单测
+/// `self_exe_override_gate_covers_all_restore_ops` 钉死不回退。
+fn op_restores_ret_buf(op: Op) -> bool {
+    matches!(op, Op::RestoreOnExit | Op::RewriteEnterRestoreExit)
 }
 
 /// 单个路径参数槽：所在寄存器下标 + 是否伴随 dirfd（AT_FDCWD 需回读 /proc/pid/fd）。
@@ -1132,12 +1160,7 @@ impl Tracer {
             }
         };
         let new = host.to_string_lossy().into_owned();
-        if std::env::var("MOXSH_DBG").is_ok() {
-            eprintln!(
-                "[dbg] pid={} enter slot={} guest={} host={}",
-                pid, slot_idx, guest, new
-            );
-        }
+        dbg_log!("[dbg] pid={} enter slot={} guest={} host={}", pid, slot_idx, guest, new);
         if new == guest {
             return RewriteOutcome::Unchanged;
         }
@@ -1451,9 +1474,12 @@ impl Tracer {
     /// readlink 类 syscall 读 `/proc/self/exe` 时返回 guest 原始程序路径。
     ///
     /// 初始 exec 经宿主侧预解析后执行的是 guest loader（见
-    /// `cli::run_config` 的 `prepare_initial_exec`），不覆盖的话 guest
-    /// 读 `/proc/self/exe` 得到的是 loader 文件（如 ld-musl-x86_64.so.1），
-    /// 进程自查（`/proc/self/exe` 读自身路径的守护进程/自更新程序）全错。
+    /// `cli::run_config` 的 `prepare_initial_exec`），运行期 guest 再 exec
+    /// 动态二进制同样走「显式解释器调用」（见
+    /// [`Tracer::handle_execve_enter`]）——不覆盖的话 guest 读
+    /// `/proc/self/exe` 得到的是 loader 文件（如 ld-musl-x86_64.so.1、
+    /// ld-linux-x86-64.so.2），进程自查（`/proc/self/exe` 读自身路径的
+    /// 守护进程/自更新程序/自检型多 call 二进制）全错。
     /// None = 无需覆盖（无初始程序记录或不是 readlink self/exe）。
     fn self_exe_override_for(
         &self,
@@ -1462,8 +1488,8 @@ impl Tracer {
         regs: &Regs,
     ) -> Option<String> {
         let prog = self.initial_guest_prog.borrow().clone()?;
-        if !matches!(plan.op, Op::RestoreOnExit) {
-            return None; // getcwd 不可能是 self/exe
+        if !op_restores_ret_buf(plan.op) {
+            return None; // 非返回缓冲还原类（getcwd/readlink(/at)）不可能是 self/exe
         }
         // 只查 plan 声明的路径槽（readlink=0 / readlinkat=1），顺带排除
         // getcwd（无路径槽）。
@@ -1474,9 +1500,7 @@ impl Tracer {
             }
             if let Ok(s) = read_child_cstr(pid, addr) {
                 if s == "/proc/self/exe" {
-                    if std::env::var("MOXSH_DBG").is_ok() {
-                        eprintln!("[dbg] pid={} self-exe-override prog={:?}", pid, prog);
-                    }
+                    dbg_log!("[dbg] pid={} self-exe-override prog={:?}", pid, prog);
                     return Some(prog);
                 }
             }
@@ -1511,21 +1535,17 @@ impl Tracer {
             let cap = ret as usize + 1;
             let mut bytes = prog.clone().into_bytes();
             bytes.push(0);
-            if std::env::var("MOXSH_DBG").is_ok() {
-                eprintln!(
-                    "[dbg] pid={} exe-restore prog={:?} ret={} addr={:#x} fits={}",
-                    pid,
-                    prog,
-                    ret,
-                    addr,
-                    bytes.len() <= cap
-                );
-            }
+            dbg_log!(
+                "[dbg] pid={} exe-restore prog={:?} ret={} addr={:#x} fits={}",
+                pid,
+                prog,
+                ret,
+                addr,
+                bytes.len() <= cap
+            );
             if bytes.len() <= cap {
                 let r = write_child_bytes(pid, addr, &bytes);
-                if std::env::var("MOXSH_DBG").is_ok() {
-                    eprintln!("[dbg] pid={} exe-restore write={:?}", pid, r.is_ok());
-                }
+                dbg_log!("[dbg] pid={} exe-restore write={:?}", pid, r.is_ok());
             }
             return;
         }
@@ -1854,13 +1874,7 @@ impl Tracer {
 
             // ===== 退出事件 =====
             if libc::WIFEXITED(status) {
-                if std::env::var("MOXSH_DBG").is_ok() {
-                    eprintln!(
-                        "[dbg] pid={} exited code={}",
-                        pid,
-                        libc::WEXITSTATUS(status)
-                    );
-                }
+                dbg_log!("[dbg] pid={} exited code={}", pid, libc::WEXITSTATUS(status));
                 tracees.remove(&pid);
                 in_syscall.remove(&pid);
                 self.neutered.borrow_mut().remove(&pid);
@@ -1877,13 +1891,7 @@ impl Tracer {
                 continue;
             }
             if libc::WIFSIGNALED(status) {
-                if std::env::var("MOXSH_DBG").is_ok() {
-                    eprintln!(
-                        "[dbg] pid={} killed sig={}",
-                        pid,
-                        libc::WTERMSIG(status)
-                    );
-                }
+                dbg_log!("[dbg] pid={} killed sig={}", pid, libc::WTERMSIG(status));
                 tracees.remove(&pid);
                 in_syscall.remove(&pid);
                 self.neutered.borrow_mut().remove(&pid);
@@ -1956,15 +1964,6 @@ impl Tracer {
             // ===== syscall 停止（SYSGOOD：SIGTRAP|0x80）=====
             if sig == libc::SIGTRAP | 0x80 {
                 let entering = !in_syscall.get(&pid).copied().unwrap_or(false);
-                if std::env::var("MOXSH_DBG2").is_ok() {
-                    let nr = self.get_regs(pid, entering).map(|r| r.nr()).unwrap_or(0);
-                    if entering {
-                        eprintln!("[dbg2] pid={} enter nr={}", pid, nr);
-                    } else {
-                        let ret = self.get_regs(pid, false).map(|r| r.ret()).unwrap_or(0);
-                        eprintln!("[dbg2] pid={} exit nr={} ret={:#x}", pid, nr, ret);
-                    }
-                }
 
                 // ===== 偷换 guest 自身 syscall 分配 scratch（方案 I）=====
                 // 详见 [`Tracer::stolen_mmap_regs`] 的机制文档。两个半停：
@@ -2001,14 +2000,7 @@ impl Tracer {
                     if let Some(saved) = stealing.remove(&pid) {
                         // stolen mmap exit 停：rax/x0 = 基址（或 -errno）。
                         let ret = self.get_regs(pid, false)?.ret();
-                        if std::env::var("MOXSH_DBG").is_ok() {
-                            eprintln!(
-                                "[dbg] pid={} steal-mmap-ret={:#x} nr={}",
-                                pid,
-                                ret,
-                                saved.nr()
-                            );
-                        }
+                        dbg_log!("[dbg] pid={} steal-mmap-ret={:#x} nr={}", pid, ret, saved.nr());
                         if (ret as i64) > 0 {
                             self.scratch.borrow_mut().insert(
                                 pid,
@@ -2086,9 +2078,7 @@ impl Tracer {
                         // 相位不动的理由同上：execve 双停照常交替。
                         self.scratch.borrow_mut().remove(&pid);
                         self.exit_bufs.borrow_mut().remove(&pid);
-                        if std::env::var("MOXSH_DBG").is_ok() {
-                            eprintln!("[dbg] pid={} exec-event: 旧地址空间缓存已作废", pid);
-                        }
+                        dbg_log!("[dbg] pid={} exec-event: 旧地址空间缓存已作废", pid);
                     }
                     libc::PTRACE_EVENT_FORK
                     | libc::PTRACE_EVENT_VFORK
@@ -2235,7 +2225,7 @@ impl Tracer {
             if !changed {
                 // 常规 exit：还原返回缓冲（getcwd/readlinkat/readlink）。
                 let plan = syscall_plan(regs.nr());
-                if matches!(plan.op, Op::RestoreOnExit | Op::RewriteEnterRestoreExit) {
+                if op_restores_ret_buf(plan.op) {
                     self.handle_exit_restore(pid, &regs, &plan);
                 }
             }
@@ -2746,6 +2736,34 @@ mod tests {
         assert_eq!(p.op, Op::RewriteEnterRestoreExit);
         assert_eq!(p.args[0], Some(PathArg { slot: 0, dirfd_slot: None }));
         assert_eq!(p.ret_buf_slot, Some(1));
+    }
+
+    /// self/exe 覆盖门禁必须覆盖**所有**带返回缓冲还原的 op（M6 CI 回归
+    /// 防线，见 [op_restores_ret_buf] 文档）：readlink(/at) 的计划 op 是
+    /// RewriteEnterRestoreExit，与 getcwd 的 RestoreOnExit 是不同变体——
+    /// 门禁漏一个，动态 exec 后 guest 读 /proc/self/exe 就是宿主 loader
+    /// 路径，自检型二进制（CI runner 的 cat）报 Security violation 退出 1。
+    #[test]
+    fn self_exe_override_gate_covers_all_restore_ops() {
+        for inr in [sysnr::READLINK, sysnr::READLINKAT, sysnr::GETCWD] {
+            let p = syscall_plan_internal(inr);
+            assert!(p.ret_buf_slot.is_some(), "nr={} 应带返回缓冲槽", inr);
+            assert!(
+                op_restores_ret_buf(p.op),
+                "nr={} 的 op={:?} 必须过 self/exe 覆盖门禁",
+                inr,
+                p.op
+            );
+        }
+        // 反向钉死：无返回缓冲的 op 不得进门（读 self/exe 无从谈起）。
+        for inr in [sysnr::OPENAT, sysnr::EXECVE, sysnr::CHDIR] {
+            let p = syscall_plan_internal(inr);
+            assert!(
+                p.ret_buf_slot.is_none() && !op_restores_ret_buf(p.op),
+                "nr={} 不应过 self/exe 覆盖门禁",
+                inr
+            );
+        }
     }
 
     /// fake root：setuid 系 + chown 系 enter 阶段阉割。

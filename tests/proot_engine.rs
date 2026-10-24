@@ -39,6 +39,7 @@ fn proot_engine_e2e() {
     // 整个树死锁，测试超时。此用例即 #293 的回归防线。
     {
         std::env::set_var("MOXSH_DBG", "1"); // TODO 临时调试：CI 排查后删除
+        std::env::set_var("MOXSH_DBG2", "1"); // TODO 临时调试：CI 排查后删除
         let rules = TranslateRules::new(Path::new("/"));
         let t = Tracer::new(rules);
         let child =

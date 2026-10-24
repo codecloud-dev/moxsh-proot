@@ -38,8 +38,6 @@ fn proot_engine_e2e() {
     // 收取、新 tracee 停在 attach 停止——sh 等 cat 输出，cat 等唤醒，
     // 整个树死锁，测试超时。此用例即 #293 的回归防线。
     {
-        std::env::set_var("MOXSH_DBG", "1"); // TODO 临时调试：CI 排查后删除
-        std::env::set_var("MOXSH_DBG2", "1"); // TODO 临时调试：CI 排查后删除
         let rules = TranslateRules::new(Path::new("/"));
         let t = Tracer::new(rules);
         let child =
@@ -242,6 +240,42 @@ fn proot_engine_e2e() {
 
         let _ = fs::remove_dir_all(&guest_dir);
         let _ = fs::remove_dir_all(&host_dir);
+        let _ = fs::remove_file(&out_file);
+    }
+
+    // ---- 用例 7：/proc/self/exe 还原（动态 exec 的 loader 间接不穿帮）----
+    // M6 CI 实证的回归防线：运行期 guest exec 动态二进制走「显式解释器
+    // 调用」（exec 的是宿主 loader 而非二进制本身），不修的话 guest 读
+    // /proc/self/exe 得到 loader 宿主路径（CI runner 的自检型 cat 报
+    // "Security violation" 退出 1；本地 cat 无自检——本地全绿 CI 红，
+    // 正是本用例要堵的洞）。readlink 把返回缓冲内容打印出来：引擎应在
+    // exit 停把 loader 路径伪回 guest 程序路径。
+    // 断言用绝对路径 readlink（coreutils，任何 Linux 都有），不依赖
+    // 特定发行版的 cat 自检行为。
+    {
+        let out_file =
+            std::env::temp_dir().join(format!("moxsh-it-selfexe-{}", std::process::id()));
+        let _ = fs::remove_file(&out_file);
+
+        let rules = TranslateRules::new(Path::new("/"));
+        let t = Tracer::new(rules);
+        let child = Tracer::spawn_traced(&[
+            "/bin/sh",
+            "-c",
+            &format!("readlink /proc/self/exe > {}", out_file.display()),
+        ])
+        .expect("spawn");
+        let code = t.run(child).expect("run");
+        assert_eq!(code, 0, "readlink /proc/self/exe 应成功");
+
+        let out = fs::read_to_string(&out_file).expect("读 self/exe 输出");
+        assert_eq!(
+            out.trim(),
+            "/usr/bin/readlink",
+            "/proc/self/exe 应还原为 guest 程序路径（而非宿主 loader），实得 {:?}",
+            out.trim()
+        );
+
         let _ = fs::remove_file(&out_file);
     }
 

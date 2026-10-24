@@ -35,6 +35,10 @@ pub struct Recipe {
     /// 粉丝专属门禁：true 时 `apply` 需 `fan::is_fan` 解锁才放行
     /// （index.toml 里 `fan_only = true`；见 fan.rs「脚本↔官网」握手）。
     pub fan_only: bool,
+    /// 商品授权门禁：非空时 `apply` 需 `redeem::has_entitlement` 有该商品授权
+    /// 才放行（index.toml 里 `requires = "<product_id>"`；与 fan_only 并列，
+    /// 付费商品后台可加——见 redeem.rs）。空串 = 无门禁。
+    pub requires: String,
 }
 
 /// 配方索引（解析结果）。
@@ -79,6 +83,7 @@ impl RecipeIndex {
                                 .collect()
                         }
                         "fan_only" => r.fan_only = val == "true",
+                        "requires" => r.requires = val,
                         _ => {}
                     }
                 }
@@ -173,6 +178,19 @@ impl RecipeIndex {
             return Err(ProotError::InvalidArg(format!(
                 "配方 {} 为专属内容，需先解锁",
                 recipe_id
+            )));
+        }
+        // 商品门禁（requires）：付费商品授权过期/未购买/缓存陈旧一律拒
+        // （判定只读 entitlements.toml 缓存，不联网——刷新走 `mox redeem status`）。
+        if !recipe.requires.is_empty()
+            && !crate::proot::redeem::has_entitlement(root, &recipe.requires)
+        {
+            return Err(ProotError::InvalidArg(format!(
+                "配方 {} 为付费商品内容（{}），需先获得授权：\n\
+                 \x20 mox redeem login    # 绑定本机设备（首次）\n\
+                 \x20 mox redeem status   # 联网刷新授权缓存\n\
+                 \x20 购买/兑换见官网 redeem 页",
+                recipe_id, recipe.requires
             )));
         }
         let mgr = DistroManager::new(root);
@@ -306,6 +324,62 @@ script = "vnc.sh"
         assert!(
             matches!(err, ProotError::InvalidArg(_)),
             "未解锁的 fan_only 配方应被门禁挡下：{:?}",
+            err
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn parse_requires_flag() {
+        let on = RecipeIndex::parse(
+            "[[recipe]]\nid=\"pb\"\nname=\"x\"\nscript=\"pb.sh\"\nrequires = \"proot-pro\"\n",
+        );
+        assert_eq!(on.find("pb").unwrap().requires, "proot-pro");
+        // 未标注 → 默认空串（普通配方不受影响）。
+        let off = RecipeIndex::parse("[[recipe]]\nid=\"a\"\nname=\"x\"\nscript=\"a.sh\"\n");
+        assert!(off.find("a").unwrap().requires.is_empty());
+    }
+
+    #[test]
+    fn apply_requires_locked_without_entitlement() {
+        // requires 且无授权缓存 → 商品门禁先于 rootfs 检查触发（InvalidArg）。
+        let idx = RecipeIndex::parse(
+            "[[recipe]]\nid=\"pb\"\nname=\"x\"\nscript=\"pb.sh\"\nrequires = \"proot-pro\"\n",
+        );
+        let root =
+            std::env::temp_dir().join(format!("moxsh-recipe-req-gate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let err = idx.apply(&root, "pb", "ubuntu").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("proot-pro") && msg.contains("mox redeem"),
+            "应提示商品授权与刷新命令：{}",
+            msg
+        );
+        assert!(matches!(err, ProotError::InvalidArg(_)));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn apply_requires_passes_after_gate_when_entitled() {
+        // 有新鲜授权缓存时，商品门禁放行 → 错误应来自 rootfs 未安装（DistroNotInstalled），
+        // 证明门禁判定本身不拦。
+        let idx = RecipeIndex::parse(
+            "[[recipe]]\nid=\"pb\"\nname=\"x\"\nscript=\"pb.sh\"\nrequires = \"proot-pro\"\n",
+        );
+        let root =
+            std::env::temp_dir().join(format!("moxsh-recipe-req-ok-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::proot::redeem::save_ents(&root, &[crate::proot::redeem::Entitlement {
+            product_id: "proot-pro".into(),
+            tier: "pro".into(),
+            exp: 0,
+        }])
+        .unwrap();
+        let err = idx.apply(&root, "pb", "ubuntu").unwrap_err();
+        assert!(
+            matches!(err, ProotError::DistroNotInstalled(_)),
+            "有授权应过门禁、走到容器检查：{:?}",
             err
         );
         let _ = std::fs::remove_dir_all(&root);

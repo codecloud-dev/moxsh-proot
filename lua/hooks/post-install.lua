@@ -1,4 +1,4 @@
--- post-install 供给钩子（ProOT 引擎 Lua 钩子层，M8）。
+-- post-install 供给钩子（proot 引擎 Lua 钩子层，M8）。
 -- 引擎在发行版安装完成后于容器内执行（rootfs 有 lua/luajit 时生效）。
 --
 -- Lua 特长点落点：体积小、语义稳、无第三方依赖——适合「轻量供给 +

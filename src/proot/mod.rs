@@ -35,6 +35,7 @@ pub mod locale;
 pub mod net;
 pub mod ptrace;
 pub mod recipe;
+pub mod redeem;
 pub mod script;
 pub mod settings;
 pub mod symlink_fix;

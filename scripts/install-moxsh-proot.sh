@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # moxsh-proot 一键安装脚本（原版 Termux / Linux 用户专用）。
 #
-# 把 ProOT 容器引擎（Rust ptrace 路径翻译，非上游 C 版 proot 的封装）
+# 把 proot 容器引擎（Rust ptrace 路径翻译，非上游 C 版 proot 的封装）
 # 装成 `moxsh-proot` 命令，之后即可：
 #
 #   moxsh-proot -R ~/ubuntu -0 -- bash

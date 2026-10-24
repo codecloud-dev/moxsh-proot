@@ -26,6 +26,7 @@ use crate::proot::locale;
 use crate::proot::net;
 use crate::proot::recipe::RecipeIndex;
 use crate::proot::ptrace::Tracer;
+use crate::proot::redeem;
 use crate::proot::script;
 use crate::proot::settings::{self, Settings};
 use crate::proot::translate::TranslateRules;
@@ -473,6 +474,7 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "env" => cmd_env(&mgr, rest),
         "recipe" => cmd_recipe(rest, moxsh_root),
         "fan" => cmd_fan(rest, moxsh_root),
+        "redeem" => cmd_redeem(rest, moxsh_root),
         "wizard" => cmd_wizard(rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
@@ -559,6 +561,12 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                     } else {
                         " [🔒]"
                     }
+                } else if !r.requires.is_empty() {
+                    if redeem::has_entitlement(moxsh_root, &r.requires) {
+                        " [✓]"
+                    } else {
+                        " [🔒]"
+                    }
                 } else {
                     ""
                 };
@@ -583,6 +591,17 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                                 "已解锁".to_string()
                             } else {
                                 "未解锁".to_string()
+                            }
+                        ));
+                    }
+                    if !r.requires.is_empty() {
+                        s.push_str(&format!(
+                            "\n  商品：{}（{}）",
+                            r.requires,
+                            if redeem::has_entitlement(moxsh_root, &r.requires) {
+                                "已授权".to_string()
+                            } else {
+                                "未授权，mox redeem status 刷新".to_string()
                             }
                         ));
                     }
@@ -687,6 +706,120 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
             "fan: 未知子命令 {}\n用法: mox fan login|redeem <code>|status",
             other
         ),
+    }
+}
+
+/// `redeem login|status|check`：商品授权（设备绑定 + 在线校验，正式功能无灰度）。
+///
+/// 与 fan 并列互不覆盖：fan 是账号级粉丝福利（`fan.toml`），本命令是设备级
+/// 商品授权（`device.toml` + `entitlements.toml`，见 redeem.rs）：
+/// - `login`（默认）：起一次性回环 → 唤起官网 bind.html → GitHub 登录 + 点
+///   「绑定此设备」→ 后端把本机设备令牌挂到账号 → 自动回到本终端；
+/// - `status`：联网 `GET /entitlement/check` 拉全部授权 → 落盘缓存
+///   （一行一个 `ok <product_id> <tier> <exp>`）；
+/// - `check`：只读本地缓存（离线可用，不联网）——门禁判定同源。
+///
+/// 购买/兑换在官网 redeem 页（兑换码或爱发电订单号 → 选设备赋予）；
+/// 换设备每月 1 次，也在官网操作。客户端零密钥，判定全在服务端。
+fn cmd_redeem(args: &[&str], moxsh_root: &Path) -> String {
+    match args.first().copied() {
+        None | Some("login") => match redeem::login(moxsh_root) {
+            Ok(o) => {
+                let mut out = String::new();
+                match o.opened {
+                    redeem::Opened::Via(via) => {
+                        out.push_str(&format!("已通过 {} 打开官网设备绑定页：\n  {}\n", via, o.url))
+                    }
+                    redeem::Opened::Failed => out.push_str(&format!(
+                        "未能自动唤起浏览器，请手动打开：\n  {}\n",
+                        o.url
+                    )),
+                }
+                out.push_str(&format!(
+                    "\n页面步骤：登录（GitHub）→ 点「绑定此设备」→ 自动回到本终端。\n\
+                     ✅ 设备已绑定（{}，{}）。\n\
+                     \x20 mox redeem status                  # 查看/刷新商品授权\n\
+                     \x20 购买后在官网 redeem 页选本设备兑换（兑换码或爱发电订单号）",
+                    o.device.name, o.device.platform
+                ));
+                out
+            }
+            Err(e) => format!("redeem: {}\n（重试：mox redeem login）", e),
+        },
+        Some("status") => match redeem::refresh_ents(moxsh_root) {
+            Ok(ents) => {
+                let mut out = String::from("商品授权（已联网刷新）：\n");
+                if ents.is_empty() {
+                    out.push_str("  （无授权——未购买/未兑换，或授权已吊销）\n");
+                } else {
+                    for e in &ents {
+                        out.push_str(&format!("  {}  档位 {}  {}\n", e.product_id, e.tier, exp_text(e.exp)));
+                    }
+                }
+                if let Some(d) = redeem::load_device(moxsh_root) {
+                    out.push_str(&format!(
+                        "\n设备：{}（{}）\n设备文件：{}\n",
+                        d.name,
+                        d.platform,
+                        redeem::device_file_path(moxsh_root).display()
+                    ));
+                }
+                out.push_str(&format!(
+                    "授权缓存：{}\n（超过 7 天未刷新门禁显示 🔒；换设备每月 1 次，官网 redeem 页操作）",
+                    redeem::ents_file_path(moxsh_root).display()
+                ));
+                out
+            }
+            Err(e) => {
+                // 联网失败不空手：有缓存就摆出来（标注可能过期），并提示重试。
+                let mut out = format!("商品授权：联网刷新失败（{}）\n", e);
+                match redeem::load_ents(moxsh_root) {
+                    Some(c) if !c.ents.is_empty() => {
+                        out.push_str("本地缓存授权（可能已过期，恢复网络后刷新）：\n");
+                        for e in &c.ents {
+                            out.push_str(&format!("  {}\n", e.product_id));
+                        }
+                    }
+                    _ => out.push_str("本地也没有授权缓存。\n"),
+                }
+                out.push_str("重试：mox redeem status");
+                out
+            }
+        },
+        Some("check") => {
+            if !redeem::ents_fresh(moxsh_root) {
+                return "商品授权：无有效缓存\n  mox redeem status    # 联网刷新授权".to_string();
+            }
+            let c = redeem::load_ents(moxsh_root).unwrap_or_default();
+            let mut out = String::from("商品授权（本地缓存，离线只读）：\n");
+            if c.ents.is_empty() {
+                out.push_str("  （无）\n");
+            } else {
+                for e in &c.ents {
+                    out.push_str(&format!(
+                        "  {}  档位 {}  {}\n",
+                        e.product_id,
+                        e.tier,
+                        exp_text(e.exp)
+                    ));
+                }
+            }
+            out.push_str("（刷新：mox redeem status）");
+            out
+        }
+        Some(other) => format!(
+            "redeem: 未知子命令 {}\n用法: mox redeem login|status|check",
+            other
+        ),
+    }
+}
+
+/// 授权到期的人类可读文本（exp 0 = 永久）。
+fn exp_text(exp: u64) -> String {
+    if exp == 0 {
+        "永久".to_string()
+    } else {
+        format!("unix {} 过期", exp)
     }
 }
 
@@ -1209,6 +1342,8 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
   proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
   proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
+  proot-distro fan login|redeem <code>|status   粉丝专属解锁（灰度中）
+  proot-distro redeem login|status|check       商品授权：绑定设备 + 在线校验
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。
@@ -1217,6 +1352,7 @@ const PROOT_HELP: &str = "proot（moxsh 引擎内嵌版，支持参数：-r/--ro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read as _, Write as _}; // redeem status stub 收发 HTTP 用
 
     /// list 子命令：空目录输出"（无）"并列出可装清单。
     #[test]
@@ -1286,6 +1422,89 @@ mod tests {
         assert!(out.contains("未解锁"));
         assert!(out.contains("mox fan login"));
         std::env::remove_var(fan::FAN_ENABLE_ENV);
+    }
+
+    /// redeem 未知子命令：给用法（无灰度，随时可见）。
+    #[test]
+    fn redeem_unknown_subcommand() {
+        let out = proot_distro(&["redeem", "frobnicate"], Path::new("/tmp"));
+        assert!(out.contains("未知子命令"));
+        assert!(out.contains("mox redeem login|status|check"));
+    }
+
+    /// redeem check：无缓存时提示联网刷新（离线路径，不打网络）。
+    #[test]
+    fn redeem_check_no_cache() {
+        let out = proot_distro(&["redeem", "check"], Path::new("/nonexistent-redeem-root"));
+        assert!(out.contains("无有效缓存"));
+        assert!(out.contains("mox redeem status"));
+    }
+
+    /// redeem check：有新鲜缓存时离线展示授权（含「永久」文案）。
+    #[test]
+    fn redeem_check_reads_cache_offline() {
+        let root = std::env::temp_dir().join(format!("moxsh-redeem-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        redeem::save_ents(
+            &root,
+            &[redeem::Entitlement {
+                product_id: "proot-pro".into(),
+                tier: "pro".into(),
+                exp: 0,
+            }],
+        )
+        .unwrap();
+        let out = proot_distro(&["redeem", "check"], &root);
+        assert!(out.contains("本地缓存"), "应标注离线只读：{}", out);
+        assert!(out.contains("proot-pro"));
+        assert!(out.contains("永久"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// redeem status：本地 HTTP stub 顶替 /entitlement/check，端到端验证
+    /// curl 拉取 → 多行 ok 解析 → 落盘缓存 → 门禁生效（不打外网）。
+    ///
+    /// 与 fan 用例同理：env 是进程级全局态，用专用锁串行化。
+    static REDEEM_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[test]
+    fn redeem_status_end_to_end_with_local_stub() {
+        let _g = REDEEM_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                let mut buf = [0u8; 4096];
+                let _ = s.read(&mut buf);
+                let body = "ok proot-pro pro 0\nok moxsh-plus plus 4102444800\n";
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = s.write_all(resp.as_bytes());
+                let _ = s.flush();
+            }
+        });
+        let root = std::env::temp_dir().join(format!("moxsh-redeem-status-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::env::set_var(
+            redeem::ENTITLEMENT_API_ENV,
+            format!("http://127.0.0.1:{}/entitlement/check", addr.port()),
+        );
+        let out = proot_distro(&["redeem", "status"], &root);
+        std::env::remove_var(redeem::ENTITLEMENT_API_ENV);
+        handle.join().unwrap();
+        assert!(out.contains("已联网刷新"), "应报告联网刷新：{}", out);
+        assert!(out.contains("proot-pro"));
+        assert!(out.contains("moxsh-plus"));
+        assert!(out.contains("永久"));
+        // 落盘缓存 → 门禁同源生效
+        assert!(redeem::has_entitlement(&root, "proot-pro"));
+        assert!(redeem::has_entitlement(&root, "moxsh-plus"));
+        assert!(!redeem::has_entitlement(&root, "no-such"));
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// proot 原生参数组装预览。

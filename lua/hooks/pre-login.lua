@@ -1,4 +1,4 @@
--- pre-login 欢迎钩子（ProOT 引擎 Lua 钩子层，M8）。
+-- pre-login 欢迎钩子（proot 引擎 Lua 钩子层，M8）。
 -- 引擎在登录 shell 启动前于容器内执行；失败仅警告、不阻断登录。
 --
 -- 演示 Lua 配置层的消费方式：dofile 读 proot.lua 的用户偏好，

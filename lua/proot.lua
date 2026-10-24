@@ -1,4 +1,4 @@
--- ProOT 容器配置层（Lua 声明式配置，M8）。
+-- proot 容器配置层（Lua 声明式配置，M8）。
 --
 -- 定位：引擎（Rust）只认结构化事实（rootfs/bindings/fake_root/cwd/env），
 -- 面向用户的「偏好」由本文件承载，供 Lua 钩子 dofile 后读取——
@@ -13,7 +13,7 @@ return {
     -- 容器身份
     container = {
         -- 登录欢迎语（pre-login.lua 打印；设 nil/false 关闭）
-        motd = "ProOT 容器 —— 无 root 的完整 Linux（moxsh 引擎）",
+        motd = "proot 容器 —— 无 root 的完整 Linux（moxsh 引擎）",
         -- 登录钩子是否打印网络快照
         show_network = true,
     },

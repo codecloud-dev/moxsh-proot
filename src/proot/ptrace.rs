@@ -1940,6 +1940,15 @@ impl Tracer {
             // ===== syscall 停止（SYSGOOD：SIGTRAP|0x80）=====
             if sig == libc::SIGTRAP | 0x80 {
                 let entering = !in_syscall.get(&pid).copied().unwrap_or(false);
+                if std::env::var("MOXSH_DBG2").is_ok() {
+                    let nr = self.get_regs(pid, entering).map(|r| r.nr()).unwrap_or(0);
+                    if entering {
+                        eprintln!("[dbg2] pid={} enter nr={}", pid, nr);
+                    } else {
+                        let ret = self.get_regs(pid, false).map(|r| r.ret()).unwrap_or(0);
+                        eprintln!("[dbg2] pid={} exit nr={} ret={:#x}", pid, nr, ret);
+                    }
+                }
 
                 // ===== 偷换 guest 自身 syscall 分配 scratch（方案 I）=====
                 // 详见 [`Tracer::stolen_mmap_regs`] 的机制文档。两个半停：

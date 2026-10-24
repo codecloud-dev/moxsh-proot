@@ -246,12 +246,18 @@ fn proot_engine_e2e() {
     // ---- 用例 7：/proc/self/exe 还原（动态 exec 的 loader 间接不穿帮）----
     // M6 CI 实证的回归防线：运行期 guest exec 动态二进制走「显式解释器
     // 调用」（exec 的是宿主 loader 而非二进制本身），不修的话 guest 读
-    // /proc/self/exe 得到 loader 宿主路径（CI runner 的自检型 cat 报
+    // /proc/self/exe 得到 loader 宿主路径（CI runner 的 cat 报
     // "Security violation" 退出 1；本地 cat 无自检——本地全绿 CI 红，
-    // 正是本用例要堵的洞）。readlink 把返回缓冲内容打印出来：引擎应在
-    // exit 停把 loader 路径伪回 guest 程序路径。
-    // 断言用绝对路径 readlink（coreutils，任何 Linux 都有），不依赖
-    // 特定发行版的 cat 自检行为。
+    // 正是本用例要堵的洞）。
+    // 断两层，各堵一个历史 bug：
+    //   a) 门禁漏 op：self_exe_override_for 早年只认 RestoreOnExit，
+    //      readlink 的 RewriteEnterRestoreExit 被漏 → override 根本不触发；
+    //   b) 只改缓冲不改返回值：readlink 的 ret 语义是「写入长度」，
+    //      C 代码按 NUL 收尾（够用），但 Rust std::fs::read_link 按
+    //      buf[..ret] 取定长切片——只改缓冲会读到「短路径+NUL+原长
+    //      残片」缝合怪（Ubuntu rust-coreutils cat 的 Security violation
+    //      即此）。coreutils readlink 是 C 串视图抓 a)，python3
+    //      os.readlink 是长度视图抓 b)。
     {
         let out_file =
             std::env::temp_dir().join(format!("moxsh-it-selfexe-{}", std::process::id()));
@@ -277,6 +283,37 @@ fn proot_engine_e2e() {
         );
 
         let _ = fs::remove_file(&out_file);
+
+        // b) 长度视图：python3 的 os.readlink 按 syscall 返回值取
+        // buf[..ret]——只改缓冲不改 ret 时输出会夹带 loader 路径残片。
+        // 绝对路径调用（绕开 PATH/shim 链，保证 exec 链确定性）；
+        // 环境无 python3 时跳过（CI 镜像必装，本地沙箱亦有）。
+        if Path::new("/usr/bin/python3").exists() {
+            let py_out =
+                std::env::temp_dir().join(format!("moxsh-it-selfexe-py-{}", std::process::id()));
+            let _ = fs::remove_file(&py_out);
+            let rules = TranslateRules::new(Path::new("/"));
+            let t = Tracer::new(rules);
+            let child = Tracer::spawn_traced(&[
+                "/bin/sh",
+                "-c",
+                &format!(
+                    "/usr/bin/python3 -c \"import os,sys; sys.stdout.write(os.readlink('/proc/self/exe'))\" > {}",
+                    py_out.display()
+                ),
+            ])
+            .expect("spawn");
+            let code = t.run(child).expect("run");
+            assert_eq!(code, 0, "python3 os.readlink 探针应成功");
+            let py = fs::read_to_string(&py_out).expect("读 python3 探针输出");
+            assert_eq!(
+                py.as_str(),
+                "/usr/bin/python3",
+                "长度视图（ret 同步）应精确还原 guest 程序路径，实得 {:?}（含残片即 ret 未同步）",
+                py
+            );
+            let _ = fs::remove_file(&py_out);
+        }
     }
 
     unsafe { libc::alarm(0) };

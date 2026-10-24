@@ -1508,10 +1508,13 @@ impl Tracer {
         None
     }
 
-    /// exit 停止：getcwd/readlinkat 的返回缓冲是 guest 视角路径，
+    /// exit 停止：getcwd/readlinkat/readlink 的返回缓冲是 guest 视角路径，
     /// 需 host→guest 反向还原后写回（对齐上游 detranslate_path）。
-    pub fn handle_exit_restore(&self, pid: libc::pid_t, regs: &Regs, plan: &SyscallPlan) {
-        let Some(slot) = plan.ret_buf_slot else { return };
+    ///
+    /// 返回 true = 动过寄存器（ret 长度同步，见 [`Tracer::write_ret_buf`]），
+    /// 调用方须 `set_regs` 写回 tracee。
+    pub fn handle_exit_restore(&self, pid: libc::pid_t, regs: &mut Regs, plan: &SyscallPlan) -> bool {
+        let Some(slot) = plan.ret_buf_slot else { return false };
         // enter 停缓存的缓冲地址优先（exit 停 arg0 槽被返回值覆盖，见
         // [Tracer::exit_bufs] 文档）；缓存缺失（单测直调等）时退回寄存器
         // 直取——slot>=1 的参数槽在两架构 exit 停均存活。
@@ -1521,12 +1524,12 @@ impl Tracer {
             _ => (regs.arg(slot as usize), None),
         };
         if addr == 0 {
-            return;
+            return false;
         }
         // 返回值是写入长度（不含 NUL）；失败（负值）不处理。
         let ret = regs.ret() as i64;
         if ret <= 0 {
-            return;
+            return false;
         }
         // `/proc/self/exe` 覆盖：初始 exec 的是 loader，exe 链接指向 loader
         // 文件；guest 视角必须是用户原始程序（见 initial_guest_prog 文档）。
@@ -1544,22 +1547,59 @@ impl Tracer {
                 bytes.len() <= cap
             );
             if bytes.len() <= cap {
-                let r = write_child_bytes(pid, addr, &bytes);
-                dbg_log!("[dbg] pid={} exe-restore write={:?}", pid, r.is_ok());
+                return self.write_ret_buf(pid, addr, &bytes, regs, ret as u64);
             }
-            return;
+            return false;
         }
-        let Ok(host) = read_child_cstr(pid, addr) else { return };
-        let Some(guest) = self.rules.host_to_guest(Path::new(&host)) else { return };
+        let Ok(host) = read_child_cstr(pid, addr) else { return false };
+        let Some(guest) = self.rules.host_to_guest(Path::new(&host)) else { return false };
         if guest == host {
-            return;
+            return false;
         }
         let cap = ret as usize + 1; // 缓冲容量至少为返回长度 + NUL
         let mut bytes = guest.into_bytes();
         bytes.push(0);
         // 返回缓冲容量由内核承诺（>= ret+1），超长场景不写，保持 host 路径。
         if bytes.len() <= cap {
-            let _ = write_child_bytes(pid, addr, &bytes);
+            return self.write_ret_buf(pid, addr, &bytes, regs, ret as u64);
+        }
+        false
+    }
+
+    /// 写回还原后的返回缓冲，并**同步返回值**为新字符串长度。
+    ///
+    /// 为什么必须连 ret 一起改：readlink 类 syscall 的返回值语义是「写入
+    /// 缓冲的字节数」，guest 按它取字符串长度——C 代码（glibc/coreutils）
+    /// 做 `buf[n]='\0'` 后按 C 串用，只改缓冲就够；但 Rust
+    /// `std::fs::read_link` 按 `OsStr::from_bytes(&buf[..n])` 取**定长**
+    /// 切片：只改缓冲不改 ret，guest 读到的是「短路径 + NUL + 原长路径
+    /// 残片」的缝合怪。M6 CI 实证：Ubuntu 的 rust-coreutils（uutils）cat
+    /// 带 require-utility-to-be-invoked-at-matching-path 补丁，按此比较
+    /// basename 对不上 → "Security violation" 退出 1（本地 glibc cat 无
+    /// 此自检，故本地全绿 CI 红）。
+    /// 返回 true = ret 被改过，调用方须写回寄存器。
+    fn write_ret_buf(
+        &self,
+        pid: libc::pid_t,
+        addr: u64,
+        bytes: &[u8],
+        regs: &mut Regs,
+        old_ret: u64,
+    ) -> bool {
+        match write_child_bytes(pid, addr, bytes) {
+            Ok(()) => {
+                dbg_log!("[dbg] pid={} exe-restore write=true", pid);
+                let new_ret = (bytes.len() - 1) as u64; // 不含 NUL
+                if new_ret != old_ret {
+                    regs.set_ret(new_ret);
+                    return true;
+                }
+                false
+            }
+            Err(e) => {
+                dbg_log!("[dbg] pid={} exe-restore write=false err={}", pid, e);
+                false
+            }
         }
     }
 
@@ -2226,7 +2266,12 @@ impl Tracer {
                 // 常规 exit：还原返回缓冲（getcwd/readlinkat/readlink）。
                 let plan = syscall_plan(regs.nr());
                 if op_restores_ret_buf(plan.op) {
-                    self.handle_exit_restore(pid, &regs, &plan);
+                    // handle_exit_restore 可能同步 ret（写入缓冲的长度
+                    // 变了，返回值必须跟着变，见 write_ret_buf 文档）。
+                    let dirty = self.handle_exit_restore(pid, &mut regs, &plan);
+                    if dirty {
+                        self.set_regs(pid, &regs, entering)?;
+                    }
                 }
             }
             if changed {
@@ -2999,13 +3044,13 @@ mod tests {
         let plan = syscall_plan_internal(sysnr::GETCWD);
         assert_eq!(plan.ret_buf_slot, Some(0));
         // 假 pid：读进程内存必失败 → 静默返回，但缓存应先被消费。
-        t.handle_exit_restore(7, &regs, &plan);
+        t.handle_exit_restore(7, &mut regs, &plan);
         assert!(
             !t.exit_bufs.borrow().contains_key(&7),
             "exit 停应消费 enter 写入的缓冲指针缓存"
         );
         // 无缓存直调（单测/异常路径）：走寄存器直取兜底，不 panic。
-        t.handle_exit_restore(7, &regs, &plan);
+        t.handle_exit_restore(7, &mut regs, &plan);
     }
 
     /// 偷换快照（M5.2 方案 I）正确性：syscall 号换成 mmap + 六参数

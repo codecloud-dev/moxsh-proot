@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""pre-login 体检钩子（ProOT 引擎内嵌 Python 运行时，M8）。
+"""pre-login 体检钩子（proot 引擎内嵌 Python 运行时，M8）。
 
 引擎在登录 shell 启动前于容器内执行（`moxsh-proot-distro login <id>`；
 `moxsh-proot-distro shell <id>`）。失败仅警告、不阻断登录。

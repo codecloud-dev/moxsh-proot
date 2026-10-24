@@ -1,4 +1,4 @@
-// ProOT 引擎 C JNI 桥接层（五语言分工中的 C 职责：仅做 JVM ↔ Rust C-ABI 转发）。
+// proot 引擎 C JNI 桥接层（五语言分工中的 C 职责：仅做 JVM ↔ Rust C-ABI 转发）。
 //
 // 本文件由 moxsh-terminal 的 cpp/bridge.cpp「M4 PRoot 容器引擎转发」段落
 // C 化演进而来：桥接逻辑不依赖任何 C++ 特性（无类/模板/RAII），用 C11 重写，

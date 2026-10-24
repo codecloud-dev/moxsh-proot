@@ -2,7 +2,7 @@
 name = "moxsh-proot"
 version = "1.0.0"
 edition = "2021"
-description = "ProOT 容器引擎：五语言融合（Rust ptrace 核心 / Go 安装器 / Python 脚本运行时 / Lua 钩子 / C JNI 桥）的无 root Linux 容器引擎，moxsh 系列专用。"
+description = "proot 容器引擎：五语言融合（Rust ptrace 核心 / Go 安装器 / Python 脚本运行时 / Lua 钩子 / C JNI 桥）的无 root Linux 容器引擎，moxsh 系列专用。"
 license = "GPL-3.0"
 repository = "https://github.com/codecloud-dev/moxsh-proot"
 readme = "README.md"

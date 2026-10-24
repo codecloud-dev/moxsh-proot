@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""ProOT 引擎验证脚本（py 验证层，M8）。
+"""proot 引擎验证脚本（py 验证层，M8）。
 
 用户口径：引擎验证**不写 CI**，用 py 脚本在沙箱/真机直接跑。本脚本是
 引擎行为的可执行验收单，覆盖：
@@ -319,12 +319,12 @@ def verify_engine_e2e(report: Report, rootfs: Path, bins: tuple[Path, Path]) -> 
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="ProOT 引擎验证脚本")
+    ap = argparse.ArgumentParser(description="proot 引擎验证脚本")
     ap.add_argument("--quick", action="store_true", help="跳过引擎 e2e（A+B 层）")
     ap.add_argument("--rootfs", default=None, help="指定 Alpine rootfs 路径")
     args = ap.parse_args()
 
-    print("ProOT 引擎验证（py 验证层）")
+    print("proot 引擎验证（py 验证层）")
     print(f"仓库根：{REPO_ROOT}")
 
     report = Report()

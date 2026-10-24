@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""post-install 供给钩子（ProOT 引擎内嵌 Python 运行时，M8）。
+"""post-install 供给钩子（proot 引擎内嵌 Python 运行时，M8）。
 
 引擎在发行版安装完成、DNS/hosts 初始化之后，于容器内执行本脚本
 （`moxsh-proot-distro install <id>` 触发；rootfs 无 python3 时优雅跳过）。

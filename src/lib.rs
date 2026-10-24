@@ -1,4 +1,4 @@
-//! ProOT 容器引擎（Rust 核心，clean-room）。
+//! proot 容器引擎（Rust 核心，clean-room）。
 //!
 //! 本 crate 是 **moxsh-proot** 引擎的 Rust 侧主体：ptrace 路径翻译核心
 //! （[`proot::ptrace`]）、ELF/shebang 解析（[`proot::elf`]）、符号链接治理

@@ -207,5 +207,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
-          files: dist/SHA256SUMS
+          # 2026-10-25 事故修复：原先只传 dist/SHA256SUMS，漏传逐资产 <asset>.sha256——
+          # bash 安装器 fetch_asset 按 <资产>.sha256 成对寻址，缺文件即「放不下就不装」
+          # 直接 die（实跑 curl|bash 复现：主二进制下载成功 → .sha256 404 → 安装中止）。
+          # 两者都要：SHA256SUMS 供人肉核对，<asset>.sha256 供安装器自动拉取。
+          files: |
+            dist/SHA256SUMS
+            dist/*.sha256
           fail_on_unmatched_files: true

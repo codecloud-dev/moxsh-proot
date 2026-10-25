@@ -43,8 +43,11 @@ die()  { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 #   2. MOXSH_PROOT_SOURCE=github|gitee 强制选端（不猜 URL）；
 #   3. 自动探测（默认）。
 #
-# 探测端点选轻量 raw README（几十 KB，不计速只计可达与握手耗时）；
-# 两端都不可达时默认 GitHub——错误信息指向标准源，且瞬时抖动下
+# 探测端点选轻量资产文件：本架构主二进制的 .sha256 校验文件（Release 资产，
+# 几十字节，不计速只计可达与握手耗时）。语义从「仓库可达」升级为「资产可达」：
+# 2026-10-25 实跑发现 Gitee release 只有源码包、无二进制资产（raw 探测会误判
+# 「可达」），国内用户被选中后白等一轮 404 才切源。探资产则无资产的端自动落选。
+# 两端资产都不可达时默认 GitHub——错误信息指向标准源，且瞬时抖动下
 # GitHub 的全球可达性通常更好。
 probe_seconds() {
   # $1 = URL；成功输出耗时（秒），失败输出空。
@@ -66,8 +69,8 @@ pick_source() {
     set_source_gitee; return
   fi
   local gh_s gitee_s
-  gh_s="$(probe_seconds "https://raw.githubusercontent.com/${GITHUB_REPO}/main/README.md")"
-  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/raw/main/README.md")"
+  gh_s="$(probe_seconds "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}/moxsh-proot-${TRIPLE_ARCH}-linux-android.sha256")"
+  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/releases/download/${RELEASE}/moxsh-proot-${TRIPLE_ARCH}-linux-android.sha256")"
   if [ -n "$gitee_s" ] && { [ -z "$gh_s" ] || awk -v g="$gitee_s" -v h="$gh_s" 'BEGIN{exit !(g<h)}'; }; then
     set_source_gitee
   else

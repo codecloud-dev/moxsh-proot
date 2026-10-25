@@ -2,6 +2,8 @@
 # install-moxsh-proot.sh 国内外分流逻辑回归测试（CI docs-check 调用，无网络）。
 #
 # 做法：从安装器提取「分流段」（probe_seconds / pick_source / set_source_*），
+# 探测语义：端点为本架构主二进制的 .sha256 资产（Release），非仓库 raw——
+# Gitee release 无二进制资产的端自动落选（2026-10-25 生产实况）。
 # 在子 shell 里 mock curl 的探测结果，验证选端决策与 URL 形态。
 # 覆盖 7 个用例：国内快 / 国外快 / 国外快但 gitee 慢 / 双端不可达兜底 /
 # 强制 gitee / 强制 github / 自定义镜像；另断言两端 archive URL 形态。
@@ -36,7 +38,7 @@ mock_pick() {
         local url="" a
         for a in "$@"; do case "$a" in http*) url="$a";; esac; done
         case "$url" in
-          *raw.githubusercontent.com*)
+          *github.com*)
             [ -n "$GH_PROBE" ] && { echo "$GH_PROBE"; return 0; }; return 22 ;;
           *gitee.com*)
             [ -n "$GITEE_PROBE" ] && { echo "$GITEE_PROBE"; return 0; }; return 22 ;;
@@ -65,7 +67,7 @@ mock_switch() {
         local url="" a
         for a in "$@"; do case "$a" in http*) url="$a";; esac; done
         case "$url" in
-          *raw.githubusercontent.com*)
+          *github.com*)
             [ -n "$GH_PROBE" ] && { echo "$GH_PROBE"; return 0; }; return 22 ;;
           *gitee.com*)
             [ -n "$GITEE_PROBE" ] && { echo "$GITEE_PROBE"; return 0; }; return 22 ;;
@@ -140,6 +142,33 @@ check "回退切换 github→gitee" \
 check "回退切换 gitee→github" \
   "$(mock_switch 0.10 0.10 gitee 'switch_source')" \
   github "github.com/codecloud-dev/moxsh-proot/releases/download" "/archive/refs/tags/"
+
+# 11) Gitee 仓库可达但 Release 无二进制资产（2026-10-25 生产实况复刻）：
+#     raw README 探测会误判「gitee 可达」→ 用户被选中后 404 才切源；
+#     资产探测下 gitee 自动落选，直接选 github。
+mock_asset_only_gh() {
+  env GITHUB_REPO="codecloud-dev/moxsh-proot" \
+    GITEE_REPO="thousand-code-crafts/moxsh-proot" \
+    RELEASE="proot-latest" \
+    bash -c '
+      curl() {
+        local url="" a
+        for a in "$@"; do case "$a" in http*) url="$a";; esac; done
+        case "$url" in
+          *github.com*) echo 0.30; return 0 ;;
+          *gitee.com*raw*) echo 0.10; return 0 ;;
+          *gitee.com*) return 22 ;;
+        esac
+        return 22
+      }
+      log() { :; }
+      source "'"$TMP"'/pick.sh"
+      pick_source >/dev/null 2>&1
+      echo "$SOURCE|$BASE_URL|$ARCHIVE_URL"
+    '
+}
+check "Gitee 有仓库无资产 → 选 github（不白等 404）" \
+  "$(mock_asset_only_gh)" github "github.com/codecloud-dev/moxsh-proot/releases/download"
 
 # 10) custom 源不可切换（用户显式镜像，不擅自换端）：SOURCE/BASE_URL 原样不动
 check "custom 源拒绝切换" \

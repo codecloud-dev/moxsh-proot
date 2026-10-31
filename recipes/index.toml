@@ -53,3 +53,39 @@ description = "一键全家桶：XFCE + 浏览器 + 中文 + VNC"
 tags = "desktop,gui,exclusive"
 fan_only = true
 script = "fanbox.sh"
+
+# ── ProoT 增值服务（proot-pro，按月订阅 ¥5.99/30 天）专属配方 ──
+# 以下配方 requires = "proot-pro"：仅在设备持有有效订阅授权时放行
+# （redeem::has_entitlement 判定，离线也按到期日生效）。个人版不含这些能力。
+
+[[recipe]]
+id = "pro-gpu"
+name = "GPU / WebGPU 加速透传"
+description = "容器内启用 Mesa/EGL/Vulkan 与 WebGPU 转发支持，让图形与 AI 推理能用上宿主 GPU"
+tags = "pro,perf,gpu"
+requires = "proot-pro"
+script = "pro-gpu.sh"
+
+[[recipe]]
+id = "pro-nested"
+name = "嵌套容器（Docker / Podman）"
+description = "在 ProoT 容器内再跑 Docker/Podman，支持镜像构建与容器编排"
+tags = "pro,container,docker"
+requires = "proot-pro"
+script = "pro-nested.sh"
+
+[[recipe]]
+id = "pro-systemd"
+name = "systemd 常驻（完整 init）"
+description = "让容器以 systemd 作为 PID 1 运行，支持服务自启、套接字激活与日志归集"
+tags = "pro,init,service"
+requires = "proot-pro"
+script = "pro-systemd.sh"
+
+[[recipe]]
+id = "pro-snapshot"
+name = "容器快照与克隆"
+description = "对 rootfs 做增量快照并一键克隆，支持备份还原与多实例并行"
+tags = "pro,backup,clone"
+requires = "proot-pro"
+script = "pro-snapshot.sh"

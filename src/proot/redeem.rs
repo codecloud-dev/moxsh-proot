@@ -23,7 +23,9 @@
 //!   转发（Rust 不引 reqwest）。设备令牌是本地随机串（URL 安全），泄漏=换个设备，
 //!   不含任何可伪造材料。
 //! - **缓存 + TTL**：`entitlements.toml` 带 `fetched_at`，超过 [`ENTS_TTL_DAYS`] 天
-//!   视为陈旧（门控显示 🔒 并提示 `mox redeem status` 刷新）；吊销在 TTL 内生效。
+//!   视为陈旧（永久授权门控显示 🔒 并提示 `mox redeem status` 刷新；吊销在 TTL 内生效）。
+//!   **有限期订阅**（`exp>0`，如 `proot-pro` 月度）例外：即便缓存陈旧也按 `exp` 判定，
+//!   离线 30 天仍能用到到期当天，过后立即失效（服务端已承诺该到期时间）。
 //! - **无灰度开关**：商品是正式商业功能（不像 fan 有 canary），随时可用。
 //!
 //! 与后端（mox-id）的契约（实现/改动任一侧必须同步另一侧）：
@@ -425,20 +427,36 @@ pub fn ents_fresh(root: &Path) -> bool {
     }
 }
 
-/// 门控查询：新鲜缓存里是否有指定商品的有效授权（exp 0=永久，过期视同无）。
-/// 陈旧/无缓存 → false（调用方应提示 `mox redeem status` 刷新）。
+/// 门控查询：是否有指定商品的有效授权。
+///
+/// 两套判定逻辑（对应两类商品）：
+/// - **有限期订阅**（如 `proot-pro` 月度，`exp>0`）：即便授权缓存已陈旧也**尊重到期日**，
+///   即离线 30 天仍能用到到期当天，过后立即失效（用户 2026-10-31 要求）。服务端已承诺
+///   该到期时间，客户端无需联网即可判定。
+/// - **永久授权**（`exp==0`）：依赖 7 天缓存 TTL 维持可吊销性——缓存陈旧则判无，
+///   提示用户执行 `mox redeem status` 刷新（与旧行为一致）。
 pub fn has_entitlement(root: &Path, product_id: &str) -> bool {
-    if !ents_fresh(root) {
-        return false;
-    }
     let now = now_unix();
-    load_ents(root)
-        .map(|c| {
-            c.ents
-                .iter()
-                .any(|e| e.product_id == product_id && (e.exp == 0 || e.exp > now))
-        })
-        .unwrap_or(false)
+    let cache = match load_ents(root) {
+        Some(c) => c,
+        None => return false,
+    };
+    for e in &cache.ents {
+        if e.product_id != product_id {
+            continue;
+        }
+        if e.exp == 0 {
+            // 永久授权：陈旧缓存不可信（可能已被吊销），需刷新后才放行
+            if ents_fresh(root) {
+                return true;
+            }
+        } else if e.exp > now {
+            // 有限期订阅：按服务端承诺的到期日判定，离线也有效
+            return true;
+        }
+        // exp<=now 的有限期授权：已过期，视为无（继续检查其余条目）
+    }
+    false
 }
 
 /// `status`：联网拉取 → 落盘缓存 → 返回授权列表（空 = 未购买/未兑换）。

@@ -69,8 +69,8 @@ pick_source() {
     set_source_gitee; return
   fi
   local gh_s gitee_s
-  gh_s="$(probe_seconds "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}/moxsh-proot-${TRIPLE_ARCH}-linux-android.sha256")"
-  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/releases/download/${RELEASE}/moxsh-proot-${TRIPLE_ARCH}-linux-android.sha256")"
+  gh_s="$(probe_seconds "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}/moxsh-proot-${ASSET_SUFFIX}.sha256")"
+  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/releases/download/${RELEASE}/moxsh-proot-${ASSET_SUFFIX}.sha256")"
   if [ -n "$gitee_s" ] && { [ -z "$gh_s" ] || awk -v g="$gitee_s" -v h="$gh_s" 'BEGIN{exit !(g<h)}'; }; then
     set_source_gitee
   else
@@ -104,29 +104,44 @@ switch_source() {
 
 
 # ---------------------------------------------------------------- 环境探测
-# PREFIX：Termux 会话必然设置；裸跑（如 ssh 进 Termux）时按已知路径兜底。
-PREFIX="${PREFIX:-}"
-if [ -z "$PREFIX" ]; then
-  for c in \
-    /data/data/com.termux/files/usr \
-    /data/data/com.termux.dev/files/usr
-  do
-    if [ -d "$c" ]; then PREFIX="$c"; break; fi
-  done
+# 平台判定：存在 Termux 数据目录即视为 Android(Termux)，否则按桌面 Linux 处理
+# （Ubuntu/Debian/Arch 等均可装，不再硬绑 Termux）。
+IS_ANDROID=0
+if [ -d /data/data/com.termux/files/usr ]; then
+  IS_ANDROID=1; PREFIX="${PREFIX:-/data/data/com.termux/files/usr}"
+elif [ -d /data/data/com.termux.dev/files/usr ]; then
+  IS_ANDROID=1; PREFIX="${PREFIX:-/data/data/com.termux.dev/files/usr}"
 fi
-[ -n "$PREFIX" ] || die "未检测到 Termux 环境（PREFIX 未设置）。
-本脚本面向原版 Termux。若你在其他环境，请显式指定安装目录：
+if [ -z "${PREFIX:-}" ]; then
+  if [ "$IS_ANDROID" = 1 ]; then
+    die "未检测到 Termux 环境（PREFIX 未设置）。请显式指定安装目录：
   PREFIX=/your/prefix bash install-moxsh-proot.sh"
+  else
+    # 桌面 Linux：默认装到 ~/.local（无需 root，符合 FHS 用户目录惯例）。
+    PREFIX="${HOME:-$HOME}/.local"
+  fi
+fi
 
-# 架构：moxsh-proot 提供 aarch64（主流设备）与 x86_64（模拟器/Chromebook）两版。
+# 架构：moxsh-proot 提供 aarch64 与 x86_64 两版（Android + 桌面 Linux 均覆盖）。
 case "$(uname -m)" in
-  aarch64|arm64)  TRIPLE_ARCH="aarch64" ;;
-  x86_64|amd64)   TRIPLE_ARCH="x86_64" ;;
+  aarch64|arm64)  TRIPLE_ARCH="aarch64"; ARCH_ALIAS="arm64" ;;
+  x86_64|amd64)   TRIPLE_ARCH="x86_64";  ARCH_ALIAS="amd64" ;;
   armv7l|armv8l|arm)
     die "检测到 32 位 ARM（$(uname -m)），暂不提供预编译二进制。
 请从源码构建：https://github.com/${GITHUB_REPO}#从源码构建" ;;
   *) die "不支持的架构: $(uname -m)" ;;
 esac
+
+# 资产后缀：Android 用 -linux-android；桌面 Linux 用 -linux-<arch>（glibc），
+# 检测到 musl 时切 -linux-<arch>-musl 静态版（零依赖，适合 Alpine 等）。
+if [ "$IS_ANDROID" = 1 ]; then
+  ASSET_SUFFIX="${TRIPLE_ARCH}-linux-android"
+else
+  ASSET_SUFFIX="linux-${ARCH_ALIAS}"
+  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    ASSET_SUFFIX="linux-${ARCH_ALIAS}-musl"
+  fi
+fi
 
 BINDIR="${PREFIX}/bin"
 [ -d "$BINDIR" ] || mkdir -p "$BINDIR"
@@ -200,13 +215,13 @@ install_bin() {
 }
 
 # ---------------------------------------------------------------- 主体安装
-fetch_asset "moxsh-proot-${TRIPLE_ARCH}-linux-android"
-install_bin "moxsh-proot-${TRIPLE_ARCH}-linux-android" "moxsh-proot"
+fetch_asset "moxsh-proot-${ASSET_SUFFIX}"
+install_bin "moxsh-proot-${ASSET_SUFFIX}" "moxsh-proot"
 log "安装完成：${BINDIR}/moxsh-proot"
 
 # distro 管理二进制（rootfs 安装/登录/备份；与引擎同一套 ptrace 核心）。
-fetch_asset "moxsh-proot-distro-${TRIPLE_ARCH}-linux-android"
-install_bin "moxsh-proot-distro-${TRIPLE_ARCH}-linux-android" "moxsh-proot-distro"
+fetch_asset "moxsh-proot-distro-${ASSET_SUFFIX}"
+install_bin "moxsh-proot-distro-${ASSET_SUFFIX}" "moxsh-proot-distro"
 log "安装完成：${BINDIR}/moxsh-proot-distro"
 
 # ---------------------------------------------------------------- 控制台入口

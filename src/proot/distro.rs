@@ -435,15 +435,19 @@ impl DistroManager {
             },
         };
 
-        // 2) SHA-256 校验（spec.sha256 为 None 时跳过并告警——发布前必须内置）
-        if let Some(expected) = spec.sha256 {
+        // 2) SHA-256 校验：优先用 spec 内置值；为空时尝试运行时拉取清单
+        //    （fetch_expected_sha256：http 镜像可用；https 因 std 无 TLS 栈返回 None）。
+        //    两者皆空才告警跳过——不再静默跳过，留痕便于排障；若清单拉到则真正校验。
+        let expected: Option<String> =
+            spec.sha256.map(|s| s.to_string()).or_else(|| fetch_expected_sha256(spec));
+        if let Some(exp) = expected {
             cb("校验 SHA-256", 0, 1);
-            if let Err(e) = verify_file_sha256(&tar_path, expected) {
+            if let Err(e) = verify_file_sha256(&tar_path, &exp) {
                 let _ = fs::remove_dir_all(&rootfs);
                 return Err(e);
             }
         } else {
-            cb("警告：该发行版尚未内置校验值，跳过 SHA-256", 0, 1);
+            cb("警告：该发行版暂无可用校验值（内置为空且清单拉取不可用），跳过 SHA-256", 0, 1);
         }
 
         // 3) 解压
@@ -646,18 +650,23 @@ impl DistroManager {
 
     /// 生成登录命令行（完整 proot 调用，供 PTY 层直接执行；
     /// 对齐 proot-distro `login --get-proot-cmd` 的输出形态）。
-    pub fn login_cmd(&self, id: &str) -> ProotResult<String> {
+    /// `shell_override` 非空时（如 `shell` 子命令要非登录 `/bin/sh`）优先使用它，
+    /// 避免调用方再做脆弱的字符串 `rfind` 手术。
+    pub fn login_cmd(&self, id: &str, shell_override: Option<&str>) -> ProotResult<String> {
         self.check_id(id)?; // P1：id 路径白名单
         let rootfs = self.distro_rootfs(id);
         if !rootfs.is_dir() {
             return Err(ProotError::DistroNotInstalled(id.to_string()));
         }
         // 默认登录 shell 探测：发行版有 bash 用 bash -l，否则 sh -l。
-        let shell = if rootfs.join("bin/bash").exists() {
-            "/bin/bash -l"
-        } else {
-            "/bin/sh -l"
-        };
+        // shell_override 非空时（如 shell 子命令要非登录 /bin/sh）优先使用它。
+        let shell = shell_override.unwrap_or_else(|| {
+            if rootfs.join("bin/bash").exists() {
+                "/bin/bash -l"
+            } else {
+                "/bin/sh -l"
+            }
+        });
         let cfg = ProotConfig::with_distro_defaults(&rootfs);
         let mut cmd: Vec<String> = Vec::new();
         // 输出**绝对路径**的引擎兄弟二进制：调用方（含 App 终端会话）无需依赖 PATH，
@@ -1063,7 +1072,7 @@ mod tests {
         // 无 rootfs 时报未安装。
         let m = DistroManager::new(Path::new("/nonexistent-moxsh"));
         assert!(matches!(
-            m.login_cmd("ubuntu"),
+            m.login_cmd("ubuntu", None),
             Err(ProotError::DistroNotInstalled(_))
         ));
     }

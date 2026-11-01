@@ -199,7 +199,9 @@ jobs:
           rm -f SHA256SUMS *.sha256
           sha256sum -- * > SHA256SUMS
           while read -r hash file; do
-            printf '%s\n' "$hash" > "${file}.sha256"
+            # 两列格式 "<hash>  <文件名>"：安装脚本 sha256sum -c 要求两列，
+            # 首列 hash 同时兼容 Go 安装器按首字段解析。
+            printf '%s  %s\n' "$hash" "$file" > "${file}.sha256"
           done < SHA256SUMS
           echo "---- SHA256SUMS ----"
           cat SHA256SUMS

@@ -362,6 +362,21 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
                 }
                 env.push(v.to_string());
             }
+            "--kill-on-exit" => {
+                // 接受：moxsh-proot 作为 ptrace tracer 在退出时统一回收所有子 tracee，
+                // 等价于 proot-distro 的 --kill-on-exit，无需额外 flag（login_cmd 默认带此旗标）。
+            }
+            "--link2symlink" => {
+                // 接受：绝对符号链接规范化由 symlink_fix 模块在落盘/运行时处理
+                // （proot-distro link2symlink 的升级解法），无需运行时 flag。
+            }
+            other if other.starts_with("--change-id=") => {
+                // --change-id=uid:gid：对齐上游 fake_id0。本引擎仅实现 0:0（fake root）。
+                let v = &other["--change-id=".len()..];
+                if v.split(':').next().map(|u| u == "0").unwrap_or(false) {
+                    fake_root = true;
+                }
+            }
             other if other.starts_with('-') => {
                 // 注意：宏参数里的相邻字符串字面量**不会**隐式拼接（与普通表达式
                 // 不同），必须写成单个字面量，否则 rustc 报 "expected `,`"。
@@ -1064,7 +1079,7 @@ fn cmd_login(mgr: &DistroManager, args: &[&str]) -> String {
     let Some(id) = args.first() else {
         return "用法: proot-distro login <id>".into();
     };
-    match mgr.login_cmd(id) {
+    match mgr.login_cmd(id, None) {
         Ok(cmd) => cmd,
         Err(e) => format!("proot-distro: {}", e),
     }
@@ -1079,16 +1094,10 @@ fn cmd_shell(mgr: &DistroManager, args: &[&str]) -> String {
     if !rootfs.is_dir() {
         return format!("proot-distro: 发行版未安装: {}", id);
     }
-    // 与 login 相同骨架，仅 shell 换 /bin/sh（非 -l）。
-    match mgr.login_cmd(id) {
-        Ok(mut cmd) => {
-            // 把末尾 shell 段替换为 /bin/sh。
-            if let Some(pos) = cmd.rfind(" /bin/") {
-                cmd.truncate(pos);
-                cmd.push_str(" /bin/sh");
-            }
-            cmd
-        }
+    // 与 login 相同骨架，仅 shell 换成非登录 /bin/sh（通过 shell_override 传参，
+    // 不再用 rfind 字符串手术，避免 /usr/bin/zsh、--bind 含 /bin/ 等场景错位）。
+    match mgr.login_cmd(id, Some("/bin/sh")) {
+        Ok(cmd) => cmd,
         Err(e) => format!("proot-distro: {}", e),
     }
 }

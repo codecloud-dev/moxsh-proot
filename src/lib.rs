@@ -192,7 +192,7 @@ unsafe extern "C" fn moxsh_proot_login_impl(
         let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(moxsh_root)) else {
             return -1;
         };
-        match proot::distro::DistroManager::new(std::path::Path::new(&root)).login_cmd(&id) {
+        match proot::distro::DistroManager::new(std::path::Path::new(&root)).login_cmd(&id, None) {
             Ok(cmd) => write_cstr_buf(out_buf, cap, &cmd),
             Err(e) => e.to_code(),
         }

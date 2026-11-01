@@ -1,6 +1,6 @@
 [package]
 name = "moxsh-proot"
-version = "1.0.1"
+version = "0.9.0"
 edition = "2021"
 description = "proot 容器引擎：五语言融合（Rust ptrace 核心 / Go 安装器 / Python 脚本运行时 / Lua 钩子 / C JNI 桥）的无 root Linux 容器引擎，moxsh 系列专用。"
 license = "GPL-3.0"
@@ -22,9 +22,34 @@ libc = "=0.2.189"
 tar = "=0.4.46"
 flate2 = "=1.1.10"
 
+# TUI 控制台（0.4.0，roadmap §6）：仅 `tui` feature 启用，桌面二进制 moxsh-proot-tui 专用。
+# 不污染 Android NDK 构建——cdylib 在 feature 关闭时不编入 ratatui/crossterm。
+# 版本用 ^ 容差由 Cargo.lock 钉死（首次解析后转 = 精确锁定，对齐全仓策略）。
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
+
 # 构建脚本依赖：cc 用于在 Android 目标下把 c/proot_bridge.c 编入 cdylib（见 build.rs）。
 [build-dependencies]
 cc = "=1.5.1"
+
+[features]
+# 默认不含 TUI：引擎 cdylib 与 `moxsh-proot`/`moxsh-proot-distro` 保持零额外依赖。
+# 桌面发布与 `moxsh-proot-tui` 二进制启用本 feature。
+default = []
+tui = ["dep:ratatui", "dep:crossterm"]
+
+[[bin]]
+name = "moxsh-proot"
+path = "src/bin/moxsh-proot.rs"
+
+[[bin]]
+name = "moxsh-proot-distro"
+path = "src/bin/moxsh-proot-distro.rs"
+
+[[bin]]
+name = "moxsh-proot-tui"
+path = "src/bin/moxsh-proot-tui.rs"
+required-features = ["tui"]
 
 [profile.release]
 opt-level = 3

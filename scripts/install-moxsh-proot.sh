@@ -166,16 +166,49 @@ fi
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/moxsh-proot.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
-# 带一次切源重试的资产下载（$1 = 资产名，$2 = 输出路径）。
-# 当前源缺资产（404）/ 不通时，自动回退另一端重试一次（见 switch_source）。
+# 多级镜像兜底通道（国内外分流，2026-11 起）：
+#   - ghproxy 类：把 GitHub Release 完整 URL 整体前缀，国内直连 GitHub 超时时的兜底；
+#     实测 ghproxy.net 对 Release 资产返回 200。
+#   - 官网静态通道：mox-site 自建 CDN 直出二进制（与 GitHub/Gitee 解耦，官网不依赖
+#     第三方即可下发）。需 mox-site 仓库部署 /dl 目录并同步二进制；未部署时该通道
+#     自然落空，不影响前序通道。
+# 注：jsDelivr 仅服务仓库内文件、不服务 Release 二进制资产（实测 404），
+# 故二进制兜底统一走 ghproxy；脚本 raw 的 jsDelivr 备援见 README。
+MIRROR_PROXIES="https://ghproxy.net/https://"
+WEBSITE_DL="${MOXSH_PROOT_WEBSITE_DL:-https://mox-site.pages.dev/dl}"
+
+# 由 GitHub Release 基址派生 ghproxy 镜像候选 URL 列表。
+mirror_urls() {
+  local base="$1" asset="$2"
+  local url="${base}/${asset}"
+  for m in $MIRROR_PROXIES; do
+    printf '%s%s\n' "$m" "$url"
+  done
+}
+
+# 带切源重试 + 多级镜像兜底的资产下载（$1 = 资产名，$2 = 输出路径）。
+# 兜底顺序：当前选源 → 另一端（github↔gitee）→ ghproxy 镜像 → 官网静态通道。
 fetch_asset_file() {
-  local asset="$1" out="$2"
+  local asset="$1" out="$2" cand
+  # 1) 当前选源（GitHub / Gitee 二选一；Gitee 现已含二进制资产，国内直连可用）
   if curl -fSL --retry 3 --connect-timeout 15 -o "$out" "${BASE_URL}/${asset}"; then
     return 0
   fi
+  # 2) 回退另一端（github ↔ gitee）
   if switch_source; then
-    curl -fSL --retry 3 --connect-timeout 15 -o "$out" "${BASE_URL}/${asset}"
-    return $?
+    if curl -fSL --retry 3 --connect-timeout 15 -o "$out" "${BASE_URL}/${asset}"; then
+      return 0
+    fi
+  fi
+  # 3) ghproxy 镜像（GitHub Release 整体前缀，国内直连 GitHub 超时兜底）
+  for cand in $(mirror_urls "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}" "$asset"); do
+    if curl -fSL --retry 2 --connect-timeout 12 -o "$out" "$cand"; then
+      return 0
+    fi
+  done
+  # 4) 官网静态通道（兜底中的兜底；需官网部署 /dl）
+  if curl -fSL --retry 2 --connect-timeout 12 -o "$out" "${WEBSITE_DL}/${asset}"; then
+    return 0
   fi
   return 1
 }

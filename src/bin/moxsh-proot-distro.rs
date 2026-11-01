@@ -26,6 +26,17 @@ fn main() {
         // login/shell/launch 需要真起引擎（其余子命令是文本输出，走共享路由）。
         Some("login") | Some("shell") => exec_login(&root, &args),
         Some("launch") => exec_launch(&root, &args),
+        Some("tui") => {
+            #[cfg(feature = "tui")]
+            {
+                moxsh_proot::proot::tui::run_tui()
+            }
+            #[cfg(not(feature = "tui"))]
+            {
+                eprintln!("moxsh-proot-distro: 本构建未启用 tui feature，无法进入 TUI 控制台。");
+                2
+            }
+        }
         _ => {
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             print!("{}", cli::proot_distro(&refs, &root));

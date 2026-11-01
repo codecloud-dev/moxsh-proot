@@ -51,6 +51,12 @@ pub fn route(command: &str, args: &[&str], moxsh_root: &Path) -> String {
 /// 与 [`route`] 的分工：`route` 服务 App 内嵌 shell 的**文本交互**；
 /// 本函数服务**真执行**（原版 Termux 用户直接 `moxsh-proot ...`）。
 pub fn run_native(args: &[String]) -> i32 {
+    // `tui` 子命令（路线图 0.4.0，特性门控）：仅桌面 `--features tui` 构建提供，
+    // 拉起 ratatui 控制台。原版 Termux 无此子命令（App 内自有原生 UI）。
+    #[cfg(feature = "tui")]
+    if args.first().map(|s| s.as_str() == "tui").unwrap_or(false) {
+        return crate::proot::tui::run_tui();
+    }
     // mx: 短链启动（0.2.0）：-r/-R/-S 的值是 mx: 形式时，本二进制直接从
     // 短链走「未装自动装 → 进容器」，无需用户先跑 distro install。
     if let Some(spec) = find_mx_rootfs_arg(args) {

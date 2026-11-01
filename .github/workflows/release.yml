@@ -217,3 +217,42 @@ jobs:
             dist/SHA256SUMS
             dist/*.sha256
           fail_on_unmatched_files: true
+
+  # 国内镜像：把全部 Release 资产（引擎 + distro + Go 安装器 + 校验文件）同步到
+  # Gitee（thousand-code-crafts/moxsh-proot release 1217672）。Gitee 是 GitHub 的
+  # 源码镜像，但「不自动同步二进制资产」——所以国内用户此前选 Gitee 源会 404。
+  # 本步用 GITEE_TOKEN 把二进制也推上去，Gitee 路径对国内用户真正可用。
+  # 前置：仓库 Secrets 配置 GITEE_TOKEN（thousand-code-crafts 满权限写令牌）。
+  mirror-gitee:
+    name: 镜像到 Gitee（国内线路）
+    needs: [checksums]
+    runs-on: ubuntu-latest
+    env:
+      GITEE_OWNER: thousand-code-crafts
+      GITEE_REPO: moxsh-proot
+      GITEE_RID: "1217672"
+    steps:
+      - uses: actions/checkout@v4
+      - name: 从 GitHub Release 拉回全部资产
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
+        run: |
+          mkdir -p dist && cd dist
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --clobber
+      - name: 上传全部资产到 Gitee release
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          cd dist
+          ok=0; fail=0
+          for f in *; do
+            [ "$f" = "SHA256SUMS" ] && continue
+            code=$(curl -s -o /tmp/g.json -w '%{http_code}' -X POST \
+              -H "Authorization: token ${GITEE_TOKEN}" \
+              "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files" \
+              -F "file=@${f}")
+            if [ "$code" = "200" ] || [ "$code" = "201" ]; then ok=$((ok+1)); echo "OK   $f"; else fail=$((fail+1)); echo "FAIL $f (HTTP $code): $(head -c 120 /tmp/g.json)"; fi
+          done
+          echo "=== Gitee 同步：$ok 成功 / $fail 失败 ==="
+          [ "$fail" -eq 0 ]

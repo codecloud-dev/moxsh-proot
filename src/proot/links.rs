@@ -95,6 +95,11 @@ impl LinkTable {
         };
         Ok(parse_links_toml(&text))
     }
+
+    /// 所有短链名（按字典序，BTreeMap 保证）。供 TUI 控制台遍历展示。
+    pub fn names(&self) -> impl Iterator<Item = &str> + '_ {
+        self.links.keys().map(|s| s.as_str())
+    }
 }
 
 /// 解析 `links.toml` 极简子集。

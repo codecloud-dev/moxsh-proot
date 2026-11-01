@@ -40,6 +40,12 @@ pub mod script;
 pub mod settings;
 pub mod symlink_fix;
 pub mod translate;
+/// TUI 控制台（0.4.0，roadmap §6）：ratatui 第三二进制 `moxsh-proot-tui` 与
+/// `moxsh-proot tui` / `moxsh-proot-distro tui` 子命令共用。复用本模块全部
+/// 管理能力（DistroManager / RecipeIndex / links / Settings / net / cli）。
+/// 仅 `tui` feature 启用，不污染 Android NDK 构建。
+#[cfg(feature = "tui")]
+pub mod tui;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

@@ -10,13 +10,13 @@
   <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/moxsh-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
   <img src="https://img.shields.io/github/v/release/codecloud-dev/moxsh-proot?label=Latest&color=37d5d3" alt="Latest">
   <img src="https://img.shields.io/github/stars/codecloud-dev/moxsh-proot?style=social" alt="GitHub Stars">
-  <img src="https://img.shields.io/badge/version-1.0.0-8a7bff" alt="version">
+  <img src="https://img.shields.io/badge/version-0.9.0-8a7bff" alt="version">
   <img src="https://img.shields.io/badge/license-GPL--3.0-37d5d3" alt="license">
   <img src="https://img.shields.io/badge/Core-Rust-000?logo=rust&logoColor=white" alt="Rust 内核">
   <img src="https://img.shields.io/badge/Installer-Go-00ADD8?logo=go&logoColor=white" alt="Go 安装器">
   <img src="https://img.shields.io/badge/Hooks-Python%20%2F%20Lua-3776AB?logo=python&logoColor=white" alt="钩子脚本">
   <img src="https://img.shields.io/badge/Bridge-C-A8B9CC?logo=c&logoColor=white" alt="C 桥">
-  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Termux-3DDC84?logo=android&logoColor=white" alt="Linux / Termux">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="桌面 Linux / Termux(Android)">
 </p>
 
 
@@ -125,7 +125,7 @@ moxsh-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，�
 
 ## 🚀 快速上手
 
-### 🔹 一键安装（原版 Termux / Linux）
+### 🔹 一键安装（桌面 Linux / Termux / Android 全适配）
 
 **方式一：短命令**（推荐）——整条安装引导压成一段 base64 内嵌，复制即跑，
 不挑域名；GitHub raw 不通自动回退 Gitee（国内免折腾镜像）：
@@ -151,8 +151,14 @@ curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scri
 curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
 ```
 
-零依赖（只要 curl + coreutils）。二进制按国内/国外自动探测选源下载，
-逐文件 sha256 校验，自动落盘 `moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
+零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux（x86_64/arm64）
+与 Termux（Android）自动识别安装目录与架构（glibc / musl 自动选静态版），不再只绑
+Termux。二进制按国内/国外自动探测选源下载，逐文件 sha256 校验，自动落盘
+`moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
+
+> **国内/国外都稳**：二进制已同步到 Gitee 发布（与 GitHub 同源），GitHub 直连
+> 超时自动回退 **Gitee** 源；若两端皆不通，再经 **ghproxy** 镜像兜底，最后可走
+> 官网静态通道（`MOXSH_PROOT_WEBSITE_DL`）。无需手动折腾。
 
 装完就能用：
 

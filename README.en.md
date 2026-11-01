@@ -10,13 +10,13 @@
   <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/moxsh-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
   <img src="https://img.shields.io/github/v/release/codecloud-dev/moxsh-proot?label=Latest&color=37d5d3" alt="Latest">
   <img src="https://img.shields.io/github/stars/codecloud-dev/moxsh-proot?style=social" alt="GitHub Stars">
-  <img src="https://img.shields.io/badge/version-1.0.0-8a7bff" alt="version">
+  <img src="https://img.shields.io/badge/version-0.9.0-8a7bff" alt="version">
   <img src="https://img.shields.io/badge/license-GPL--3.0-37d5d3" alt="license">
   <img src="https://img.shields.io/badge/Core-Rust-000?logo=rust&logoColor=white" alt="Rust core">
   <img src="https://img.shields.io/badge/Installer-Go-00ADD8?logo=go&logoColor=white" alt="Go installer">
   <img src="https://img.shields.io/badge/Hooks-Python%20%2F%20Lua-3776AB?logo=python&logoColor=white" alt="Hooks">
   <img src="https://img.shields.io/badge/Bridge-C-A8B9CC?logo=c&logoColor=white" alt="C bridge">
-  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Termux-3DDC84?logo=android&logoColor=white" alt="Linux / Termux">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20macOS%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="Linux / macOS / Termux(Android)">
 </p>
 
 
@@ -77,7 +77,7 @@ moxsh-proot is the infrastructure piece of the **MoX tool series**: the "PRoot d
 | :--- | :--- | :--- |
 | 0.2.0 | `mx:` shortlinks (`mx:alpine` installs on demand), on-disk launchers (type `kali` to enter), in-container Chinese environment (locale/fonts/IME), in-container console, base64 short command + CN/global auto-routing | In progress |
 | 0.3.0 | Recipe system (`mx:xfce` one-command desktops: XFCE/LXQt/KDE/MATE + dual VNC channels) | Planned |
-| 0.4.0 | TUI console (ratatui full-featured panel) | Planned |
+| 0.4.0 | TUI console (ratatui full-featured panel) | Implemented (v0.9.0 via `moxsh-proot-tui`) |
 | 1.0.0 | First stable release with shortlinks/recipes/TUI all in | Planned |
 
 Full decision log: [docs/roadmap.md](docs/roadmap.md).

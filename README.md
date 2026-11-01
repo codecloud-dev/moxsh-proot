@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Installer-Go-00ADD8?logo=go&logoColor=white" alt="Go 安装器">
   <img src="https://img.shields.io/badge/Hooks-Python%20%2F%20Lua-3776AB?logo=python&logoColor=white" alt="钩子脚本">
   <img src="https://img.shields.io/badge/Bridge-C-A8B9CC?logo=c&logoColor=white" alt="C 桥">
-  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="桌面 Linux / Termux(Android)">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20macOS%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="桌面 Linux / macOS / Termux(Android)">
 </p>
 
 
@@ -76,7 +76,7 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 | :--- | :--- | :--- |
 | 0.2.0 | `mx:` 短链系统（`mx:alpine` 即装即进）、落盘启动器（装了 kali 输 `kali` 就进）、容器内中文环境（locale/字体/输入法）、容器内控制台、base64 短命令 + 国内外自动分流 | 进行中 |
 | 0.3.0 | 配方系统（`mx:xfce` 一键桌面，XFCE/LXQt/KDE/MATE + VNC 双通道） | 规划中 |
-| 0.4.0 | TUI 控制台（ratatui 全功能面板） | 规划中 |
+| 0.4.0 | TUI 控制台（ratatui 全功能面板） | 已实现（0.9.0 随 `moxsh-proot-tui` 交付） |
 | 1.0.0 | 短链/配方/TUI 全齐的首个正式版 | 规划中 |
 
 完整决策记录见 [docs/roadmap.md](docs/roadmap.md)。
@@ -89,7 +89,7 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 | :--------------- | ---------------------------------------------- |
 | **Rust ptrace 引擎** | 路径翻译、多进程树跟踪、fake root 全部 Rust，内存安全、无外部运行时 |
 | **对齐上游命令面** | `-r/-0/-b/-w/-R/-e` 与 `--` 切分照旧，老用户零迁移；不支持的选项明确报错，不假装 |
-| **双二进制** | `moxsh-proot`（单命令容器）+ `moxsh-proot-distro`（四大发行版安装/登录/备份/恢复） |
+| **三二进制** | `moxsh-proot`（单命令容器）+ `moxsh-proot-distro`（四大发行版安装/登录/备份/恢复）+ `moxsh-proot-tui`（ratatui TUI 控制台） |
 | **显式解释器调用** | 动态 ELF 自动走 guest 自带 loader（qemu-user 同款方案），初始 exec 与运行时 execve 双覆盖 |
 | **符号链接全链路** | 绝对 target 链接（Alpine applet 形态）在 exec / stat / openat 自动解析，tar 裸解包的 rootfs 也能跑 |
 | **fake root** | uid/gid 显示为 0、chown/setuid 系伪装成功——不需要真 root，不碰系统分区 |
@@ -125,7 +125,7 @@ moxsh-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，�
 
 ## 🚀 快速上手
 
-### 🔹 一键安装（桌面 Linux / Termux / Android 全适配）
+### 🔹 一键安装（桌面 Linux / macOS / Termux / Android 全适配）
 
 **方式一：短命令**（推荐）——整条安装引导压成一段 base64 内嵌，复制即跑，
 不挑域名；GitHub raw 不通自动回退 Gitee（国内免折腾镜像）：
@@ -151,9 +151,9 @@ curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scri
 curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
 ```
 
-零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux（x86_64/arm64）
-与 Termux（Android）自动识别安装目录与架构（glibc / musl 自动选静态版），不再只绑
-Termux。二进制按国内/国外自动探测选源下载，逐文件 sha256 校验，自动落盘
+零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux / macOS
+（x86_64/arm64）与 Termux（Android）自动识别安装目录与架构（glibc / musl 自动选静态版），
+不再只绑 Termux。二进制按国内/国外自动探测选源下载，逐文件 sha256 校验，自动落盘
 `moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
 
 > **国内/国外都稳**：二进制已同步到 Gitee 发布（与 GitHub 同源），GitHub 直连
@@ -221,7 +221,7 @@ mox net             # 网络边界报告
 
 ### 🔹 系统要求
 
-- Linux 或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）
+- 桌面 Linux / macOS（x86_64 / arm64），或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）
 - 约 50 MB 可用空间（引擎 + 一个 minirootfs）
 
 ### 🔹 从源码构建
@@ -244,7 +244,7 @@ cargo build --release
 | :------------ | :----- | ----------------------------------- |
 | `src/proot/`  | Rust   | 引擎核心：ptrace 翻译、ELF/exec 链、发行版、网络栈、钩子发现 |
 | `src/bin/`    | Rust   | `moxsh-proot` / `moxsh-proot-distro` 两个独立二进制 |
-| `go/`         | Go     | 安装器 + 下载器（install/update/probe），Linux + Termux 双靶 |
+| `go/`         | Go     | 安装器 + 下载器（install/update/probe），Linux / macOS / Termux 三靶 |
 | `py/runtime/` | Python | 容器内钩子（供给检查 / 登录快照），宿主侧可直跑自证 |
 | `py/verify/`  | Python | 三层验证脚本（单测 + 钩子直跑 + 真实 rootfs e2e） |
 | `lua/`        | Lua    | 声明式配置（`proot.lua`）+ 钩子            |

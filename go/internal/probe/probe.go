@@ -95,15 +95,15 @@ func (d Distro) String() string {
 
 // Report 一次环境勘察的完整结果（纯数据，便于测试与序列化）。
 type Report struct {
-	Env     EnvKind
-	Distro  Distro
-	Libc    Libc
+	Env      EnvKind
+	Distro   Distro
+	Libc     Libc
 	GlibcVer float64 // glibc 主.次版本（如 2.39）；非 glibc 或未知为 0
-	Arch    string // runtime.GOARCH 口径：amd64 / arm64 / …
-	GOOS    string // runtime.GOOS：linux / android
-	IsRoot  bool
-	Prefix  string // Termux 的 $PREFIX；非 Termux 为空
-	Version string // 发行版版本（os-release VERSION_ID），仅展示
+	Arch     string  // runtime.GOARCH 口径：amd64 / arm64 / …
+	GOOS     string  // runtime.GOOS：linux / android
+	IsRoot   bool
+	Prefix   string // Termux 的 $PREFIX；非 Termux 为空
+	Version  string // 发行版版本（os-release VERSION_ID），仅展示
 }
 
 // InstallPath 返回引擎安装根目录。

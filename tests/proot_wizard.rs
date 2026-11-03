@@ -68,11 +68,14 @@ impl Drop for Sandbox {
 }
 
 /// 主路径：预置 alpine → 「已安装跳过」+ 数据根落 config.toml + 启动器/控制台落盘。
+///
+/// 显式 `--distro alpine` 指定（不依赖默认发行版），避免默认改值时本测试连带飘红
+/// （A#6 把默认从 alpine 改为 ubuntu 后，依赖默认值的旧断言会假阳性失败）。
 #[test]
 fn wizard_skips_installed_and_persists_root() {
     let sb = Sandbox::new("skip");
     sb.preinstall("alpine");
-    let out = sb.run(&["wizard"]);
+    let out = sb.run(&["wizard", "--distro", "alpine"]);
     assert!(out.status.success(), "wizard 应退出 0：{:?}", out);
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("已安装，跳过"), "输出：{}", stdout);
@@ -178,4 +181,26 @@ fn wizard_rejects_path_traversal_id() {
         !sb.cfg().join("config.toml").exists(),
         "拦截前不该写配置"
     );
+}
+
+/// 路径穿越防护（二进制 `login`/`shell` 入口）：`login ../../etc` 必须经过
+/// id 白名单校验，不得直接拼 rootfs 路径（否则 `..` 逃出 containers 目录做 chroot）。
+#[test]
+fn distro_login_rejects_path_traversal_id() {
+    let sb = Sandbox::new("distro-traversal");
+    for sub in ["login", "shell"] {
+        let out = sb.run(&[sub, "../../etc"]);
+        // 错误走 stderr（与 Unix 惯例一致），合并 stdout+stderr 一起判断。
+        let combined = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            combined.contains("参数非法") || combined.contains("非法发行版"),
+            "{} ../../etc 未拦下穿越：{}",
+            sub,
+            combined
+        );
+    }
 }

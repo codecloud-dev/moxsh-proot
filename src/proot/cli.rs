@@ -81,7 +81,7 @@ pub fn run_native(args: &[String]) -> i32 {
     // stdout 并退出 0，避免被当成「要执行的命令」因缺 -r 而 exit 2
     // （Termux 下表现为「输入 help 没反应就退出」）。
     // （`--help`/`-h` 已由 parse_native_args 返回空错误走用法分支，这里只补裸 `help` 与无参。）
-    if args.is_empty() || args.first().map_or(false, |a| a == "help") {
+    if args.is_empty() || args.first().is_some_and(|a| a == "help") {
         print_usage(&mut std::io::stdout());
         return 0;
     }
@@ -1168,28 +1168,52 @@ fn cmd_wizard(args: &[&str]) -> String {
 }
 
 /// `login <id>`：输出可执行的 proot 命令行（由 PTY 层执行）。
+/// `login <id|mx:名字>`：生成进容器命令串（供 App 终端会话的 PTY 直接执行）。
+///
+/// 与二进制 `exec_login` 互通：既接受普通发行版 id，也接受 `mx:` 短链
+/// （解析成发行版 id 后走同一条 [`DistroManager::login_cmd`] 通道）。
 fn cmd_login(mgr: &DistroManager, args: &[&str]) -> String {
-    let Some(id) = args.first() else {
-        return "用法: proot-distro login <id>".into();
+    let Some(spec) = args.first() else {
+        return "用法: proot-distro login <id|mx:名字>".into();
     };
-    match mgr.login_cmd(id, None) {
+    let id = if links::is_mx(spec) {
+        match links::resolve(spec, &links::load_user_links().unwrap_or_default()) {
+            Ok(ResolvedLink::Distro(id)) => id,
+            Ok(ResolvedLink::Url(_)) => {
+                return format!("proot-distro: 自定义短链 {} 需先 install 再 login", spec)
+            }
+            Err(e) => return format!("proot-distro: {}", e),
+        }
+    } else {
+        (*spec).to_string()
+    };
+    match mgr.login_cmd(&id, None) {
         Ok(cmd) => cmd,
         Err(e) => format!("proot-distro: {}", e),
     }
 }
 
-/// `shell <id>`：非登录 shell 快捷方式（等价 login 但用 /bin/sh）。
+/// `shell <id|mx:名字>`：非登录 shell 快捷方式（等价 login 但用 /bin/sh）。
+///
+/// 与 [`cmd_login`] 同源：支持普通 id 与 `mx:` 短链。
 fn cmd_shell(mgr: &DistroManager, args: &[&str]) -> String {
-    let Some(id) = args.first() else {
-        return "用法: proot-distro shell <id>".into();
+    let Some(spec) = args.first() else {
+        return "用法: proot-distro shell <id|mx:名字>".into();
     };
-    let rootfs = mgr.distro_rootfs(id);
-    if !rootfs.is_dir() {
-        return format!("proot-distro: 发行版未安装: {}", id);
-    }
+    let id = if links::is_mx(spec) {
+        match links::resolve(spec, &links::load_user_links().unwrap_or_default()) {
+            Ok(ResolvedLink::Distro(id)) => id,
+            Ok(ResolvedLink::Url(_)) => {
+                return format!("proot-distro: 自定义短链 {} 需先 install 再 shell", spec)
+            }
+            Err(e) => return format!("proot-distro: {}", e),
+        }
+    } else {
+        (*spec).to_string()
+    };
     // 与 login 相同骨架，仅 shell 换成非登录 /bin/sh（通过 shell_override 传参，
     // 不再用 rfind 字符串手术，避免 /usr/bin/zsh、--bind 含 /bin/ 等场景错位）。
-    match mgr.login_cmd(id, Some("/bin/sh")) {
+    match mgr.login_cmd(&id, Some("/bin/sh")) {
         Ok(cmd) => cmd,
         Err(e) => format!("proot-distro: {}", e),
     }
@@ -1240,48 +1264,47 @@ fn cmd_restore(mgr: &DistroManager, args: &[&str], _moxsh_root: &Path) -> String
 
 // ==================== mx: 短链启动（0.2.0，docs/roadmap.md §1） ====================
 
-/// 短链启动核心：解析 `mx:xxx` → 未装自动装 → 起引擎进容器。
+/// 启动核心：解析 `mx:xxx` 或普通发行版 id → 未装自动装 → 起引擎进容器。
 ///
-/// 两层调用方共用：`moxsh-proot -r mx:alpine -- bash`（选项值 scheme）与
-/// `moxsh-proot-distro launch mx:alpine`（子命令）。
+/// 两套登录入口在此汇合（roadmap §1，呼应文心手册"登录融合成一个"诉求）：
+/// - `moxsh-proot -r mx:alpine -- bash`（引擎侧选项值 scheme）；
+/// - `moxsh-proot-distro launch mx:alpine`（短链子命令）；
+/// - `moxsh-proot-distro login ubuntu` / `shell ubuntu`（传统 id，与 launch 互通）；
+/// - `moxsh-proot-distro launch ubuntu`（普通 id 也放行，等价于 mx: 短链）。
+///
+/// 无论哪种入口，最终都走「解析 → 未装自动装 → exec_into」，行为完全一致。
 /// 返回进程退出码。
 pub fn launch_spec(root: &Path, spec: &str, tail: &[String]) -> ProotResult<i32> {
-    let user = links::load_user_links().unwrap_or_default();
-    let resolved = links::resolve(spec, &user)?;
     let mgr = DistroManager::new(root);
-    let id = match resolved {
-        ResolvedLink::Distro(id) => {
-            if !mgr.distro_rootfs(&id).is_dir() {
-                let spec = DistroManager::find_spec(&id)?;
-                eprintln!("moxsh-proot: mx:{} 未安装，开始自动安装（{} {}）…", id, spec.name, spec.version);
-                let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
-                    if total > 0 && done >= total {
-                        eprintln!("[安装] {}", msg);
-                    } else {
-                        eprintln!("[安装] {}（{}/{}）", msg, done, total);
-                    }
-                });
-                mgr.install(&spec, None, &mut progress)?;
-            }
-            id
+    // 兼容两种形态：mx: 短链（解析 + 自定义 rootfs）或 普通发行版 id。
+    let (id, custom_urls): (String, Option<Vec<String>>) = if links::is_mx(spec) {
+        let user = links::load_user_links().unwrap_or_default();
+        match links::resolve(spec, &user)? {
+            ResolvedLink::Distro(id) => (id, None),
+            ResolvedLink::Url(urls) => (links::strip_mx(spec).unwrap_or("").to_string(), Some(urls)),
         }
-        ResolvedLink::Url(urls) => {
-            let name = links::strip_mx(spec).unwrap_or("").to_string();
-            if !mgr.distro_rootfs(&name).is_dir() {
-                eprintln!("moxsh-proot: mx:{} 未安装，开始自动安装（自定义 rootfs）…", name);
-                let tar = download_first_available(&mgr, &urls)?;
-                let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
-                    if total > 0 && done >= total {
-                        eprintln!("[安装] {}", msg);
-                    } else {
-                        eprintln!("[安装] {}（{}/{}）", msg, done, total);
-                    }
-                });
-                mgr.install_custom(&name, &tar, None, &mut progress)?;
-            }
-            name
-        }
+    } else {
+        mgr.check_id(spec)?; // P1：id 白名单（防路径穿越，与 DistroManager 同源）
+        (spec.to_string(), None)
     };
+
+    let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
+        if total > 0 && done >= total {
+            eprintln!("[安装] {}", msg);
+        } else {
+            eprintln!("[安装] {}（{}/{}）", msg, done, total);
+        }
+    });
+    if !mgr.distro_rootfs(&id).is_dir() {
+        if let Some(urls) = custom_urls {
+            let tar = download_first_available(&mgr, &urls)?;
+            mgr.install_custom(&id, &tar, None, &mut progress)?;
+        } else {
+            let specd = DistroManager::find_spec(&id)?;
+            eprintln!("moxsh-proot: {} 未安装，开始自动安装（{} {}）…", id, specd.name, specd.version);
+            mgr.install(&specd, None, &mut progress)?;
+        }
+    }
     exec_into(root, &id, tail)
 }
 
@@ -1455,14 +1478,14 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
 用法:
   proot-distro list                      列出已安装与可安装发行版
   proot-distro install <id> [--cache <tar>]   安装（--cache 指定已下载归档）
-  proot-distro login <id>                进入发行版登录 shell
-  proot-distro shell <id>                进入发行版非登录 shell
+  proot-distro login <id|mx:名字>        进入发行版登录 shell（id 与短链互通）
+  proot-distro shell <id|mx:名字>        进入发行版非登录 shell
   proot-distro remove <id>               删除发行版
   proot-distro backup <id> <out.tar.gz>  备份
   proot-distro restore <id> <tar.tar.gz> 恢复
   proot-distro net [id]                  网络边界报告（不带 id 看宿主）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
-  proot-distro launch mx:<名字> [-- cmd...]  短链启动（未装自动装）
+  proot-distro launch <mx:名字|id> [-- cmd...]  启动（未装自动装，id 与短链互通）
   proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
   proot-distro fan login|redeem <code>|status   粉丝专属解锁（灰度中）
   proot-distro redeem login|status|check       商品授权：绑定设备 + 在线校验
@@ -1497,6 +1520,46 @@ mod tests {
     fn login_not_installed() {
         let out = proot_distro(&["login", "ubuntu"], Path::new("/nonexistent"));
         assert!(out.contains("未安装"));
+    }
+
+    /// 登录融合：App 文本路由 `login mx:alpine` 应解析成发行版 alpine 再走
+    /// login_cmd（与二进制 launch mx:alpine 同源），未装时给出 alpine 未安装。
+    #[test]
+    fn login_mx_shortlink_resolves() {
+        let out = proot_distro(&["login", "mx:alpine"], Path::new("/nonexistent"));
+        assert!(out.contains("未安装"), "mx: 未解析到 alpine：{}", out);
+        assert!(out.contains("alpine"), "应点名 alpine：{}", out);
+    }
+
+    /// shell 同样支持 mx: 短链解析。
+    #[test]
+    fn shell_mx_shortlink_resolves() {
+        let out = proot_distro(&["shell", "mx:ubuntu"], Path::new("/nonexistent"));
+        assert!(out.contains("未安装"));
+        assert!(out.contains("ubuntu"));
+    }
+
+    /// 登录融合：launch_spec 接受普通 id（与 login 互通），且非法 id 被
+    /// check_id 白名单拦下（不触网、不越界）。
+    #[test]
+    fn launch_spec_plain_id_invalid_rejected() {
+        let r = launch_spec(Path::new("/nonexistent"), "..", &[]);
+        assert!(r.is_err(), "非法 id 应被 check_id 拦下");
+    }
+
+    /// launch_spec 普通合法 id（字符白名单通过）但非预置发行版：走到
+    /// find_spec 直接报「未知发行版」，不触网下载（避免测试联网装包）。
+    #[test]
+    fn launch_spec_plain_id_unknown_rejected() {
+        let r = launch_spec(Path::new("/nonexistent"), "zzz", &[]);
+        assert!(r.is_err(), "未知 id 应被 find_spec 拦下");
+        if let Err(e) = r {
+            assert!(
+                format!("{}", e).contains("未知发行版"),
+                "应提示未知发行版而非尝试下载：{}",
+                e
+            );
+        }
     }
 
     /// help 与未知子命令。

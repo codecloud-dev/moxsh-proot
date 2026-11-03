@@ -118,7 +118,10 @@ impl TranslateRules {
         if p.as_os_str().is_empty() {
             return self;
         }
-        if !self.hidden.iter().any(|e| e == &p) {
+        // 注意：`e` 是 &String、`p` 是 PathBuf，直接 `e == &p` 依赖
+        // `String: PartialEq<PathBuf>`（Rust 1.88 才稳定）。为兼容 CI 钉的
+        // 1.86.0 工具链，改为按 Path 比较（全版本可用，且对非 UTF-8 路径安全）。
+        if !self.hidden.iter().any(|e| Path::new(e) == p.as_path()) {
             self.hidden.push(p.to_string_lossy().into_owned());
         }
         self

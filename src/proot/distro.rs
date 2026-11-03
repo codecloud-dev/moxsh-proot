@@ -307,7 +307,10 @@ impl DistroManager {
     }
 
     /// 校验失败统一错误。
-    fn check_id(&self, id: &str) -> ProotResult<()> {
+    /// `pub`：除本模块与 `cli::launch_spec` 复用外，二进制 crate
+    ///（`moxsh-proot-distro`）也调用它做 id 白名单校验（防路径穿越），
+    /// 而二进制 crate 与 lib crate 相互独立，`pub(crate)` 无法跨过。
+    pub fn check_id(&self, id: &str) -> ProotResult<()> {
         if Self::valid_id(id) {
             Ok(())
         } else {
@@ -667,7 +670,10 @@ impl DistroManager {
                 "/bin/sh -l"
             }
         });
-        let cfg = ProotConfig::with_distro_defaults(&rootfs);
+        let mut cfg = ProotConfig::with_distro_defaults(&rootfs);
+        // 与 exec_into 同源：注入容器内控制台（mox 固定命令 + 反穿透挂载/环境变量），
+        // 否则 App 终端会话产出的命令串会缺少 mox 控制台，与二进制 login 行为漂移。
+        console::bind_console(&mut cfg, &self.root, &console::host_bin_dir());
         let mut cmd: Vec<String> = Vec::new();
         // 输出**绝对路径**的引擎兄弟二进制：调用方（含 App 终端会话）无需依赖 PATH，
         // 也避免下载模型下引擎位于独立目录（$filesDir/proot/bin）时裸名 `proot` 解析不到。

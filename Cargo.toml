@@ -27,6 +27,10 @@ flate2 = "=1.1.10"
 # 版本用 ^ 容差由 Cargo.lock 钉死（首次解析后转 = 精确锁定，对齐全仓策略）。
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
+# 终端二维码（半块字符渲染）：仅 TUI/桌面 `moxsh-proot-tui` 与 `login` 子命令（tui feature）启用，
+# 与 ratatui/crossterm 同样特性门控，不污染引擎 cdylib 与 Android 构建。
+# 选用 qrcode 0.14：纯 Rust、无 unsafe、支持 byte 模式 + 多 ECC 等级，足够承载 <300 字节的 verification_uri。
+qrcode = { version = "=0.14.1", optional = true }
 
 # 构建脚本依赖：cc 用于在 Android 目标下把 c/proot_bridge.c 编入 cdylib（见 build.rs）。
 [build-dependencies]
@@ -36,7 +40,7 @@ cc = "=1.5.1"
 # 默认不含 TUI：引擎 cdylib 与 `moxsh-proot`/`moxsh-proot-distro` 保持零额外依赖。
 # 桌面发布与 `moxsh-proot-tui` 二进制启用本 feature。
 default = []
-tui = ["dep:ratatui", "dep:crossterm"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:qrcode"]
 
 [[bin]]
 name = "moxsh-proot"

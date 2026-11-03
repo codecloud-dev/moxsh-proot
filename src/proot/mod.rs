@@ -46,6 +46,10 @@ pub mod translate;
 /// 仅 `tui` feature 启用，不污染 Android NDK 构建。
 #[cfg(feature = "tui")]
 pub mod tui;
+#[cfg(feature = "tui")]
+pub mod qrcode_term;
+#[cfg(feature = "tui")]
+pub mod device_code;
 
 use std::fmt;
 use std::path::{Path, PathBuf};

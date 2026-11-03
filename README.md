@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/Installer-Go-00ADD8?logo=go&logoColor=white" alt="Go 安装器">
   <img src="https://img.shields.io/badge/Hooks-Python%20%2F%20Lua-3776AB?logo=python&logoColor=white" alt="钩子脚本">
   <img src="https://img.shields.io/badge/Bridge-C-A8B9CC?logo=c&logoColor=white" alt="C 桥">
-  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20macOS%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="桌面 Linux / macOS / Termux(Android)">
+  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="桌面 Linux / Termux(Android)">
 </p>
 
 
@@ -125,7 +125,7 @@ moxsh-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，�
 
 ## 🚀 快速上手
 
-### 🔹 一键安装（桌面 Linux / macOS / Termux / Android 全适配）
+### 🔹 一键安装（桌面 Linux / Termux(Android) 全适配）
 
 **方式一：短命令**（推荐）——整条安装引导压成一段 base64 内嵌，复制即跑，
 不挑域名；GitHub raw 不通自动回退 Gitee（国内免折腾镜像）：
@@ -151,7 +151,7 @@ curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scri
 curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
 ```
 
-零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux / macOS
+零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux
 （x86_64/arm64）与 Termux（Android）自动识别安装目录与架构（glibc / musl 自动选静态版），
 不再只绑 Termux。二进制按国内/国外自动探测选源下载，逐文件 sha256 校验，自动落盘
 `moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
@@ -221,8 +221,13 @@ mox net             # 网络边界报告
 
 ### 🔹 系统要求
 
-- 桌面 Linux / macOS（x86_64 / arm64），或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）
+- 桌面 Linux（x86_64 / arm64），或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）
 - 约 50 MB 可用空间（引擎 + 一个 minirootfs）
+
+> 平台说明：moxsh-proot 是 **Linux / Android（Termux）的 ptrace 路径翻译引擎**，
+> 仅在 Linux 内核上运行容器（macOS / Windows 无 ptrace 等价能力，无法跑容器）。
+> 设备码扫码登录（`moxsh-proot login`）这类纯网络客户端在任意带 curl 的系统都可跑，
+> 但**容器引擎本身不支持 macOS / Windows**。
 
 ### 🔹 从源码构建
 
@@ -244,7 +249,7 @@ cargo build --release
 | :------------ | :----- | ----------------------------------- |
 | `src/proot/`  | Rust   | 引擎核心：ptrace 翻译、ELF/exec 链、发行版、网络栈、钩子发现 |
 | `src/bin/`    | Rust   | `moxsh-proot` / `moxsh-proot-distro` 两个独立二进制 |
-| `go/`         | Go     | 安装器 + 下载器（install/update/probe），Linux / macOS / Termux 三靶 |
+| `go/`         | Go     | 安装器 + 下载器（install/update/probe），Linux / Termux 两靶 |
 | `py/runtime/` | Python | 容器内钩子（供给检查 / 登录快照），宿主侧可直跑自证 |
 | `py/verify/`  | Python | 三层验证脚本（单测 + 钩子直跑 + 真实 rootfs e2e） |
 | `lua/`        | Lua    | 声明式配置（`proot.lua`）+ 钩子            |

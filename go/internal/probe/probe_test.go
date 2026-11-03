@@ -63,6 +63,8 @@ func TestAssetName(t *testing.T) {
 		want string
 	}{
 		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc}, "moxsh-proot-linux-amd64"},
+		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc, GlibcVer: 2.39}, "moxsh-proot-linux-amd64"},
+		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc, GlibcVer: 2.31}, "moxsh-proot-linux-amd64-musl"},
 		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcMusl}, "moxsh-proot-linux-amd64-musl"},
 		{Report{GOOS: "linux", Arch: "arm64", Libc: LibcMusl}, "moxsh-proot-linux-arm64-musl"},
 	}

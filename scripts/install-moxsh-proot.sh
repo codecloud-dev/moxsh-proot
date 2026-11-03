@@ -138,7 +138,22 @@ if [ "$IS_ANDROID" = 1 ]; then
   ASSET_SUFFIX="${TRIPLE_ARCH}-linux-android"
 else
   ASSET_SUFFIX="linux-${ARCH_ALIAS}"
-  if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+  # 优先静态 musl 版：零 glibc 依赖，可在任意（含老）glibc 系统运行
+  # （doc §A#1：gnu 版硬绑 glibc 2.39，老系统跑不起 → 把依赖版本降下来）。
+  # 判定：显式 musl，或 glibc 版本低于发布构建地板（2.35）。
+  use_musl=0
+  if command -v ldd >/dev/null 2>&1; then
+    ldd_out="$(ldd --version 2>&1)"
+    if printf '%s' "$ldd_out" | grep -qi musl; then
+      use_musl=1
+    elif printf '%s' "$ldd_out" | grep -qi glibc; then
+      glibc_ver="$(printf '%s' "$ldd_out" | grep -oE '[0-9]+\.[0-9]+' | head -1)"
+      if [ -n "$glibc_ver" ] && awk "BEGIN{exit !($glibc_ver + 0 < 2.35)}"; then
+        use_musl=1
+      fi
+    fi
+  fi
+  if [ "$use_musl" = 1 ]; then
     ASSET_SUFFIX="linux-${ARCH_ALIAS}-musl"
   fi
 fi

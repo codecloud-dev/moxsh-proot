@@ -8,7 +8,9 @@ package probe
 
 import (
 	"os"
+	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
@@ -96,6 +98,7 @@ type Report struct {
 	Env     EnvKind
 	Distro  Distro
 	Libc    Libc
+	GlibcVer float64 // glibc 主.次版本（如 2.39）；非 glibc 或未知为 0
 	Arch    string // runtime.GOARCH 口径：amd64 / arm64 / …
 	GOOS    string // runtime.GOOS：linux / android
 	IsRoot  bool
@@ -180,6 +183,11 @@ func Detect(libcHint string) Report {
 	}
 	// 3) libc：优先调用方线索，其次文件系统兜底
 	r.Libc = DetectLibc(libcHint)
+	if r.Libc == LibcGlibc {
+		// 记录 glibc 版本，供 AssetName 在过旧时改选 musl 静态版
+		// （doc §A#1：gnu 版硬绑高版本 glibc，老系统跑不起）。
+		r.GlibcVer = parseGlibcVer(libcHint)
+	}
 	return r
 }
 
@@ -219,6 +227,24 @@ func DetectLibc(libcHint string) Libc {
 	return DetectLibcFromFS()
 }
 
+// glibcVerRe 匹配 `GLIBC x.y`（ldd --version 输出形如
+// "ldd (Ubuntu GLIBC 2.39-0ubuntu8) 2.39"）。
+var glibcVerRe = regexp.MustCompile(`GLIBC\s+([0-9]+\.[0-9]+)`)
+
+// parseGlibcVer 从 libc 线索里提取 glibc 主.次版本号（如 2.39）。
+// 提取失败返回 0（未知）。
+func parseGlibcVer(hint string) float64 {
+	m := glibcVerRe.FindStringSubmatch(hint)
+	if m == nil {
+		return 0
+	}
+	v, err := strconv.ParseFloat(m[1], 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
 // parseOsRelease 解析 os-release 的 KEY=VALUE（去引号、忽略注释）。
 func parseOsRelease(s string) map[string]string {
 	out := map[string]string{}
@@ -245,9 +271,13 @@ func parseOsRelease(s string) map[string]string {
 // 约定：moxsh-proot-<goos>-<arch>[-musl]
 //   - glibc 动态版：moxsh-proot-linux-amd64（依赖 glibc，体积小）
 //   - musl 静态版：moxsh-proot-linux-amd64-musl（零依赖，Termux 首选）
+//
+// glibc 版本过低（低于发布构建地板 2.35）时改选 musl 静态版：musl 静态
+// 二进制零 glibc 依赖，可在任意（含老）glibc 系统运行，从而让「大部分
+// Linux 都能装」（doc §A#1）。未知版本（GlibcVer==0）保守沿用原 gnu 行为。
 func (r Report) AssetName() string {
 	base := "moxsh-proot-" + r.GOOS + "-" + r.Arch
-	if r.Libc == LibcMusl {
+	if r.Libc == LibcMusl || (r.Libc == LibcGlibc && r.GlibcVer > 0 && r.GlibcVer < 2.35) {
 		base += "-musl"
 	}
 	return base

@@ -77,6 +77,14 @@ pub fn run_native(args: &[String]) -> i32 {
             }
         };
     }
+    // 友好帮助（doc §A#16：CLI 文案引导）。裸 `help` / 无参数 → 打印用法到
+    // stdout 并退出 0，避免被当成「要执行的命令」因缺 -r 而 exit 2
+    // （Termux 下表现为「输入 help 没反应就退出」）。
+    // （`--help`/`-h` 已由 parse_native_args 返回空错误走用法分支，这里只补裸 `help` 与无参。）
+    if args.is_empty() || args.first().map_or(false, |a| a == "help") {
+        print_usage(&mut std::io::stdout());
+        return 0;
+    }
     let cfg = match parse_native_args(args) {
         Ok(c) => c,
         Err(e) => {
@@ -1042,7 +1050,9 @@ fn install_hint(id: &str, mgr: &DistroManager) -> String {
 /// 幂等：重复跑只补缺失步骤，不重复下载、不重复提问。
 fn cmd_wizard(args: &[&str]) -> String {
     let mut root_arg: Option<String> = None;
-    let mut distro = "alpine".to_string();
+    // 默认 ubuntu（glibc 系，兼容性最好）；不再默认 alpine——
+    // alpine 是 musl rootfs，proot 在 musl 宿主/特定环境下有坑（doc §A#6）。
+    let mut distro = "ubuntu".to_string();
     let mut i = 0;
     while i < args.len() {
         match args[i] {
@@ -1190,6 +1200,16 @@ fn cmd_remove(mgr: &DistroManager, args: &[&str]) -> String {
     let Some(id) = args.first() else {
         return "用法: proot-distro remove <id>".into();
     };
+    // 危险操作二次确认（doc §A#7/#17）：未带 --yes/-y 时拒绝执行，
+    // 避免手滑误删整个 rootfs（数据不可恢复）。
+    let confirmed = args.iter().any(|a| *a == "--yes" || *a == "-y");
+    if !confirmed {
+        let rootfs = mgr.distro_rootfs(id);
+        return format!(
+            "⚠ 删除确认：将删除发行版 {}（{}），不可恢复。\n   确认请执行：proot-distro remove {} --yes",
+            id, rootfs.display(), id
+        );
+    }
     match mgr.remove(id) {
         Ok(()) => format!("已删除 {}", id),
         Err(e) => format!("proot-distro: {}", e),

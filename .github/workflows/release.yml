@@ -18,7 +18,7 @@ permissions:
 jobs:
   build-engine:
     name: 引擎（${{ matrix.name }}）
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -28,20 +28,27 @@ jobs:
             name: android-arm64
             legacy_name: aarch64-linux-android
             ndk: "true"
+            runner: ubuntu-latest
           - target: x86_64-linux-android
             name: android-amd64
             legacy_name: x86_64-linux-android
             ndk: "true"
-          # 桌面 Linux glibc 动态版（体积小，依赖系统 glibc）
+            runner: ubuntu-latest
+          # 桌面 Linux glibc 动态版（体积小，依赖系统 glibc）。
+          # 构建跑 ubuntu-22.04（glibc 2.35）→ 二进制地板从 2.39 降到 2.35，
+          # 老系统也能跑（doc §A#1：原 ubuntu-latest=glibc 2.39 硬依赖）。
+          # 仍低于 2.35 的系统由安装器自动改选 musl 静态版（零 glibc 依赖）。
           - target: x86_64-unknown-linux-gnu
             name: linux-amd64
             legacy_name: ""
             ndk: "false"
+            runner: ubuntu-22.04
           - target: aarch64-unknown-linux-gnu
             name: linux-arm64
             legacy_name: ""
             ndk: "false"
             cross_pkg: gcc-aarch64-linux-gnu
+            runner: ubuntu-22.04
           # 桌面 Linux musl 静态版（零依赖，Go 安装器 LibcMusl 通道首选）。
           # musl target 的 crt 对象来自 rustup 自包含目录，但 rustc 默认仍
           # 调 `cc` 作链接驱动——跨架构时落到宿主 gcc（EM 架构不匹配，
@@ -50,11 +57,13 @@ jobs:
             name: linux-amd64-musl
             legacy_name: ""
             ndk: "false"
+            runner: ubuntu-latest
           - target: aarch64-unknown-linux-musl
             name: linux-arm64-musl
             legacy_name: ""
             ndk: "false"
             cross_pkg: gcc-aarch64-linux-gnu
+            runner: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master

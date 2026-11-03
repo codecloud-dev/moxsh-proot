@@ -133,6 +133,8 @@ pub fn run_config(
             return 126;
         }
     };
+    // `-v` 诊断日志级别落地到全局开关（见 ptrace::diag_enabled）。
+    crate::proot::ptrace::set_verbose(config.verbose);
     match tracer.run(child) {
         Ok(code) => code,
         Err(e) => {
@@ -298,6 +300,10 @@ struct NativeArgs {
 fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
     let mut rootfs: Option<PathBuf> = None;
     let mut fake_root = false;
+    let mut fake_uid: u32 = 0;
+    let mut fake_gid: u32 = 0;
+    let mut verbose: u8 = 0;
+    let mut hidden: Vec<String> = Vec::new();
     let mut cwd = "/".to_string();
     let mut binds: Vec<(String, String)> = Vec::new();
     let mut env: Vec<String> = Vec::new();
@@ -318,6 +324,29 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
                 rootfs = Some(PathBuf::from(v));
             }
             "-0" | "--root-id" => fake_root = true,
+            "-v" | "--verbose" => {
+                // 诊断日志级别累加：每多一个 -v 升一级（`-vvv` 对应 3 级）。
+                // 引擎内部仅「开/关」两档（见 ptrace::diag_enabled），多档保留
+                // 给将来更细分层（如 syscall 级 / scratch 级）。
+                verbose = verbose.saturating_add(1);
+            }
+            "-i" | "--fake-id" => {
+                // 上游 `-i uid[:gid[:gid_min:gid_max]]`：本引擎实现 `uid[:gid]`
+                // （省略 gid 时等于 uid）。补全 fake root 身份——不再固定 0:0。
+                i += 1;
+                let v = args.get(i).ok_or("-i 缺少参数（期望 uid 或 uid:gid）")?;
+                let (u, g) = parse_fake_id(v)?;
+                fake_root = true;
+                fake_uid = u;
+                fake_gid = g;
+            }
+            "-H" | "--hide" => {
+                // 隐藏指定 guest 路径（可重复）：访问即 ENOENT。用于把宿主/容器
+                // 敏感文件从 guest 视野抹除（P2 小改动，各解决一个真实痛点）。
+                i += 1;
+                let v = args.get(i).ok_or("-H/--hide 缺少参数（期望 guest 路径）")?;
+                hidden.push(v.to_string());
+            }
             "-b" | "--bind" | "-m" | "--mount" => {
                 i += 1;
                 let v = args.get(i).ok_or("-b 缺少参数")?;
@@ -388,11 +417,22 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
                     fake_root = true;
                 }
             }
+            other if other.starts_with("--fake-id=") => {
+                // --fake-id=uid[:gid]：补全 fake root 身份（见 -i 分支）。
+                let v = &other["--fake-id=".len()..];
+                let (u, g) = parse_fake_id(v)?;
+                fake_root = true;
+                fake_uid = u;
+                fake_gid = g;
+            }
+            other if other.starts_with("--hide=") => {
+                hidden.push(other["--hide=".len()..].to_string());
+            }
             other if other.starts_with('-') => {
                 // 注意：宏参数里的相邻字符串字面量**不会**隐式拼接（与普通表达式
                 // 不同），必须写成单个字面量，否则 rustc 报 "expected `,`"。
                 return Err(format!(
-                    "不支持的选项 {}（可用项见 moxsh-proot --help；上游 -q/-k/-v 等未实现，勿假装支持）",
+                    "不支持的选项 {}（可用项见 moxsh-proot --help；上游 -q/-k 等未实现，勿假装支持）",
                     other
                 ));
             }
@@ -420,6 +460,10 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
         crate::proot::ProotConfig::new(&rf)
     };
     config.fake_root = fake_root;
+    config.fake_uid = fake_uid;
+    config.fake_gid = fake_gid;
+    config.verbose = verbose;
+    config.hidden = hidden;
     config.cwd = cwd;
     for (guest, host) in binds {
         config.bind(&guest, &host);
@@ -459,17 +503,45 @@ fn parse_binding(spec: &str) -> Result<(String, String), String> {
     Ok((guest, host))
 }
 
+/// 解析 `-i`/`--fake-id` 的身份串 `uid[:gid]`。
+///
+/// - `uid`：必填，1–65535（0 由 `-0` 语义覆盖，但此处允许 0 以兼容
+///   `--fake-id=0:0` 显式写法）；
+/// - `gid`：可省略，省略时等于 `uid`；
+/// - 不支持的 `gid_min:gid_max` 扩展段：文档仅要求补齐 `uid:gid`，多余段报错。
+fn parse_fake_id(spec: &str) -> Result<(u32, u32), String> {
+    let parts: Vec<&str> = spec.split(':').collect();
+    if parts.len() > 2 {
+        return Err(format!(
+            "fake-id 仅支持 uid[:gid]，得到 {}（gid_min:gid_max 暂不支持）",
+            spec
+        ));
+    }
+    let uid: u32 = parts[0]
+        .parse()
+        .map_err(|_| format!("-i uid 非法: {}", parts[0]))?;
+    let gid: u32 = if let Some(g) = parts.get(1) {
+        g.parse().map_err(|_| format!("-i gid 非法: {}", g))?
+    } else {
+        uid
+    };
+    Ok((uid, gid))
+}
+
 /// 用法文本（`-h` 走 stdout 退出 0；参数错误走 stderr 退出 2）。
 fn print_usage(w: &mut dyn std::io::Write) {
     write!(
         w,
-        "用法: moxsh-proot [-r rootfs | -R rootfs | -S rootfs] [-0] \
-         [-b host:guest]... [-w dir] [-e K=V]... [--] 命令 [参数...]\n\
+        "用法: moxsh-proot [-r rootfs | -R rootfs | -S rootfs] [-0] [-i uid:gid] \
+         [-H path]... [-v]... [-b host:guest]... [-w dir] [-e K=V]... [--] 命令 [参数...]\n\
          \n\
            -r, --rootfs <path>   guest 根目录\n\
            -R <path>            -r + 推荐绑定集（/etc 元文件、/tmp、/run…）\n\
            -S <path>            -r + 最小绑定集（装包场景）\n\
            -0, --root-id        fake root（uid/gid 显示为 0，伪装特权成功）\n\
+           -i, --fake-id <u[:g]>  fake root 身份（uid[:gid]，补全 -0 的固定 0:0）\n\
+           -H, --hide <path>    隐藏 guest 路径（访问即 ENOENT，可重复）\n\
+           -v, --verbose        诊断日志级别（累加，-v 开 -vv 更细）\n\
            -b, --bind <h:g>     绑定宿主路径到 guest（host:guest，可多次）\n\
            -w, --cwd <dir>      初始工作目录\n\
            -e, --env <K=V>      注入环境变量（给了则清空继承环境）\n\
@@ -1313,10 +1385,13 @@ pub fn tail_after_dashdash(args: &[String]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `proot` 原生参数面：识别 -r/-0/-b/-w 并输出等效 moxsh 引擎配置预览。
+/// `proot` 原生参数面：识别 -r/-0/-i/-H/-v/-b/-w 并输出等效 moxsh 引擎配置预览。
 fn proot_native(args: &[&str], _moxsh_root: &Path) -> String {
     let mut rootfs: Option<String> = None;
     let mut fake_root = false;
+    let mut fake_id: Option<String> = None;
+    let mut verbose = 0u8;
+    let mut hidden: Vec<String> = Vec::new();
     let mut cwd = "/".to_string();
     let mut binds: Vec<String> = Vec::new();
     let mut it = args.iter();
@@ -1324,6 +1399,13 @@ fn proot_native(args: &[&str], _moxsh_root: &Path) -> String {
         match *a {
             "-r" | "--rootfs" => rootfs = it.next().map(|s| s.to_string()),
             "-0" | "--root-id" => fake_root = true,
+            "-i" | "--fake-id" => fake_id = it.next().map(|s| s.to_string()),
+            "-H" | "--hide" => {
+                if let Some(h) = it.next() {
+                    hidden.push(h.to_string());
+                }
+            }
+            "-v" | "--verbose" => verbose = verbose.saturating_add(1),
             "-w" | "--cwd" => cwd = it.next().map(|s| s.to_string()).unwrap_or_else(|| "/".into()),
             "-b" | "--bind" => {
                 if let Some(b) = it.next() {
@@ -1338,8 +1420,8 @@ fn proot_native(args: &[&str], _moxsh_root: &Path) -> String {
         return "用法: proot -r <rootfs> [-0] [-b host:guest]... [-w /dir] -- cmd".into();
     };
     let mut out = format!(
-        "moxsh proot 引擎配置预览：\n  rootfs: {}\n  fake_root(-0): {}\n  cwd(-w): {}\n  绑定(-b):\n",
-        rootfs, fake_root, cwd
+        "moxsh proot 引擎配置预览：\n  rootfs: {}\n  fake_root(-0): {}\n  fake_id(-i): {:?}\n  verbose(-v): {}\n  hide(-H): {:?}\n  cwd(-w): {}\n  绑定(-b):\n",
+        rootfs, fake_root, fake_id, verbose, hidden, cwd
     );
     for b in binds {
         out.push_str(&format!("    {}\n", b));

@@ -46,13 +46,20 @@ pub enum FakeRootAction {
 
 /// 路径翻译规则集。
 ///
-/// 持有：rootfs 前缀、绑定表（顺序即优先级，后绑定优先）、fake root 标志。
+/// 持有：rootfs 前缀、绑定表（顺序即优先级，后绑定优先）、fake root 标志
+/// （含伪装的 uid/gid）、隐藏路径表。
 /// 不持有 cwd——相对路径一律直通（见模块文档），无需追踪 guest 视角 cwd。
 #[derive(Debug, Clone)]
 pub struct TranslateRules {
     rootfs: PathBuf,
     bindings: Vec<Binding>,
     fake_root: bool,
+    /// fake root 伪装的身份 uid（`-i uid[:gid]`；`-0` 时为 0）。
+    fake_uid: u32,
+    /// fake root 伪装的身份 gid。
+    fake_gid: u32,
+    /// 需隐藏的 guest 路径（前缀匹配）：命中即重定向到不存在的哨兵路径。
+    hidden: Vec<String>,
 }
 
 impl TranslateRules {
@@ -63,6 +70,9 @@ impl TranslateRules {
             rootfs: normalize(&rootfs.to_string_lossy()),
             bindings: Vec::new(),
             fake_root: false,
+            fake_uid: 0,
+            fake_gid: 0,
+            hidden: Vec::new(),
         }
     }
 
@@ -90,6 +100,57 @@ impl TranslateRules {
     pub fn set_fake_root(&mut self, on: bool) -> &mut Self {
         self.fake_root = on;
         self
+    }
+
+    /// 设置 fake root 伪装的身份 uid/gid（上游 `-i uid[:gid]`）。
+    /// 仅当 `fake_root` 已开启时生效（见 [`Self::fake_root`]）。
+    pub fn set_fake_id(&mut self, uid: u32, gid: u32) -> &mut Self {
+        self.fake_uid = uid;
+        self.fake_gid = gid;
+        self
+    }
+
+    /// 追加一条隐藏路径（上游无等价项；`--hide` 专属）。
+    /// 命中（精确或前缀）的 guest 路径在路径类 syscall 被重定向到不存在的
+    /// 哨兵路径，使访问读为 ENOENT——用于把宿主/容器敏感文件从 guest 视野抹除。
+    pub fn add_hidden(&mut self, path: &str) -> &mut Self {
+        let p = normalize(path);
+        if p.as_os_str().is_empty() {
+            return self;
+        }
+        if !self.hidden.iter().any(|e| e == &p) {
+            self.hidden.push(p.to_string_lossy().into_owned());
+        }
+        self
+    }
+
+    /// guest 路径是否落在隐藏集内（精确或组件级前缀）。
+    ///
+    /// `/etc/secret` 命中隐藏条目 `/etc/secret` 或 `/etc`；但 `/etc/secretnote`
+    /// 不会误命中 `/etc/secret`——`strip_prefix_comps` 是组件向量比较，天然
+    /// 保证组件边界（对齐 [`guest_to_host`] 的组件级前缀语义）。
+    pub fn is_hidden(&self, guest: &str) -> bool {
+        if self.hidden.is_empty() {
+            return false;
+        }
+        let comps = split_comps(&normalize(guest));
+        for h in &self.hidden {
+            let hcomps = split_comps(Path::new(h));
+            if hcomps.is_empty() {
+                continue;
+            }
+            // 命中即隐藏：空 rest = 精确，非空 rest = 前缀 + 子路径。
+            if strip_prefix_comps(&comps, &hcomps).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// 隐藏路径重定向目标：rootfs 下保证不存在的哨兵路径（访问即 ENOENT）。
+    /// `.moxsh_hidden` 为引擎内部约定目录；`noent` 固定文件名确保不可命中。
+    pub fn hidden_sentinel(&self) -> PathBuf {
+        self.rootfs.join(".moxsh_hidden").join("noent")
     }
 
     /// proot-distro 默认绑定集构造（对齐 proot-distro login 的 --bind 列表）。
@@ -264,6 +325,16 @@ impl TranslateRules {
 
     pub fn fake_root(&self) -> bool {
         self.fake_root
+    }
+
+    /// fake root 伪装的 uid（默认 0；`-i uid:gid` 时取配置值）。
+    pub fn fake_uid(&self) -> u32 {
+        self.fake_uid
+    }
+
+    /// fake root 伪装的 gid（默认 0；`-i uid:gid` 时取配置值）。
+    pub fn fake_gid(&self) -> u32 {
+        self.fake_gid
     }
 
     pub fn rootfs(&self) -> &Path {

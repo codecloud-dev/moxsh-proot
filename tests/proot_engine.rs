@@ -316,5 +316,103 @@ fn proot_engine_e2e() {
         }
     }
 
+    // ---- seccomp 加速器回归（MOXSH_SECCOMP=1，SIGSTOP 引导握手）----
+    // 复用上面核心场景，验证「非拦截 syscall 经 SECCOMP_RET_ALLOW 零开销
+    // 直通 + 拦截面触发 PTRACE_EVENT_SECCOMP 入口停」模型在真实多进程树下
+    // 不挂死、翻译不失效。关键防线：初始 execve 在 tracer 设好
+    // PTRACE_O_TRACESECCOMP 之前被过滤器拦截会致 guest exit 127——SIGSTOP
+    // 握手（src/proot/ptrace.rs run 循环）正是堵这个洞。本 fn 内串行执行，
+    // env 切换无线程竞争。
+    {
+        std::env::set_var("MOXSH_SECCOMP", "1");
+
+        // 退出码透传（单进程）。
+        {
+            let rules = TranslateRules::new(Path::new("/"));
+            let t = Tracer::new(rules);
+            let child = Tracer::spawn_traced(&["/bin/sh", "-c", "exit 7"]).expect("spawn");
+            assert_eq!(t.run(child).expect("run"), 7, "seccomp: 退出码应透传");
+        }
+
+        // 管道多进程树（fork ×2 + exec cat）不挂死。
+        {
+            let rules = TranslateRules::new(Path::new("/"));
+            let t = Tracer::new(rules);
+            let child =
+                Tracer::spawn_traced(&["/bin/sh", "-c", "echo pipeline-ok | cat > /dev/null"])
+                    .expect("spawn");
+            assert_eq!(t.run(child).expect("run"), 0, "seccomp: 管道多进程树应跑完");
+        }
+
+        // /proc/self/exe 还原（运行期动态 exec 链路在 seccomp 模式下仍不穿帮）。
+        {
+            let out_file =
+                std::env::temp_dir().join(format!("moxsh-it-selfexe-sec-{}", std::process::id()));
+            let _ = fs::remove_file(&out_file);
+            let rules = TranslateRules::new(Path::new("/"));
+            let t = Tracer::new(rules);
+            let child = Tracer::spawn_traced(&[
+                "/bin/sh",
+                "-c",
+                &format!("readlink /proc/self/exe > {}", out_file.display()),
+            ])
+            .expect("spawn");
+            assert_eq!(t.run(child).expect("run"), 0, "seccomp: readlink 应成功");
+            let out = fs::read_to_string(&out_file).expect("读 self/exe 输出");
+            assert_eq!(
+                out.trim(),
+                "/usr/bin/readlink",
+                "seccomp: /proc/self/exe 应还原为 guest 程序路径，实得 {:?}",
+                out.trim()
+            );
+            let _ = fs::remove_file(&out_file);
+        }
+
+        // chdir 翻译 + getcwd 反向还原（RestoreOnExit）在 seccomp 模式下同样成立。
+        {
+            let guest_dir =
+                std::env::temp_dir().join(format!("moxsh-it-cwd-g-sec-{}", std::process::id()));
+            let host_dir =
+                std::env::temp_dir().join(format!("moxsh-it-cwd-h-sec-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&guest_dir);
+            let _ = fs::remove_dir_all(&host_dir);
+            fs::create_dir_all(&guest_dir).expect("mkdir guest");
+            fs::create_dir_all(&host_dir).expect("mkdir host");
+            fs::write(host_dir.join("marker"), "HOST\n").expect("write marker");
+            let out_file =
+                std::env::temp_dir().join(format!("moxsh-it-cwd-out-sec-{}", std::process::id()));
+            let _ = fs::remove_file(&out_file);
+
+            let mut rules = TranslateRules::new(Path::new("/"));
+            rules.add_binding(guest_dir.to_str().unwrap(), host_dir.to_str().unwrap());
+            let t = Tracer::new(rules);
+            let child = Tracer::spawn_traced(&[
+                "/bin/sh",
+                "-c",
+                &format!(
+                    "cd {} && {{ cat marker; /bin/pwd -P; echo rc=$?; }} > {}",
+                    guest_dir.display(),
+                    out_file.display()
+                ),
+            ])
+            .expect("spawn");
+            assert_eq!(t.run(child).expect("run"), 0, "seccomp: chdir/getcwd 用例");
+            let out = fs::read_to_string(&out_file).expect("读输出");
+            let mut lines = out.lines();
+            assert_eq!(lines.next(), Some("HOST"), "seccomp: chdir 应翻成 host 路径");
+            assert_eq!(
+                lines.next(),
+                Some(guest_dir.to_str().unwrap()),
+                "seccomp: getcwd 应还原为 guest 路径，实得 {:?}",
+                out
+            );
+            let _ = fs::remove_dir_all(&guest_dir);
+            let _ = fs::remove_dir_all(&host_dir);
+            let _ = fs::remove_file(&out_file);
+        }
+
+        std::env::remove_var("MOXSH_SECCOMP");
+    }
+
     unsafe { libc::alarm(0) };
 }

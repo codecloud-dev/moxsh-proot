@@ -38,12 +38,26 @@
 //!   其子进程不在清理名单内；这是与上游最大的平台差异点。
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use crate::proot::elf::{resolve_exec_chain, ExecPlan};
 use crate::proot::translate::{normalize, FakeRootAction, TranslateRules};
 use crate::proot::{ProotError, ProotResult};
 
-/// 引擎内部诊断日志（env 门控：`MOXSH_DBG=1` 开启，默认零开销）。
+/// 引擎诊断日志级别（由 `-v` 累加设置；≥1 即开启，等同 `MOXSH_DBG=1`）。
+static VERBOSE: AtomicU8 = AtomicU8::new(0);
+
+/// 设置引擎诊断日志级别（`moxsh-proot` 的 `-v` 累加后在此落地）。
+pub fn set_verbose(level: u8) {
+    VERBOSE.store(level, Ordering::Relaxed);
+}
+
+/// 诊断日志是否开启（env `MOXSH_DBG` 或 `-v` 任一满足）。
+pub fn diag_enabled() -> bool {
+    VERBOSE.load(Ordering::Relaxed) > 0 || std::env::var("MOXSH_DBG").is_ok()
+}
+
+/// 引擎内部诊断日志（`-v` 或 env `MOXSH_DBG=1` 开启，默认零开销）。
 ///
 /// 覆盖引擎最难自证的三个暗面——syscall 拦截的 enter/exit 改写结果、
 /// 新 tracee 事件、scratch 偷换——排查「翻译为何静默失效」类问题
@@ -51,7 +65,7 @@ use crate::proot::{ProotError, ProotResult};
 /// 盲猜）。写 stderr，不混入 guest 输出流。
 macro_rules! dbg_log {
     ($($arg:tt)*) => {
-        if std::env::var("MOXSH_DBG").is_ok() {
+        if crate::proot::ptrace::diag_enabled() {
             eprintln!($($arg)*);
         }
     };
@@ -195,6 +209,17 @@ pub mod sysnr {
     pub const ACCESS: u64 = 0x8010;
     /// mknod(const char *path, mode_t, dev_t) —— x86_64 老接口（133），哨兵 0x8011。
     pub const MKNOD: u64 = 0x8011;
+    /// name_to_handle_at(int dirfd, const char *pathname, struct file_handle *handle,
+    /// int *mount_id, int flags) —— aarch64 264。取路径的**文件句柄**，
+    /// 漏翻则句柄指向宿主文件，后续 `open_by_handle_at` 据此直接打开宿主文件
+    /// = 文档点名的"漏翻=读到宿主文件"真实泄露面。dirfd 槽 0、path 槽 1、跟随。
+    pub const NAME_TO_HANDLE_AT: u64 = 264;
+    /// umount2(const char *target, int flags) —— aarch64 39，target 是路径，跟随翻译。
+    pub const UMOUNT2: u64 = 39;
+    /// mount(const char *source, const char *target, const char *fstype,
+    /// unsigned long flags, const void *data) —— aarch64 40。双路径
+    /// （source/target 位于槽 0/1）均跟随翻译（MS_BIND 等场景路径须落到 guest）。
+    pub const MOUNT: u64 = 40;
 
     // ===== fake root 身份类 syscall（编号经 asm-generic/unistd.h 核实）=====
     /// fchownat(int dirfd, const char *pathname, uid_t owner, gid_t group, int flags)
@@ -292,7 +317,7 @@ pub struct SyscallPlan {
 }
 
 impl SyscallPlan {
-    const NONE: SyscallPlan = SyscallPlan {
+    pub(crate) const NONE: SyscallPlan = SyscallPlan {
         op: Op::PassThrough,
         args: [None, None],
         ret_buf_slot: None,
@@ -332,7 +357,7 @@ impl SyscallPlan {
 /// `recvfrom` 都会被误判为 truncate 走进路径翻译（读到 fd 小整数当指针，
 /// 触发数百次 PEEKDATA 降级扫描）。返回 `None` = 明确"本平台此号不拦"。
 #[cfg(target_arch = "x86_64")]
-fn to_internal_nr(nr: u64) -> Option<u64> {
+pub(crate) fn to_internal_nr(nr: u64) -> Option<u64> {
     use sysnr::*;
     Some(match nr {
         2 => OPEN,             // open（x86_64 独有老接口；musl loader 实测走它）
@@ -377,6 +402,9 @@ fn to_internal_nr(nr: u64) -> Option<u64> {
         316 => RENAMEAT2,      // renameat2
         322 => EXECVEAT,       // execveat
         332 => STATX,          // statx
+        165 => MOUNT,          // mount（source/target 双路径）
+        52 => UMOUNT2,         // umount2（target 路径）
+        303 => NAME_TO_HANDLE_AT, // name_to_handle_at（path 句柄泄露面）
         231 => EXIT_GROUP,     // exit_group
         102 => GETUID,         // getuid
         104 => GETGID,         // getgid
@@ -404,7 +432,7 @@ fn to_internal_nr(nr: u64) -> Option<u64> {
 /// （x86_64 写 `orig_rax`，见 `Tracer::set_regs`）。单测亦用它把内部号
 /// 常量装进当前平台的寄存器快照，保证测试跨架构一致。
 #[cfg(target_arch = "x86_64")]
-fn to_native_nr(internal: u64) -> u64 {
+pub(crate) fn to_native_nr(internal: u64) -> u64 {
     use sysnr::*;
     match internal {
         GETPID => 39,
@@ -473,13 +501,13 @@ fn to_native_nr(internal: u64) -> u64 {
 
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-fn to_internal_nr(nr: u64) -> Option<u64> {
+pub(crate) fn to_internal_nr(nr: u64) -> Option<u64> {
     Some(nr)
 }
 
 #[cfg(not(target_arch = "x86_64"))]
 #[inline]
-fn to_native_nr(internal: u64) -> u64 {
+pub(crate) fn to_native_nr(internal: u64) -> u64 {
     internal
 }
 
@@ -587,6 +615,20 @@ pub fn syscall_plan_internal(inr: u64) -> SyscallPlan {
         // 裸 open（x86_64）：与 chdir 同形的单路径参数（flags 是第 2 参，
         // 不碰）。musl loader 加载主程序、旧版静态程序直发。
         sysnr::OPEN => SyscallPlan::rewrite(Some(PathArg { slot: 0, dirfd_slot: None }), None),
+        // name_to_handle_at：取路径句柄，漏翻会让句柄指向宿主文件
+        // （open_by_handle_at 据此打开宿主文件）= 文档点名真实泄露面。
+        // dirfd 槽 0、path 槽 1、跟随。
+        NAME_TO_HANDLE_AT => SyscallPlan::rewrite(
+            Some(PathArg { slot: 1, dirfd_slot: Some(0) }),
+            None,
+        ),
+        // umount2：target 路径跟随翻译（防止卸掉宿主挂载点）。
+        UMOUNT2 => SyscallPlan::rewrite(Some(PathArg { slot: 0, dirfd_slot: None }), None),
+        // mount：source(槽0)/target(槽1) 双路径跟随翻译（MS_BIND 等场景路径须落 guest）。
+        MOUNT => SyscallPlan::rewrite(
+            Some(PathArg { slot: 0, dirfd_slot: None }),
+            Some(PathArg { slot: 1, dirfd_slot: None }),
+        ),
         GETCWD => SyscallPlan { op: Op::RestoreOnExit, args: [None, None], ret_buf_slot: Some(0), follow_paths: false },
         // fstat/fchmod 无路径参数；clone/clone3 靠 TRACECLONE 跟踪，无需改参数。
         FSTAT | FCHMOD | CLONE | CLONE3 | sysnr::EXIT_GROUP => SyscallPlan::NONE,
@@ -1011,6 +1053,14 @@ pub struct Tracer {
     /// ——guest shell 里 exec 的程序读 self/exe 也能得到正确路径。
     /// RefCell：拦截方法全是 `&self`（单线程停循环内串行消费，无竞争）。
     initial_guest_prog: std::cell::RefCell<Option<String>>,
+    /// seccomp 加速器是否启用（env `MOXSH_SECCOMP=1` 时 `true`）。
+    ///
+    /// 启用后：非拦截 syscall 经 `SECCOMP_RET_ALLOW` 零开销直通，仅拦截面
+    /// 触发一次 `PTRACE_EVENT_SECCOMP` 入口停（见 [`crate::proot::seccomp`]）。
+    /// 决定 `run` 主循环的继续策略——出口/事件停用 `PTRACE_CONT` 而非
+    /// `PTRACE_SYSCALL`，避免把非拦截 syscall 重新拖回双停。未启用时恒为
+    /// 既有 `PTRACE_SYSCALL` 双停路径（安全默认）。
+    seccomp: bool,
 }
 
 /// tracee 地址空间内的 scratch 区（mmap 注入的产物）。
@@ -1071,6 +1121,8 @@ impl Tracer {
             exit_bufs: std::cell::RefCell::new(std::collections::HashMap::new()),
             scratch: std::cell::RefCell::new(std::collections::HashMap::new()),
             initial_guest_prog: std::cell::RefCell::new(None),
+            // 仅在 env 门控开启时启用 seccomp 加速器；子进程侧同步安装过滤器。
+            seccomp: std::env::var_os("MOXSH_SECCOMP").is_some(),
         }
     }
 
@@ -1149,14 +1201,22 @@ impl Tracer {
         let host = match host_override {
             Some(p) => p.to_path_buf(),
             None => {
-                let mut h = self.rules.guest_to_host(guest);
-                // 组件级符号链接走查（仅绝对路径）：绝对 target 由内核在
-                // 宿主空间解析是「未规范化 rootfs 全挂」的根因（Alpine
-                // minirootfs 的 applet 链接 `/bin/ls -> /bin/busybox`）。
-                if follow_last && guest.starts_with('/') {
-                    h = crate::proot::symlink_fix::resolve_host_path(&h, &self.rules, true);
+                if self.rules.is_hidden(guest) {
+                    // 命中隐藏路径：重定向到 rootfs 下不存在的哨兵路径，
+                    // 使 open/stat/access 等读为 ENOENT——guest 视野里该路径
+                    // 不复存在（--hide 的语义）。跳过符号链接走查（走查基于
+                    // 真实 host 路径，哨兵路径无需解析）。
+                    self.rules.hidden_sentinel()
+                } else {
+                    let mut h = self.rules.guest_to_host(guest);
+                    // 组件级符号链接走查（仅绝对路径）：绝对 target 由内核在
+                    // 宿主空间解析是「未规范化 rootfs 全挂」的根因（Alpine
+                    // minirootfs 的 applet 链接 `/bin/ls -> /bin/busybox`）。
+                    if follow_last && guest.starts_with('/') {
+                        h = crate::proot::symlink_fix::resolve_host_path(&h, &self.rules, true);
+                    }
+                    h
                 }
-                h
             }
         };
         let new = host.to_string_lossy().into_owned();
@@ -1649,9 +1709,10 @@ impl Tracer {
     /// fake root：对身份类 syscall 的返回值伪装（对齐上游 fake_id0）。
     ///
     /// - [`Tracer::neutered`] 里有记录的（enter 阉割的 setuid/chown 系、
-    ///   getresuid/gid）：一律返回 0；getresuid/gid 另向三个出参指针写 0；
-    /// - exit-only 类（getuid/geteuid/getgid/getegid/setfsuid/setfsgid/
-    ///   getgroups）：直接把返回值改成 0。
+    ///   getresuid/gid）：一律返回 0；getresuid/gid 另向三个出参指针写
+    ///   伪装的 uid/gid（[`-i uid:gid`] 配置值，未配则为 0）；
+    /// - exit-only 类（getuid/geteuid → 伪装 uid；getgid/getegid/setfsuid/
+    ///   setfsgid → 伪装 gid）：直接把返回值改成伪装值。
     ///
     /// 返回 `true` 表示 regs 已改、调用方需 `set_regs` 写回。
     pub fn apply_fake_root_exit(&self, pid: libc::pid_t, regs: &mut Regs) -> bool {
@@ -1659,13 +1720,23 @@ impl Tracer {
         if !self.rules.fake_root() {
             return false;
         }
+        let fake_uid = self.rules.fake_uid();
+        let fake_gid = self.rules.fake_gid();
         if let Some(n) = self.neutered.borrow_mut().remove(&pid) {
             match n.orig_nr {
-                GETRESUID | GETRESGID => {
-                    // 三个出参指针（enter 时缓存；exit 的 x0 已是返回值读不到）。
+                GETRESUID => {
+                    // 三个出参指针（enter 时缓存；exit 的 x0 已是返回值读不到），
+                    // 全部写成伪装的 uid（ruid/euid/suid 一致）。
                     for p in n.out_ptrs {
                         if p != 0 {
-                            let _ = write_child_bytes(pid, p, &[0u8; 8]);
+                            let _ = write_child_bytes(pid, p, &(fake_uid as u64).to_ne_bytes());
+                        }
+                    }
+                }
+                GETRESGID => {
+                    for p in n.out_ptrs {
+                        if p != 0 {
+                            let _ = write_child_bytes(pid, p, &(fake_gid as u64).to_ne_bytes());
                         }
                     }
                 }
@@ -1674,21 +1745,25 @@ impl Tracer {
             regs.set_ret(0);
             return true;
         }
-        // exit-only 类：getuid/geteuid/getgid/getegid/setfsuid/setfsgid/
-        // getgroups——直接把返回值改成 0。
+        // exit-only 类：getuid/geteuid → 伪装 uid；getgid/getegid/setfsuid/
+        // setfsgid → 伪装 gid。getgroups 不在此改写（保持内核真实返回，避免
+        // 把未填充的 gid 列表长度写成错误计数）。
         //
         // 注意 x86_64 语义：exit 时 `orig_rax` 是**实际执行过的** syscall 号
         // （enter 阉割替身执行过的情况 orig_rax 已是 getpid，但那条走上面
         // 的 map 命中路径，到不了这里）；能走到这里的必然是未被替换的
-        // 原生命，归一化后匹配。clippy::collapsible_match：Option 解包 +
-        // 单分支 match 合并为带 or 模式的 if let。
-        if let Some(GETUID | GETEUID | GETGID | GETEGID | SETFSUID | SETFSGID | GETGROUPS) =
-            to_internal_nr(regs.nr())
-        {
-            regs.set_ret(0);
-            return true;
+        // 原生命，归一化后匹配。
+        match to_internal_nr(regs.nr()) {
+            Some(GETUID) | Some(GETEUID) => {
+                regs.set_ret(fake_uid as u64);
+                true
+            }
+            Some(GETGID) | Some(GETEGID) | Some(SETFSUID) | Some(SETFSGID) => {
+                regs.set_ret(fake_gid as u64);
+                true
+            }
+            _ => false,
         }
-        false
     }
 
     /// /proc 身份文件的内容级伪装动作查询（供 exit 读缓冲阶段使用）。
@@ -1782,6 +1857,23 @@ impl Tracer {
                 if libc::ptrace(libc::PTRACE_TRACEME, 0, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>()) < 0 {
                     libc::_exit(126);
                 }
+                // seccomp 加速器（可选，env `MOXSH_SECCOMP=1` 门控）。
+                // 引导顺序：TRACEME → **SIGSTOP 握手** → 装过滤器 → execve。
+                // 必须先 SIGSTOP 把控制权交还 tracer，让它在「装过滤器 +
+                // execve」之前设好 PTRACE_O_TRACESECCOMP——否则初始 execve
+                // 被本过滤器拦截时，内核找不到监听 tracer 会中止该 syscall，
+                // guest 直接 exit 127。这是上游 proot 的 fork 子进程同步
+                // （src/tracee/event.c）。SIGSTOP 由 tracer 侧 run 循环的
+                // 专用分支接收并设选项后放行。
+                // 安装失败即 _exit(124)——fail-loud 而非静默跑成未翻译（tracer
+                // 端无法感知子进程 seccomp 是否真的装上，静默失败会让隔离悄悄
+                // 失效）。过滤器随 execve 持久化。
+                if std::env::var_os("MOXSH_SECCOMP").is_some() {
+                    libc::kill(libc::getpid(), libc::SIGSTOP);
+                    if !crate::proot::seccomp::install_in_child() {
+                        libc::_exit(124);
+                    }
+                }
                 // 初始 cwd：翻译后的 host 路径。失败必须显式退出而非默默
                 // 继承 tracer cwd（那会让 guest 看到 rootfs 外真实路径）。
                 if let Some(dir) = cwd {
@@ -1873,6 +1965,7 @@ impl Tracer {
             | libc::PTRACE_O_TRACEVFORK
             | libc::PTRACE_O_TRACECLONE
             | libc::PTRACE_O_TRACEEXEC
+            | libc::PTRACE_O_TRACESECCOMP
             | libc::PTRACE_O_EXITKILL) as libc::c_long;
 
         // 存活 tracee 集合（初始 child + 事件新 attach 的子孙/线程）。
@@ -1953,6 +2046,40 @@ impl Tracer {
 
             let sig = libc::WSTOPSIG(status);
 
+            // ===== seccomp 引导同步（SIGSTOP 握手，仅 seccomp 模式）=====
+            // 子进程 TRACEME 后主动 SIGSTOP，tracer 借此在「子进程装 seccomp
+            // 过滤器 + execve」之前设置 PTRACE_O_TRACESECCOMP。否则初始
+            // execve 被 seccomp 拦截时内核找不到监听 tracer，会中止该 syscall
+            // （guest 直接 exit 127）。对齐上游 proot src/tracee/event.c 的
+            // fork 子进程同步。
+            // 关键：本分支**不清除 first_stop**——初始 execve 仍须由随后到达
+            // 的 EXEC 事件按首停处理（comm 伪装 + 相位归零），且其 SECCOMP
+            // 事件需 `first_stop == Some(pid)` 守卫跳过，避免二次改写 argv
+            // 致 guest 起不来（实测初判 127）。
+            if self.seccomp && first_stop == Some(pid) && sig == libc::SIGSTOP {
+                unsafe {
+                    let rc = libc::ptrace(
+                        libc::PTRACE_SETOPTIONS,
+                        pid,
+                        std::ptr::null_mut::<libc::c_void>(),
+                        trace_opts as *mut libc::c_void,
+                    );
+                    if rc < 0 {
+                        return Err(ProotError::Ptrace(format!(
+                            "SIGSTOP 同步 SETOPTIONS 失败: {}",
+                            std::io::Error::last_os_error()
+                        )));
+                    }
+                    libc::ptrace(
+                        libc::PTRACE_CONT,
+                        pid,
+                        std::ptr::null_mut::<libc::c_void>(),
+                        std::ptr::null_mut::<libc::c_void>(),
+                    )
+                };
+                continue;
+            }
+
             // ===== 初始 child 首停（exec SIGTRAP）：设选项 + 相位归零 =====
             // 能等到停止即证明子进程已 TRACEME，SETOPTIONS 必成功；失败则
             // syscall stop 不带 0x80、exec 无 EVENT_EXEC，后续链路全脱管，
@@ -1985,14 +2112,21 @@ impl Tracer {
                         let comm: String = base.chars().take(15).collect();
                         let _ = std::fs::write(format!("/proc/{}/comm", pid), comm);
                     }
-                    // PTRACE_SYSCALL 放行：此后该 tracee 的所有 syscall 都会
-                    // 双停（PTRACE_CONT 放行的进程不会在 syscall 停）。
+                    // 放行到下一停。seccomp 加速器启用时改用 PTRACE_CONT：
+                    // 非拦截 syscall 经 SECCOMP_RET_ALLOW 零开销直通，只有
+                    // 拦截面会触发 PTRACE_EVENT_SECCOMP 入口停；PTRACE_SYSCALL
+                    // 则会把所有 syscall 重新拖回双停，抵消加速器收益。
                     // scratch 不在此处分配——首停是 exec 后 plain SIGTRAP，
                     // 非 syscall 停，注入 syscall 不可行（实测证伪，见
                     // [`Tracer::stolen_mmap_regs`] 机制文档）；改为偷换该
-                    // tracee 后续第一条自身 syscall（见 syscall 停分支）。
+                    // tracee 后续第一条自身 syscall（见 seccomp/syscall 停分支）。
+                    let cont = if self.seccomp {
+                        libc::PTRACE_CONT
+                    } else {
+                        libc::PTRACE_SYSCALL
+                    };
                     libc::ptrace(
-                        libc::PTRACE_SYSCALL,
+                        cont,
                         pid,
                         std::ptr::null_mut::<libc::c_void>(),
                         std::ptr::null_mut::<libc::c_void>(),
@@ -2082,9 +2216,18 @@ impl Tracer {
                 // 全部 exit 阶段逻辑（fake root 返回值伪装、getcwd/readlinkat
                 // 反向还原）静默失效（M4.1 修复，由 setpriv  e2e 用例抓出）。
                 in_syscall.insert(pid, entering);
+                // seccomp 模式下本分支只收到拦截 syscall 的**出口**停
+                // （入口停是 PTRACE_EVENT_SECCOMP 事件），出口处理完即
+                // PTRACE_CONT 放其自由运行，直到下一个拦截面触发 seccomp 事件；
+                // 非 seccomp 模式维持双停（PTRACE_SYSCALL）。
+                let cont = if self.seccomp && !entering {
+                    libc::PTRACE_CONT
+                } else {
+                    libc::PTRACE_SYSCALL
+                };
                 unsafe {
                     libc::ptrace(
-                        libc::PTRACE_SYSCALL,
+                        cont,
                         pid,
                         std::ptr::null_mut::<libc::c_void>(),
                         std::ptr::null_mut::<libc::c_void>(),
@@ -2097,6 +2240,100 @@ impl Tracer {
             if sig == libc::SIGTRAP {
                 let event = (status >> 16) & 0xff;
                 match event {
+                    libc::PTRACE_EVENT_SECCOMP => {
+                        // seccomp 入口停（仅 MOXSH_SECCOMP 模式出现）。等价于一次
+                        // syscall enter 停，但只发生在**拦截号**上；非拦截号已被
+                        // SECCOMP_RET_ALLOW 直通，不会到这里。处理流程与双停模型
+                        // 的 enter 停一致：做 enter 改写；按是否需要出口处理决定
+                        // 用 PTRACE_SYSCALL 取出口停（getcwd/readlinkat 反向还原、
+                        // fake root 出口伪装/setuid 强制返 0）还是 PTRACE_CONT 省
+                        // 掉出口停（拦截且无需出口的 syscall 从 2 停降到 1 停）。
+                        if self.seccomp {
+                            // 偷换 scratch（仅首 syscall、且尚未分配）：把首条
+                            // syscall 参数改成 mmap(SCRATCH_TOTAL)，其出口停仍是
+                            // 普通 syscall 出口停（mmap 在 SECCOMP_RET_ALLOW 集合
+                            // 内），由下方 SIGTRAP|0x80 分支的既有恢复逻辑接管。
+                            if !self.scratch.borrow().contains_key(&pid)
+                                && !stealing.contains_key(&pid)
+                                && steal_attempts.get(&pid).copied().unwrap_or(0) < STEAL_MAX_ATTEMPTS
+                            {
+                                let saved = self.get_regs(pid, true)?;
+                                let stolen = Self::stolen_mmap_regs(&saved);
+                                self.set_regs(pid, &stolen, true)?;
+                                stealing.insert(pid, saved);
+                                steal_attempts.insert(
+                                    pid,
+                                    steal_attempts.get(&pid).copied().unwrap_or(0) + 1,
+                                );
+                                in_syscall.insert(pid, true); // 下一停是偷换 mmap 的出口
+                                unsafe {
+                                    libc::ptrace(
+                                        libc::PTRACE_SYSCALL,
+                                        pid,
+                                        std::ptr::null_mut::<libc::c_void>(),
+                                        std::ptr::null_mut::<libc::c_void>(),
+                                    )
+                                };
+                                continue;
+                            }
+                            // 正常 enter 处理：先算是否需要出口停，再调用共用逻辑。
+                            let nr = self.get_regs(pid, true)?.nr();
+                            let plan = syscall_plan(nr);
+                            // 初始 execve：路径已由 prepare_initial_exec 解析并装配好
+                            // loader 调用，此刻若再走运行时解释器重写（handle_execve_enter）
+                            // 会二次重写、损坏 argv/路径，guest shell 起不来（实测初判
+                            // 127）。初始 execve 在 TRACEME 模型下本只产生一次 plain
+                            // exec SIGTRAP（由首停分支接管），不经过 syscall enter 停。
+                            // 故「首停前出现的 execve 事件」直接放行，等随后的 exec SIGTRAP。
+                            if matches!(
+                                to_internal_nr(nr),
+                                Some(sysnr::EXECVE) | Some(sysnr::EXECVEAT)
+                            ) && first_stop == Some(pid)
+                            {
+                                unsafe {
+                                    libc::ptrace(
+                                        libc::PTRACE_CONT,
+                                        pid,
+                                        std::ptr::null_mut::<libc::c_void>(),
+                                        std::ptr::null_mut::<libc::c_void>(),
+                                    )
+                                };
+                                continue;
+                            }
+                            // 出口处理场景：getcwd/readlinkat 反向还原（ret_buf_slot）、
+                            // fake root 出口伪装与 setuid 系强制返 0（FakeRootExit/
+                            // FakeRootEnter 改写后需 exit 把返回值压成 0）。
+                            let needs_exit = plan.ret_buf_slot.is_some()
+                                || matches!(plan.op, Op::FakeRootExit | Op::FakeRootEnter);
+                            self.handle_syscall_stop(pid, true)?;
+                            in_syscall.insert(pid, true);
+                            let cont = if needs_exit {
+                                libc::PTRACE_SYSCALL // 取出口停
+                            } else {
+                                libc::PTRACE_CONT // 省掉出口停（拦截且无需出口 → 1 停）
+                            };
+                            unsafe {
+                                libc::ptrace(
+                                    cont,
+                                    pid,
+                                    std::ptr::null_mut::<libc::c_void>(),
+                                    std::ptr::null_mut::<libc::c_void>(),
+                                )
+                            };
+                            continue;
+                        }
+                        // 未启用 seccomp 却收到该事件（不应发生）：保守用 SYSCALL
+                        // 维持双停，避免 tracee 脱管。
+                        unsafe {
+                            libc::ptrace(
+                                libc::PTRACE_SYSCALL,
+                                pid,
+                                std::ptr::null_mut::<libc::c_void>(),
+                                std::ptr::null_mut::<libc::c_void>(),
+                            )
+                        };
+                        continue;
+                    }
                     libc::PTRACE_EVENT_EXEC => {
                         // execve 的 syscall-ENTER 停（sig=133，rdi=路径
                         // 指针，可改写）→ 本事件 → syscall-EXIT 停（rax=0）
@@ -2141,9 +2378,16 @@ impl Tracer {
                             // 无效），无需在此标记——方案 I 对每个 tracee
                             // 自动生效。
                             // 竞争：新 tracee 可能在唤醒前已退出（ESRCH），忽略。
+                            // seccomp 模式下用 PTRACE_CONT：新 tracee 继承过滤器，
+                            // 其拦截 syscall 仍会触发 seccomp 事件，无需双停拖住。
+                            let cont = if self.seccomp {
+                                libc::PTRACE_CONT
+                            } else {
+                                libc::PTRACE_SYSCALL
+                            };
                             unsafe {
                                 libc::ptrace(
-                                    libc::PTRACE_SYSCALL,
+                                    cont,
                                     new_pid,
                                     std::ptr::null_mut::<libc::c_void>(),
                                     std::ptr::null_mut::<libc::c_void>(),
@@ -2153,13 +2397,18 @@ impl Tracer {
                     }
                     _ => {} // 其他事件（未订阅）直接放行
                 }
-                // 事件停止后必须用 PTRACE_SYSCALL 继续：PTRACE_CONT 放行的
-                // tracee 不会在 syscall 停，此后整个翻译链静默失效
-                // （EVENT_EXEC 后尤其致命——exec 已完成，后续 syscall
-                // 全部脱管）。信号递送场景同理见普通信号分支。
+                // 事件停止后继续：seccomp 模式用 PTRACE_CONT（非拦截 syscall
+                // 已零开销直通，只有拦截面触发 seccomp 事件）；非 seccomp 模式
+                // 用 PTRACE_SYSCALL 维持双停（PTRACE_CONT 会让 tracee 脱管，
+                // EVENT_EXEC 后尤其致命——exec 已完成，后续 syscall 全部失联）。
+                let cont = if self.seccomp {
+                    libc::PTRACE_CONT
+                } else {
+                    libc::PTRACE_SYSCALL
+                };
                 unsafe {
                     libc::ptrace(
-                        libc::PTRACE_SYSCALL,
+                        cont,
                         pid,
                         std::ptr::null_mut::<libc::c_void>(),
                         std::ptr::null_mut::<libc::c_void>(),
@@ -2168,13 +2417,18 @@ impl Tracer {
                 continue;
             }
 
-            // ===== 普通信号停止：递送信号 + 保持 syscall 跟踪 =====
-            // PTRACE_SYSCALL 的第 4 参即待递送信号：一个请求同时完成
-            // 「递送/抑制信号」与「下个 syscall 停」，避免 CONT 放行后
-            // tracee 脱离 syscall 跟踪。
+            // ===== 普通信号停止：递送信号 + 继续 =====
+            // 第 4 参即待递送信号。seccomp 模式下用 PTRACE_CONT：拦截 syscall
+            // 仍会触发 seccomp 事件，无需用 PTRACE_SYSCALL 拖回双停；非 seccomp
+            // 模式用 PTRACE_SYSCALL 维持「递送信号 + 下个 syscall 停」语义。
+            let cont = if self.seccomp {
+                libc::PTRACE_CONT
+            } else {
+                libc::PTRACE_SYSCALL
+            };
             unsafe {
                 libc::ptrace(
-                    libc::PTRACE_SYSCALL,
+                    cont,
                     pid,
                     std::ptr::null_mut::<libc::c_void>(),
                     sig as libc::c_long as *mut libc::c_void,
@@ -2781,6 +3035,35 @@ mod tests {
         assert_eq!(p.op, Op::RewriteEnterRestoreExit);
         assert_eq!(p.args[0], Some(PathArg { slot: 0, dirfd_slot: None }));
         assert_eq!(p.ret_buf_slot, Some(1));
+    }
+
+    /// P0 正确性：name_to_handle_at 必须拦（漏翻会让文件句柄指向宿主，
+    /// open_by_handle_at 据此打开宿主文件）。dirfd 槽 0、path 槽 1、跟随。
+    #[test]
+    fn plan_name_to_handle_at() {
+        let p = syscall_plan_internal(sysnr::NAME_TO_HANDLE_AT);
+        assert_eq!(p.op, Op::RewriteOnEnter);
+        assert_eq!(p.args[0], Some(PathArg { slot: 1, dirfd_slot: Some(0) }));
+        assert!(p.follow_paths);
+        assert_eq!(sysnr::NAME_TO_HANDLE_AT, 264);
+    }
+
+    /// P0 正确性：umount2 的 target 路径必须翻译（防止卸掉宿主挂载点）。
+    #[test]
+    fn plan_umount2() {
+        let p = syscall_plan_internal(sysnr::UMOUNT2);
+        assert_eq!(p.op, Op::RewriteOnEnter);
+        assert_eq!(p.args[0], Some(PathArg { slot: 0, dirfd_slot: None }));
+    }
+
+    /// P0 正确性：mount 的 source(槽0)/target(槽1) 双路径跟随翻译。
+    #[test]
+    fn plan_mount_two_paths() {
+        let p = syscall_plan_internal(sysnr::MOUNT);
+        assert_eq!(p.op, Op::RewriteOnEnter);
+        assert_eq!(p.args[0], Some(PathArg { slot: 0, dirfd_slot: None }));
+        assert_eq!(p.args[1], Some(PathArg { slot: 1, dirfd_slot: None }));
+        assert_eq!(sysnr::MOUNT, 40);
     }
 
     /// self/exe 覆盖门禁必须覆盖**所有**带返回缓冲还原的 op（M6 CI 回归

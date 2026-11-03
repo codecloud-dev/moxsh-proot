@@ -34,6 +34,7 @@ pub mod links;
 pub mod locale;
 pub mod net;
 pub mod ptrace;
+pub mod seccomp;
 pub mod recipe;
 pub mod redeem;
 pub mod script;
@@ -233,9 +234,12 @@ pub const DEFAULT_CONTAINER_PATH: &str =
 /// 字段与上游 CLI 一一对应：
 /// - `rootfs`   ↔ `-r <path>`
 /// - `bindings` ↔ 多个 `-b <host>:<guest>`
-/// - `fake_root` ↔ `-0`（对齐上游 fake_id0：uid/gid 显示为 0，伪造特权操作成功）
+/// - `fake_root`/`fake_uid`/`fake_gid` ↔ `-0` / `-i uid[:gid]`（对齐上游
+///   fake_id0：uid/gid 显示为给定值，伪造特权操作成功；`-0` 即 0:0）
 /// - `cwd`      ↔ `-w <dir>`
 /// - `env`      ↔ `/usr/bin/env -i KEY=VALUE ...`（进入发行版时注入）
+/// - `verbose`  ↔ `-v`（诊断日志级别，0=关）
+/// - `hidden`   ↔ `--hide <path>`（隐藏指定 guest 路径，访问即 ENOENT）
 #[derive(Debug, Clone)]
 pub struct ProotConfig {
     /// 宿主侧 rootfs 根目录（发行版解压位置）。
@@ -245,6 +249,16 @@ pub struct ProotConfig {
     pub bindings: Vec<(String, String)>,
     /// 是否启用 fake root（`-0`）。
     pub fake_root: bool,
+    /// fake root 伪装的身份 uid（由 `-i uid[:gid]` 设置，`-0` 时为 0）。
+    /// 与 `fake_gid` 一道替代「固定 0:0」，getuid 系与 getgroups 返回此值。
+    pub fake_uid: u32,
+    /// fake root 伪装的身份 gid（`-i uid:gid` 的 gid；省略则等于 uid）。
+    pub fake_gid: u32,
+    /// 诊断日志级别（`-v` 累加；≥1 即开启引擎内部诊断输出，等同 `MOXSH_DBG=1`）。
+    pub verbose: u8,
+    /// 需隐藏的 guest 路径列表（`--hide` 可重复）。命中路径在路径类 syscall 被
+    /// 重定向到不存在的哨兵路径，使访问读为 ENOENT——各解决一个真实痛点。
+    pub hidden: Vec<String>,
     /// 进入发行版后的初始工作目录（guest 视角）。
     pub cwd: String,
     /// 注入发行版进程的环境变量（`KEY=VALUE` 键值对）。
@@ -258,6 +272,10 @@ impl ProotConfig {
             rootfs: rootfs.to_path_buf(),
             bindings: Vec::new(),
             fake_root: false,
+            fake_uid: 0,
+            fake_gid: 0,
+            verbose: 0,
+            hidden: Vec::new(),
             cwd: "/".to_string(),
             env: Vec::new(),
         }
@@ -345,6 +363,10 @@ impl ProotConfig {
         // 初始 cwd 的落地由 spawn 时的 chdir 完成（cli::run_native 计算翻译后
         // 的 host 路径传入 spawn_traced_with_cwd）。
         rules.set_fake_root(self.fake_root);
+        rules.set_fake_id(self.fake_uid, self.fake_gid);
+        for h in &self.hidden {
+            rules.add_hidden(h);
+        }
         rules
     }
 

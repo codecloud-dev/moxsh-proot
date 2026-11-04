@@ -1,32 +1,35 @@
 # mox-proot 成果展示 · TUI 简笔画图册
 
-> 这一份是专门给你看的「成果清单 + TUI 简笔画」。所有界面都用字符画成示意草图
+> 这一份是专门给你看的「成果清单 + TUI 简笔画」。所有界面都用字符画成示意草图  
 > （简笔画，不是截图），每个框、每个箭头都对应仓库里真实存在的代码。
 >
 > 本次一口气做完：**惊喜三件套（时间上下文 / 古诗 / 彩蛋）** + T2 CLI 颜色进度条
-> + T3 版本列表选版本 + T4 半截 TUI 升级 + T5 安装脚本精修 + T6 README 修复
-> + T7 CI 等价校验。
+>
+> - T3 版本列表选版本 + T4 半截 TUI 升级 + T5 安装脚本精修 + T6 README 修复
+> - T7 CI 等价校验。
+
+
 
 ---
 
 ## 0. 先说「那个 txt」和彩蛋
 
-我把仓库、`/workspace`、上传目录、git 历史、交接 JSON 都翻了一遍：**没有找到那份写着
-「彩蛋 / 按时间上下文感知 / 古诗诗句」的 txt 规格文件**（能找到的 `.txt` 全是
+我把仓库、`/workspace`、上传目录、git 历史、交接 JSON 都翻了一遍：**没有找到那份写着  
+「彩蛋 / 按时间上下文感知 / 古诗诗句」的 txt 规格文件**（能找到的 `.txt` 全是  
 `termux-src` 里的许可证和构建缓存，跟需求无关）。这份需求只出现在你的消息里。
 
 所以我按你描述的语义**逐条落地、没有弄丢**，并把它们钉在代码和文档里：
 
-| 你提到的 | 落到哪里 | 怎么触发 |
-| :--- | :--- | :--- |
-| **按时间上下文感知** | `src/proot/delight.rs` → `TimePhase::from_hour` / `current_phase` | 读本机时区小时，分晨/午/晚/夜 |
-| **古诗诗句** | `delight.rs` → `poem()` / `poem_from()` | 每个时相配一句 + 作者出处 |
-| **彩蛋** | `delight.rs` → `easter_egg()` / `egg_enabled_via_env()` | `mox egg`、`konami`、`MOX_EGG=1` |
-| 控制台无参欢迎 | `console.rs` 的 `CONSOLE_SCRIPT`（shell 自包含版） | 进容器直接敲 `mox` |
-| TUI 欢迎屏 | `tui.rs` → `render_welcome` | 启动 `mox-proot-tui`，任意键进入 |
-| CLI 单独取用 | `cli.rs` → `cmd_time` / `cmd_egg` | `mox-proot-distro time` / `egg` |
+| 你提到的         | 落到哪里                                                              | 怎么触发                            |
+| :----------- | :---------------------------------------------------------------- | :------------------------------ |
+| **按时间上下文感知** | `src/proot/delight.rs` → `TimePhase::from_hour` / `current_phase` | 读本机时区小时，分晨/午/晚/夜                |
+| **古诗诗句**     | `delight.rs` → `poem()` / `poem_from()`                           | 每个时相配一句 + 作者出处                  |
+| **彩蛋**       | `delight.rs` → `easter_egg()` / `egg_enabled_via_env()`           | `mox egg`、`konami`、`MOX_EGG=1`  |
+| 控制台无参欢迎      | `console.rs` 的 `CONSOLE_SCRIPT`（shell 自包含版）                       | 进容器直接敲 `mox`                    |
+| TUI 欢迎屏      | `tui.rs` → `render_welcome`                                       | 启动 `mox-proot-tui`，任意键进入        |
+| CLI 单独取用     | `cli.rs` → `cmd_time` / `cmd_egg`                                 | `mox-proot-distro time` / `egg` |
 
-> 设计原则：**Rust 单一来源**（`delight.rs`）+ **shell 自包含副本**（`mox` 脚本）。
+> 设计原则：**Rust 单一来源**（`delight.rs`）+ **shell 自包含副本**（`mox` 脚本）。  
 > 后者不依赖任何二进制，即使 `mox-proot-distro` 坏了，进容器照样能收到问候和诗。
 
 ---
@@ -47,12 +50,12 @@
 
 **四相与诗句对照**
 
-| 时相 | 时段 | 问候 | 古诗 |
-| :--: | :--: | :--- | :--- |
-| 晨 | 05–10 | 早安，新的一天从容器里开始 ☀ | 晨起开门雪满山，雪晴云淡日光寒。——郑燮《山中雪后》 |
-| 午 | 11–16 | 午安，喝口水再战 ☕ | 锄禾日当午，汗滴禾下土。——李绅《悯农》 |
-| 晚 | 17–22 | 晚安，夜色正好适合折腾 🌙 | 夕阳无限好，只是近黄昏。——李商隐《登乐游原》 |
-| 夜 | 23–04 | 夜深了，注意身体，别熬太晚 🌃 | 春眠不觉晓，处处闻啼鸟。——孟浩然《春晓》 |
+|  时相 |   时段  | 问候               | 古诗                         |
+| :-: | :---: | :--------------- | :------------------------- |
+|  晨  | 05–10 | 早安，新的一天从容器里开始 ☀  | 晨起开门雪满山，雪晴云淡日光寒。——郑燮《山中雪后》 |
+|  午  | 11–16 | 午安，喝口水再战 ☕       | 锄禾日当午，汗滴禾下土。——李绅《悯农》       |
+|  晚  | 17–22 | 晚安，夜色正好适合折腾 🌙   | 夕阳无限好，只是近黄昏。——李商隐《登乐游原》    |
+|  夜  | 23–04 | 夜深了，注意身体，别熬太晚 🌃 | 春眠不觉晓，处处闻啼鸟。——孟浩然《春晓》      |
 
 **控制台实跑（当晚 21 点）**
 
@@ -123,6 +126,8 @@
   │        按任意键进入控制台   ·   q 退出                    │
   └──────────────────────────────────────────────────────────┘
 ```
+
+
 
 ---
 
@@ -214,7 +219,7 @@
             -> 手机扫码 GitHub/Gitee 授权 -> 轮询落盘 device_token -> 回到本页
 ```
 
-> 说明：账号页里这枚是**固定入口示意图**（不会被 TUI 边框裁切）；真正带验证码、
+> 说明：账号页里这枚是**固定入口示意图**（不会被 TUI 边框裁切）；真正带验证码、  
 > 能扫的二维码仍由 `run_login_flow` 在原生终端渲染。两处不冲突。
 
 ---
@@ -255,11 +260,11 @@
                 （3.20 (minirootfs) / 3.19 (minirootfs) / edge）
 ```
 
-| 发行版 | 可选版本 |
-| :--- | :--- |
-| ubuntu | 24.04 LTS (base) · 22.04 LTS · 20.04 LTS |
-| debian | 12 (bookworm) · 11 (bullseye) |
-| kali | rolling (nethunter minimal) |
+| 发行版    | 可选版本                                         |
+| :----- | :------------------------------------------- |
+| ubuntu | 24.04 LTS (base) · 22.04 LTS · 20.04 LTS     |
+| debian | 12 (bookworm) · 11 (bullseye)                |
+| kali   | rolling (nethunter minimal)                  |
 | alpine | 3.20 (minirootfs) · 3.19 (minirootfs) · edge |
 
 ---
@@ -284,26 +289,31 @@
   ... 用法速查（含三件套 / versions / --version 提示）
 ```
 
-> 精修保住了原有的彩色 `log/warn/die`，并补上 `NO_COLOR` 约定（非 TTY 自动关色，
-> `curl | bash` 重定向时不会输出乱码转义）。`mox` 控制台脚本与引擎 `console.rs`
+> 精修保住了原有的彩色 `log/warn/die`，并补上 `NO_COLOR` 约定（非 TTY 自动关色，  
+> |  |  |  
+> | --- | --- |  
+> `curl | bash` 重定向时不会输出乱码转义）。`mox` 控制台脚本与引擎 `console.rs`  
 > 同源，同样带时间问候 + 古诗 + 彩蛋。
+
+
 
 ---
 
 ## 9. 成果清单与验证
 
-| # | 任务 | 关键文件 | 状态 |
-| :-- | :--- | :--- | :--: |
-| 450 | 惊喜三件套（时间上下文 / 古诗 / 彩蛋） | `delight.rs`(新)、`mod.rs`、`console.rs`、`cli.rs` | ✅ |
-| 451 | T2 CLI 颜色 / NO_COLOR / 进度条 | `cli.rs` | ✅ |
-| 452 | T3 版本列表与选版本号 | `distro.rs`、`cli.rs` | ✅ |
-| 453 | T4 半截 TUI 升级（欢迎屏/Gauge/Spinner/Scrollbar/QR） | `tui.rs` | ✅ |
-| 454 | T5 安装脚本精修 | `scripts/install-mox-proot.sh` | ✅ |
-| 455 | T6 README 修复（macOS 徽章 / 重复行 / 二进制数） | `README.md`、`README.en.md`、`assets/logo.svg` | ✅ |
-| 456 | 成果文档（本篇） | `docs/tui-showcase.md` | ✅ |
-| 457 | T7 CI 等价校验 + 提交 | 全仓 | ✅ |
-| 附 | 修复改名遗留的 404：README 一键安装短命令仍指向 `moxsh-proot` | `README.md`、`README.en.md` | ✅ |
-| 附 | 修复 `mox` 脚本两端漂移，改为字标内嵌 + 单测盯防 | `console.rs`、`install-mox-proot.sh` | ✅ |
+
+| #   | 任务                                           | 关键文件                                           |  状态 |
+| :-- | :------------------------------------------- | :--------------------------------------------- | :-: |
+| 450 | 惊喜三件套（时间上下文 / 古诗 / 彩蛋）                       | `delight.rs`(新)、`mod.rs`、`console.rs`、`cli.rs` |  ✅  |
+| 451 | T2 CLI 颜色 / NO_COLOR / 进度条                   | `cli.rs`                                       |  ✅  |
+| 452 | T3 版本列表与选版本号                                 | `distro.rs`、`cli.rs`                           |  ✅  |
+| 453 | T4 半截 TUI 升级（欢迎屏/Gauge/Spinner/Scrollbar/QR） | `tui.rs`                                       |  ✅  |
+| 454 | T5 安装脚本精修                                    | `scripts/install-mox-proot.sh`                 |  ✅  |
+| 455 | T6 README 修复（macOS 徽章 / 重复行 / 二进制数）          | `README.md`、`README.en.md`、`assets/logo.svg`   |  ✅  |
+| 456 | 成果文档（本篇）                                     | `docs/tui-showcase.md`                         |  ✅  |
+| 457 | T7 CI 等价校验 + 提交                              | 全仓                                             |  ✅  |
+| 附   | 修复改名遗留的 404：README 一键安装短命令仍指向 `moxsh-proot`  | `README.md`、`README.en.md`                     |  ✅  |
+| 附   | 修复 `mox` 脚本两端漂移，改为字标内嵌 + 单测盯防                | `console.rs`、`install-mox-proot.sh`            |  ✅  |
 
 **验证命令（全部通过）**
 
@@ -322,5 +332,5 @@ bash scripts/test-console-sync.sh        # mox 脚本两端一致
 python3 -m py_compile py/runtime/*.py py/verify/*.py
 ```
 
-> 本文件是**示意草图**：框线、间距、二维码均为手绘近似，用于说明布局与交互，
+> 本文件是**示意草图**：框线、间距、二维码均为手绘近似，用于说明布局与交互，  
 > 不是逐像素截图。真实渲染由 `ratatui` 完成。

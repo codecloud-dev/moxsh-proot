@@ -14,7 +14,7 @@ func TestParseChecksumText(t *testing.T) {
 	}{
 		{valid, valid, false},
 		{valid + "  mox-proot-linux-amd64", valid, false}, // sha256sum 格式
-		{"  " + valid + "\n", valid, false},                 // 空白与换行
+		{"  " + valid + "\n", valid, false},               // 空白与换行
 		{"A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2", "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2", false},
 		{"", "", true},
 		{"short", "", true},

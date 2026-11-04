@@ -201,26 +201,31 @@
 
 ---
 
-## 5. 账号页（设备绑定 + 内嵌二维码）
+## 5. 账号页（设备绑定 + 真·后端二维码）
 
 ```
-  窄屏（<72 列）                     宽屏（≥72 列）：右侧内嵌二维码
-  ┌────────────────────────────┐    ┌──────────────────────┬───────────────┐
-  │ 账号（设备绑定·扫码登录）  │    │ 绑定状态：已绑定 ✓   │ 登录入口（示意）│
-  │ 绑定状态：已绑定 ✓         │    │ device_token:        │  ▛▀▀▜ ▄▀▄ ▛▀▜  │
-  │ device_token: a1b2c3d4…    │    │   a1b2c3d4…          │  ▌▄▄▐ █▄█ ▌▄▐  │
-  │                            │    │                      │  ▜▄▄▛ ▀▄▀ ▜▄▛  │
-  │ 提示：解绑删 device_token  │    │ 提示…                │   qrcode_term    │
-  └────────────────────────────┘    └──────────────────────┴───────────────┘
-                                                    ▲
-                                   半块字符 █▀▄ 渲染，一行塞两个模块
+  窄屏（<72 列）                    宽屏（≥72 列）：右侧内嵌二维码
+  ┌────────────────────────────┐   ┌────────────────────────┬──────────────────┐
+  │ 账号（设备绑定·扫码登录）  │   │ 绑定状态：未绑定       │ 扫码绑定（真码） │
+  │ 按 l 申请设备码（真实请求）│   │ 验证码：A7K2-9FQ1      │  ▛▀▀▜ ▄▀▄ ▛▀▜   │
+  │ 有效期 600s · 按 r 检查授权│   │ 有效期 600s · 按 r 检查│  ▌▄▄▐ █▄█ ▌▄▐   │
+  │ 后端已签发一次性码，可直接扫│   │ 后端：mox-site.pages.dev│  ▜▄▄▛ ▀▄▀ ▜▄▛   │
+  └────────────────────────────┘   └────────────────────────┴──────────────────┘
+                                                  ▲
+                     半块字符 █▀▄ 渲染；内容是后端返回的
+                     verification_uri_complete（带一次性 code），
+                     不再是扫了也没有 user_code 的固定「示意」图
 
-  按 Enter：临时离开 TUI -> 原生终端打印「带 user_code 的一次性二维码」
-            -> 手机扫码 GitHub/Gitee 授权 -> 轮询落盘 device_token -> 回到本页
+  按 l    ：POST /device/code → 拿 user_code + 一次性链接 → 右侧换成真二维码
+  按 r    ：POST /device/token 轮询 → 手机确认后换 device_token 落盘 → 「已绑定」
+  按 Enter：临时离开 TUI → 原生终端打印全尺寸二维码（不被盒子裁切），流程同上
 ```
 
-> 说明：账号页里这枚是**固定入口示意图**（不会被 TUI 边框裁切）；真正带验证码、  
-> 能扫的二维码仍由 `run_login_flow` 在原生终端渲染。两处不冲突。
+> **后端链路**：终端 → `https://mox-site.pages.dev`（官网 Pages 同域反代）
+> → `https://mox-id.moxsh.app`（Worker 真实域），`/activate` 复用
+> GitHub / Gitee 双 OAuth。旧的 `mox-id.mox-proot.app` 是**从未部署的占位域名**，
+> 已清除；设备码模块也从 `tui` feature 门禁放出，默认发布的两个二进制
+> 现在真的带 `login` 子命令（无 tui 时二维码降级为「链接 + 验证码」）。
 
 ---
 
@@ -312,7 +317,10 @@
 | 455 | T6 README 修复（macOS 徽章 / 重复行 / 二进制数）          | `README.md`、`README.en.md`、`assets/logo.svg`   |  ✅  |
 | 456 | 成果文档（本篇）                                     | `docs/tui-showcase.md`                         |  ✅  |
 | 457 | T7 CI 等价校验 + 提交                              | 全仓                                             |  ✅  |
-| 附   | 修复改名遗留的 404：README 一键安装短命令仍指向 `moxsh-proot`  | `README.md`、`README.en.md`                     |  ✅  |
+| 附   | 仓库保持旧名 `moxsh-proot`：全部仓库 URL 坐标回归（代码内命名不动）| 脚本 / README / 徽章 / `go.mod` / `Cargo.toml`  |  ✅  |
+| 附   | 接上真实后端：`backend.rs` 单一来源 + 设备码解门禁 + TUI 真设备码      | `backend.rs`(新)、`device_code.rs`、`tui.rs`      |  ✅  |
+| 附   | 安装自检双向修复：假阴性误杀好二进制 / 假阳性放过 glibc 失败           | `scripts/install-mox-proot.sh`                   |  ✅  |
+| 附   | 移除 `hooks/lua` 空 mkdir+rmdir；关闭实测 404 的 `WEBSITE_DL` 兜底       | `scripts/install-mox-proot.sh`                   |  ✅  |
 | 附   | 修复 `mox` 脚本两端漂移，改为字标内嵌 + 单测盯防                | `console.rs`、`install-mox-proot.sh`            |  ✅  |
 
 **验证命令（全部通过）**
@@ -320,8 +328,8 @@
 ```bash
 cargo check                      # 核心库（无 tui）
 cargo check --features tui       # TUI 三二进制
-cargo test --lib                 # 238 通过（含彩蛋/时间/古诗/版本单测）
-cargo test --features tui --lib  # 251 通过（含 5 个 TUI 专项）
+cargo test --lib                 # 247 通过（含彩蛋/时间/古诗/后端契约单测）
+cargo test --features tui --lib  # 256 通过（含 TUI 专项 + 真设备码 URI 测试）
 cargo +1.86.0 clippy --all-targets -- -D warnings   # CI 等价、干净目录、零警告
 cargo +1.86.0 test               # CI 等价：238 + 6 集成
 go vet ./...                     # Go 安装器
@@ -334,3 +342,70 @@ python3 -m py_compile py/runtime/*.py py/verify/*.py
 
 > 本文件是**示意草图**：框线、间距、二维码均为手绘近似，用于说明布局与交互，  
 > 不是逐像素截图。真实渲染由 `ratatui` 完成。
+
+---
+
+## 10. 本轮追加：真实后端接线 + 安装自检事故复盘
+
+### 10.1 为什么「后端一直没接上」
+
+```
+  【之前】后端 mox-id 早就部署了，客户端三条线却各自指着不同地方：
+
+    device_code  ──► https://mox-id.mox-proot.app      （占位域名，从未部署）
+    fan 页面     ──► https://codecloud-dev.github.io/mox-site/fan.html（旧 Pages）
+    fan 验签     ──► https://mox-id.codecloud.workers.dev/fan/verify （国内不稳）
+    redeem 校验  ──► https://mox-site.pages.dev/entitlement/check    （✅ 这个是对的）
+
+  更致命的一层：device_code / qrcode_term / tui 全被 #[cfg(feature="tui")] 门控，
+  而发布用 `cargo build --bins`（不带 tui）→ 默认两个二进制压根没有 login 命令。
+  → 后端写得再完整，正式产物里也没有一条路能走到它。
+
+  【现在】
+    backend.rs 单一来源 ──► https://mox-site.pages.dev  （官网同域反代）
+                                │  functions/[[path]].js
+                                ▼
+                          https://mox-id.moxsh.app      （Worker 真实域）
+                                │ 兜底
+                                ▼
+                    https://mox-id.codecloud.workers.dev
+
+    device_code 只依赖 curl + 手写 JSON → 移出 feature 门禁 → 默认二进制带 login
+    TUI 账号页按 l 申请真设备码、按 r 轮询落盘，二维码不再是「示意」
+```
+
+### 10.2 安装自检的两个方向都是坏的
+
+```
+  旧实现：help_out="$("$bin" --help 2>&1 || true)"
+          printf '%s\n' "$help_out" | grep -q "moxsh-proot" || die ...
+
+  假阴性（真实安装测试撞到）：
+    "$bin" --help  →  「proot-distro（moxsh 兼容实现）」
+    grep "moxsh-proot" → 0 命中 → die
+    二进制完全正常，却报安装失败。← 你这次遇到的
+
+  假阳性（上一轮测试报告第 7 条）：
+    glibc 加载失败 → 加载器报错行以 "mox-proot:" 开头
+    || true 吞掉退出码 + grep 命中命令名 → 判成「自检通过」
+    → 装完提示成功，一跑就 GLIBC_2.39 not found
+
+  现在：① 先判退出码（非 0 直接 die，能抓动态链接失败）
+        ② 内容只断言「非空 + 用法/Usage/proot-distro/proot 」，与品牌名解耦
+        ③ 失败回显真实输出，给出 musl 静态版的下一步
+  实测：真二进制 PASS / 旧帮助文本 PASS / glibc 报错文本不会伪装 PASS
+```
+
+### 10.3 顺手清掉的两个旧问题
+
+- `hooks/lua` 建了又 `rmdir`：引擎 `discover_hooks` 用 `read_dir` **只扫一层**，
+  钩子必须落在 `hooks/` 根下，移进子目录反而永远加载不到 → 删掉空操作并写明原因。
+- `WEBSITE_DL=https://mox-site.pages.dev/dl` 实测 404，旧版每个资产白等 12s 超时
+  → 默认关闭，只有显式设置 `MOX_PROOT_WEBSITE_DL` 才尝试。
+
+### 10.4 上传与发版
+
+本地提交 `77d8f43` 已 push 到 GitHub / Gitee 的**旧名仓库** `moxsh-proot`。
+push 触发 `release-latest.yml` 滚动发版，会按 `release.yml` 里既有的
+`ubuntu-22.04`（glibc 2.35）源码构建 + musl 静态 target 重新生成资产，
+之前测出的 GLIBC 2.39 基线与「musl 资产缺失」问题随之刷新。

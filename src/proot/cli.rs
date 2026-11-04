@@ -581,6 +581,7 @@ pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
         "recipe" => cmd_recipe(rest, moxsh_root),
         "fan" => cmd_fan(rest, moxsh_root),
         "redeem" => cmd_redeem(rest, moxsh_root),
+        "access" => cmd_access(rest, moxsh_root),
         "wizard" => cmd_wizard(rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
@@ -643,6 +644,48 @@ fn cmd_env(mgr: &DistroManager, args: &[&str]) -> String {
          locale-gen zh_CN.UTF-8 后，把该文件里的 LANG 改成 zh_CN.UTF-8 即完整中文。",
     );
     out
+}
+
+/// `access status|sync`：统一访问面（粉丝专属 + 商品授权融合；粉丝默认隐藏）。
+///
+/// - `status`：本地视图（灰度关时粉丝档位不显示）。
+/// - `sync`：管理后台统一刷新（授权重拉 + 粉丝状态重读，使服务端吊销即时生效）。
+fn cmd_access(args: &[&str], moxsh_root: &Path) -> String {
+    match args.first().copied() {
+        Some("status") => {
+            let s = crate::proot::access::status(moxsh_root);
+            let mut out = String::from("moxsh 访问状态：\n");
+            if let Some(tier) = &s.fan_tier {
+                out.push_str(&format!("  粉丝档位: {}\n", tier));
+            } else if s.fan_enabled {
+                out.push_str("  粉丝档位: 未解锁\n");
+            } else {
+                out.push_str("  粉丝档位: （灰度未开启/隐藏）\n");
+            }
+            if s.entitlements.is_empty() {
+                out.push_str("  商品授权: （无）\n");
+            } else {
+                out.push_str("  商品授权:\n");
+                for (pid, tier) in &s.entitlements {
+                    out.push_str(&format!("    {}  [{}]\n", pid, tier));
+                }
+            }
+            out
+        }
+        Some("sync") => match crate::proot::access::sync(moxsh_root) {
+            Ok(s) => format!(
+                "已同步访问状态：粉丝{}，商品授权 {} 项",
+                if s.fan_tier.is_some() {
+                    "已解锁"
+                } else {
+                    "未解锁/隐藏"
+                },
+                s.entitlements.len()
+            ),
+            Err(e) => format!("access sync 失败: {}", e),
+        },
+        _ => "用法: proot-distro access status | sync".to_string(),
+    }
 }
 
 /// `recipe list|show <id>|apply <id> <distro>`：配方系统（0.3.0，roadmap §4）。
@@ -1487,8 +1530,9 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro env <id>                  预览容器登录时注入的环境（中文排查）
   proot-distro launch <mx:名字|id> [-- cmd...]  启动（未装自动装，id 与短链互通）
   proot-distro recipe list|show <id>|apply <id> <distro>  一键配方（桌面/VNC/noVNC）
-  proot-distro fan login|redeem <code>|status   粉丝专属解锁（灰度中）
+  proot-distro fan login|redeem <code>|status   粉丝专属解锁（灰度中，默认隐藏）
   proot-distro redeem login|status|check       商品授权：绑定设备 + 在线校验
+  proot-distro access status|sync             统一访问面（粉丝+授权融合；粉丝默认隐藏）
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。

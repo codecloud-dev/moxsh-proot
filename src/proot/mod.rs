@@ -25,6 +25,8 @@
 //! 约束见 Cargo.toml：本阶段仅允许新增 `tar`/`flate2` 两个依赖，不引入 thiserror。
 
 pub mod cli;
+pub mod access;
+pub mod brand;
 pub mod console;
 pub mod distro;
 pub mod elf;

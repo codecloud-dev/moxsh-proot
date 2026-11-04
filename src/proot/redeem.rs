@@ -349,6 +349,12 @@ pub fn save_ents(root: &Path, ents: &[Entitlement]) -> ProotResult<()> {
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, text).map_err(ProotError::Io)?;
     std::fs::rename(&tmp, &path).map_err(ProotError::Io)?;
+    // 授权缓存含设备令牌与商品授权，仅拥有者可读写（0o600），降低本地泄露。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
     Ok(())
 }
 

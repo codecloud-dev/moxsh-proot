@@ -172,6 +172,7 @@ pub fn save_state(root: &Path, state: &FanState) -> ProotResult<()> {
     let tmp = path.with_extension("toml.tmp");
     std::fs::write(&tmp, text).map_err(ProotError::Io)?;
     std::fs::rename(&tmp, &path).map_err(ProotError::Io)?;
+    set_private_permissions(&path);
     Ok(())
 }
 
@@ -182,12 +183,36 @@ pub fn is_fan(root: &Path) -> bool {
 
 // ============================ 在线校验（curl 转发，零 Rust 加密） ============================
 
+/// 激活码格式校验（防注入 + 长度边界）。charset 与后端签发一致：base64url + '.'。
+fn valid_activation_code(code: &str) -> bool {
+    let n = code.len();
+    (8..=256).contains(&n)
+        && code.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || b == b'.' || b == b'_' || b == b'-'
+        })
+}
+
+/// 把令牌/缓存文件设为仅拥有者可读写（0o600），降低本地泄露风险。
+#[cfg(unix)]
+fn set_private_permissions(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+}
+#[cfg(not(unix))]
+fn set_private_permissions(_path: &Path) {}
+
 /// 联网校验激活码：`POST <API> {"code":..}` → 解析 `ok <tier> <exp>`。
 /// 契约见模块文档；失败返回可读原因。
 pub fn verify_online(code: &str) -> ProotResult<(String, u64)> {
+    let code = code.trim();
+    if !valid_activation_code(code) {
+        return Err(ProotError::InvalidArg(
+            "激活码格式非法（仅允许 [A-Za-z0-9._-]，长度 8–256）".to_string(),
+        ));
+    }
     let api = redeem_api();
-    // 极简 JSON：code 只含 base64url + '.'，剥掉引号防注入即可。
-    let payload = format!("{{\"code\":\"{}\"}}", code.trim().replace('"', ""));
+    // 极简 JSON：code 已校验 charset，剥掉引号防注入即可。
+    let payload = format!("{{\"code\":\"{}\"}}", code.replace('"', ""));
     let out = Command::new("curl")
         .args(["-sS", "--connect-timeout", "10", "--max-time", "20", "-X", "POST"])
         .arg(&api)

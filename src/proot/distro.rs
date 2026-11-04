@@ -369,6 +369,31 @@ impl DistroManager {
 
     /// 下载规格对应 URL 到缓存（curl 子进程兜底；Android 常规走 Kotlin 层下载）。
     /// 国内优化：默认先试国内镜像，失败回退官方。
+    /// 多源探测：对一组 `(label, url)` 做轻量可达性探测（curl HEAD，短超时），
+    /// 返回按「可达优先」重排的列表。探测失败不致命——下载阶段会再试，
+    /// 这里只优化顺序：让可达源先试，不可达源后置（避免白等超时）。
+    fn probe_sources<'a>(sources: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+        let mut ok: Vec<(&str, &str)> = Vec::new();
+        let mut no: Vec<(&str, &str)> = Vec::new();
+        for (label, url) in sources {
+            // HEAD 探测，2s 连接超时 / 5s 总超时；任意 HTTP 响应即算可达
+            // （不发 -f，避免 HEAD 不被支持的服务器误判不可达）。
+            let reachable = std::process::Command::new("curl")
+                .args(["-sS", "-I", "--connect-timeout", "2", "--max-time", "5", "-o", "/dev/null"])
+                .arg(url)
+                .status()
+                .map(|s| s.success())
+                .unwrap_or(false);
+            if reachable {
+                ok.push((*label, *url));
+            } else {
+                no.push((*label, *url));
+            }
+        }
+        ok.extend(no);
+        ok
+    }
+
     pub fn download(&self, spec: &DistroSpec, cb: ProgressCb) -> ProotResult<PathBuf> {
         fs::create_dir_all(self.cache_dir())?;
         // 编译期架构 = 运行设备架构：Android 侧 Gradle 按 ABI 分构产出
@@ -386,7 +411,10 @@ impl DistroManager {
             cb("使用已缓存归档", 1, 1);
             return Ok(out_path);
         }
-        for (label, url) in [("国内镜像", mirror), ("官方源", official)] {
+        // 多源探测：按可达性重排下载顺序（不可达源后置；下载阶段仍会兜底重试）。
+        let sources = [("国内镜像", mirror), ("官方源", official)];
+        let ordered = Self::probe_sources(&sources);
+        for (label, url) in ordered {
             cb(&format!("从{}下载：{}", label, url), 0, spec.size_mb as u64);
             // curl 子进程：Android NDK 不带 curl，命令行/开发者模式场景才可用；
             // 应用内安装由 Kotlin 层先下载好再调 install()。

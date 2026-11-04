@@ -61,6 +61,10 @@ else
   # 宿主侧直接跑：普通 distro CLI 包装。
   ROOT="${MOXSH_ROOT:-$HOME/.moxsh}"
 fi
+# 进入即展示品牌标识（无参数交互入口时）。
+if [ "$#" -eq 0 ]; then
+  printf '%s\n' "moxsh · proot — 多架构容器引擎"
+fi
 exec env MOXSH_ROOT="$ROOT" "$(dirname "$0")/moxsh-proot-distro" "$@"
 "#;
 

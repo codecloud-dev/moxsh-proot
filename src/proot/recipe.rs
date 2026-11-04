@@ -173,18 +173,15 @@ impl RecipeIndex {
     /// 执行后由引擎 env 决定的 HOME 无关，幂等可重跑。
     pub fn apply(&self, root: &Path, recipe_id: &str, distro_id: &str) -> ProotResult<i32> {
         let recipe = self.find(recipe_id)?;
-        // 专属门禁（fan_only）：未解锁直接拒，不碰引擎、不落盘。
-        if recipe.fan_only && !crate::proot::fan::is_fan(root) {
-            return Err(ProotError::InvalidArg(format!(
-                "配方 {} 为专属内容，需先解锁",
-                recipe_id
-            )));
-        }
-        // 商品门禁（requires）：付费商品授权过期/未购买/缓存陈旧一律拒
-        // （判定只读 entitlements.toml 缓存，不联网——刷新走 `mox redeem status`）。
-        if !recipe.requires.is_empty()
-            && !crate::proot::redeem::has_entitlement(root, &recipe.requires)
-        {
+        // 统一门禁（粉丝专属 + 付费商品授权融合为单一裁决点，见 `access`）：
+        // 未解锁直接拒，不碰引擎、不落盘。失败原因分两类给出可读提示。
+        if !crate::proot::access::recipe_unlocked(root, recipe) {
+            if recipe.fan_only && !crate::proot::fan::is_fan(root) {
+                return Err(ProotError::InvalidArg(format!(
+                    "配方 {} 为专属内容，需先解锁（mox fan redeem <code>）",
+                    recipe_id
+                )));
+            }
             return Err(ProotError::InvalidArg(format!(
                 "配方 {} 为付费商品内容（{}），需先获得授权：\n\
                  \x20 mox redeem login    # 绑定本机设备（首次）\n\

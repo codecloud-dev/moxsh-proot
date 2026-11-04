@@ -29,7 +29,7 @@ body:
       options:
         - 引擎核心（ptrace / 路径翻译 / ELF）
         - 容器命令面（-r/-0/-b/-w/-R/-S/-e）
-        - moxsh-proot-distro 子命令
+        - mox-proot-distro 子命令
         - 网络栈
         - 钩子体系
         - 安装器 / CI / 发布

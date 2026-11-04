@@ -126,9 +126,9 @@ def verify_runtime_scripts(report: Report) -> None:
     env = dict(os.environ)
     env.update(
         {
-            "MOXSH_CONTAINER_ID": "verify-host",
-            "MOXSH_HOOK_KIND": "post-install",
-            "MOXSH_HOOK_DIR": str(RUNTIME_DIR),
+            "MOX_CONTAINER_ID": "verify-host",
+            "MOX_HOOK_KIND": "post-install",
+            "MOX_HOOK_DIR": str(RUNTIME_DIR),
         }
     )
     for script, expect_rc in (("provision.py", 0), ("login_hook.py", 0)):
@@ -164,7 +164,7 @@ def ensure_rootfs(explicit: str | None, tmp: Path) -> Path | None:
     if explicit:
         p = Path(explicit)
         return p if p.is_dir() else None
-    cached = Path(tempfile.gettempdir()) / "moxsh-proot-alpine-rootfs"
+    cached = Path(tempfile.gettempdir()) / "mox-proot-alpine-rootfs"
     if (cached / "bin" / "busybox").is_file():
         return cached
     tar = cached.parent / "alpine-minirootfs.tar.gz"
@@ -184,8 +184,8 @@ def ensure_rootfs(explicit: str | None, tmp: Path) -> Path | None:
 
 def engine_bins(report: Report) -> tuple[Path, Path] | None:
     target = ENGINE_DIR / "target" / "debug"
-    proot = target / "moxsh-proot"
-    distro = target / "moxsh-proot-distro"
+    proot = target / "mox-proot"
+    distro = target / "mox-proot-distro"
     r = run(["cargo", "build", "--bins"], cwd=ENGINE_DIR, timeout=600)
     if r.returncode != 0 or not proot.is_file() or not distro.is_file():
         report.bad("引擎二进制构建", f"rc={r.returncode}")
@@ -297,13 +297,13 @@ def verify_engine_e2e(report: Report, rootfs: Path, bins: tuple[Path, Path]) -> 
         report.bad("符号链接语义", f"rc={r.returncode} out={lines!r} err={r.stderr[-200:]}")
 
     # 5) distro list（无安装 = 空列表正常退出）
-    root = Path(tempfile.gettempdir()) / "moxsh-proot-verify-root"
+    root = Path(tempfile.gettempdir()) / "mox-proot-verify-root"
     root.mkdir(parents=True, exist_ok=True)
     r = run(
         [str(distro), "list"],
         cwd=ENGINE_DIR,
         timeout=30,
-        env={**os.environ, "MOXSH_ROOT": str(root)},
+        env={**os.environ, "MOX_ROOT": str(root)},
     )
     if r.returncode == 0:
         report.ok("proot-distro list", r.stdout.strip() or "（空列表，符合预期）")
@@ -312,7 +312,7 @@ def verify_engine_e2e(report: Report, rootfs: Path, bins: tuple[Path, Path]) -> 
 
     # 6) 路径翻译自检（14 项）
     r = proot_run(["--help"])
-    if "moxsh-proot" in r.stdout:
+    if "mox-proot" in r.stdout:
         report.ok("--help 用法输出")
     else:
         report.bad("--help 用法输出", f"rc={r.returncode}")

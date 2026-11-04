@@ -1,6 +1,6 @@
-# moxsh 配方公共库（clean-room，参考 tmoe 的包管理器抽象，重写并优化）
+# mox-proot 配方公共库（clean-room，参考 tmoe 的包管理器抽象，重写并优化）
 #
-# 容器内被各配方脚本 source（路径固定 /tmp/moxsh-lib.sh）。
+# 容器内被各配方脚本 source（路径固定 /tmp/mox-proot-lib.sh）。
 # 提供：detect_family / pkginstall —— 一套覆盖 debian/alpine/arch/redhat/suse/gentoo。
 # 比 tmoe 优化点：tmoe 在每个 DE 安装函数里各写一遍 `case LINUX_DISTRO`，
 # 这里抽成数据+函数，新增发行族只改 detect_family 一处。
@@ -54,11 +54,11 @@ pkginstall() {
             emerge -av "$@"
             ;;
         *)
-            echo "moxsh: 未知发行族，无法自动安装：$*" >&2
+            echo "mox-proot: 未知发行族，无法自动安装：$*" >&2
             return 1
             ;;
     esac
 }
 
-moxsh_info() { printf '\033[1;36m[moxsh]\033[0m %s\n' "$*"; }
-moxsh_ok()   { printf '\033[1;32m[完成]\033[0m %s\n' "$*"; }
+mox-proot_info() { printf '\033[1;36m[mox-proot]\033[0m %s\n' "$*"; }
+mox-proot_ok()   { printf '\033[1;32m[完成]\033[0m %s\n' "$*"; }

@@ -1,5 +1,5 @@
 name: 🐛 问题报告
-description: 报告 moxsh-proot 引擎或安装器的 bug / 异常行为
+description: 报告 mox-proot 引擎或安装器的 bug / 异常行为
 labels: ["bug"]
 body:
   - type: markdown
@@ -23,11 +23,11 @@ body:
       label: 问题范围
       options:
         - 引擎核心（路径翻译 / exec / 符号链接）
-        - moxsh-proot 单命令容器
-        - moxsh-proot-distro（安装 / 登录 / 备份 / 恢复）
+        - mox-proot 单命令容器
+        - mox-proot-distro（安装 / 登录 / 备份 / 恢复）
         - 网络栈（DNS / IPv6 / 出网探测）
         - 钩子（post-install / pre-login）
-        - 安装器（bash 脚本 / moxsh-installer）
+        - 安装器（bash 脚本 / mox-proot-installer）
         - 文档
         - 其他
     validations:
@@ -46,8 +46,8 @@ body:
     attributes:
       label: 复现步骤
       placeholder: |
-        1. moxsh-proot-distro install alpine
-        2. moxsh-proot -R ~/alpine -0 -- ls /bin
+        1. mox-proot-distro install alpine
+        2. mox-proot -R ~/alpine -0 -- ls /bin
         3. 出现 …
     validations:
       required: true

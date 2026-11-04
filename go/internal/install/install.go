@@ -11,7 +11,7 @@ import (
 
 // Result 一次安装的结果。
 type Result struct {
-	// InstallRoot 安装根目录（如 /opt/moxsh 或 ~/.moxsh）。
+	// InstallRoot 安装根目录（如 /opt/mox-proot 或 ~/.mox-proot）。
 	InstallRoot string
 	// BinDir 可执行文件目录（InstallRoot/bin）。
 	BinDir string
@@ -22,13 +22,13 @@ type Result struct {
 }
 
 // BinNames 引擎产出的可执行文件（与 Rust bin 目标对应）。
-var BinNames = []string{"moxsh-proot", "moxsh-proot-distro"}
+var BinNames = []string{"mox-proot", "mox-proot-distro"}
 
 // Place 把已下载的二进制（staged 目录内，文件名即资产名）安装到
 // installRoot：staged/<asset> → installRoot/bin/<binname>。
 //
-// assetToBin 资产名到二进制名的映射（如 moxsh-proot-linux-amd64-musl
-// → moxsh-proot）。权限 0755。已存在则覆盖（更新路径）。
+// assetToBin 资产名到二进制名的映射（如 mox-proot-linux-amd64-musl
+// → mox-proot）。权限 0755。已存在则覆盖（更新路径）。
 func Place(installRoot, stagedDir string, assetToBin map[string]string) (*Result, error) {
 	binDir := filepath.Join(installRoot, "bin")
 	if err := os.MkdirAll(binDir, 0o755); err != nil {
@@ -83,7 +83,7 @@ func AppendPathToRc(binDir string) (string, error) {
 	if home == "" {
 		return "", nil
 	}
-	line := fmt.Sprintf("\n# moxsh engine PATH\nexport PATH=\"%s:$PATH\"\n", binDir)
+	line := fmt.Sprintf("\n# mox-proot engine PATH\nexport PATH=\"%s:$PATH\"\n", binDir)
 	for _, rc := range []string{".bashrc", ".zshrc", ".profile"} {
 		p := filepath.Join(home, rc)
 		data, err := os.ReadFile(p)

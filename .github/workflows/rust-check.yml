@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # 与 moxsh-terminal 内核一致：钉死 1.86.0（sandbox 与 CI 同版本，避免本地过、CI 挂）
+      # 与 mox-proot-terminal 内核一致：钉死 1.86.0（sandbox 与 CI 同版本，避免本地过、CI 挂）
       - name: 安装工具链（1.86.0）
         uses: dtolnay/rust-toolchain@master
         with:

@@ -1,11 +1,11 @@
-//! `moxsh-proot` 独立可执行文件入口。
+//! `mox-proot` 独立可执行文件入口。
 //!
-//! 让**原版 Termux 用户**不装 moxsh App 也能直接用上自研 PRoot 引擎
+//! 让**原版 Termux 用户**不装 mox-proot App 也能直接用上自研 PRoot 引擎
 //! （Rust ptrace 路径翻译，非上游 C 版 proot 的封装）。一键安装脚本
 //! 从 Release 下载本文件（aarch64-linux-android）并放入
-//! `$PREFIX/bin/moxsh-proot`，之后即可 `moxsh-proot -r ~/ubuntu -- bash`。
+//! `$PREFIX/bin/mox-proot`，之后即可 `mox-proot -r ~/ubuntu -- bash`。
 //!
-//! 参数解析与真执行逻辑在 [`moxsh_proot::proot::cli::run_native`]（可单测），
+//! 参数解析与真执行逻辑在 [`mox_proot::proot::cli::run_native`]（可单测），
 //! 本文件只做进程退出码转发，保持薄壳。
 
 use std::env;
@@ -13,7 +13,7 @@ use std::process;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
-    let code = moxsh_proot::proot::cli::run_native(&args);
+    let code = mox_proot::proot::cli::run_native(&args);
     process::exit(code);
 }
 
@@ -27,7 +27,7 @@ fn main() {
 /// 链接期静态解析——API 28+ 设备上也不会与 libc.so 的同名符号冲突
 /// （可执行文件定义优先，且两者行为相同）。
 ///
-/// 只加在独立二进制里，不污染 `libmoxshcore.so`（App 侧 minSdk 28，无需此垫片）。
+/// 只加在独立二进制里，不污染 `libmox_prootcore.so`（App 侧 minSdk 28，无需此垫片）。
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "C" fn getrandom(

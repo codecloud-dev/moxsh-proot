@@ -1,15 +1,15 @@
-> **🌐 主仓库在 GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go?r=moxsh-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/moxsh-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
+> **🌐 主仓库在 GitHub** — [`codecloud-dev/mox-proot`](https://mox-site.pages.dev/go?r=mox-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/mox-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
 
 <p align="center">
-  <img src="assets/logo.svg" width="128" alt="moxsh 液态玻璃标志">
+  <img src="assets/logo.svg" width="128" alt="mox-proot 液态玻璃标志">
 </p>
 
-<h1 align="center">moxsh-proot</h1>
+<h1 align="center">mox-proot</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/moxsh-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
-  <img src="https://img.shields.io/github/v/release/codecloud-dev/moxsh-proot?label=Latest&color=37d5d3" alt="Latest">
-  <img src="https://img.shields.io/github/stars/codecloud-dev/moxsh-proot?style=social" alt="GitHub Stars">
+  <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/mox-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
+  <img src="https://img.shields.io/github/v/release/codecloud-dev/mox-proot?label=Latest&color=37d5d3" alt="Latest">
+  <img src="https://img.shields.io/github/stars/codecloud-dev/mox-proot?style=social" alt="GitHub Stars">
   <img src="https://img.shields.io/badge/version-0.9.0-8a7bff" alt="version">
   <img src="https://img.shields.io/badge/license-GPL--3.0-37d5d3" alt="license">
   <img src="https://img.shields.io/badge/Core-Rust-000?logo=rust&logoColor=white" alt="Rust 内核">
@@ -24,31 +24,59 @@
 
 <p align="center"><a href="README.md">中文</a> · <a href="README.en.md">English</a></p>
 
-<p align="center"><b>⭐ 如果 moxsh-proot 对你有用，欢迎点个 <a href="https://mox-site.pages.dev/go?r=moxsh-proot">Star</a> —— 它能让更多人在手机上、在容器里用上顺滑的 Linux!</b></p>
+<p align="center"><b>⭐ 如果 mox-proot 对你有用，欢迎点个 <a href="https://mox-site.pages.dev/go?r=mox-proot">Star</a> —— 它能让更多人在手机上、在容器里用上顺滑的 Linux!</b></p>
 
 ## 品牌字标
 
 ```
-        __  __           __  ____
-       / / / /_  ______/ /_/ __ \ ____  _____
-      / /_/ / / / / __/ __/ /_/ / __ \/ ___/
-     / __  / /_/ / /_/ /_/ ____/ /_/ (__  )
-    /_/ /_/\__,_/\__/\__/_/    \____/____/   proot
-
-   moxsh · proot — 多架构容器引擎
+_  _ ____ _  _
+|\/| |  |  \/
+|  | |__| _/\_
+  mox-proot — 多架构容器引擎
 ```
 
 > 进入即见：容器内控制台 `mox` 无参进入时打印品牌标识；源码见 `src/proot/brand.rs`（`BANNER` / `TAGLINE`）。
 
+## 🎁 惊喜体验三件套（时间上下文 / 古诗 / 彩蛋）
 
+无参进入 `mox`（或 TUI 启动欢迎屏）时，会按**本机真实时区**把一天分成
+`晨 / 午 / 晚 / 夜` 四相，送一句应景问候 + 一句古诗；另外还藏了彩蛋暗号。
+纯本地、零依赖、零网络，源码单一来源在 `src/proot/delight.rs`。
+
+| 时相 | 时段 | 问候 | 古诗 |
+| :--: | :--: | :--- | :--- |
+| 晨 | 05–10 | 早安，新的一天从容器里开始 ☀ | 晨起开门雪满山，雪晴云淡日光寒。——郑燮《山中雪后》 |
+| 午 | 11–16 | 午安，喝口水再战 ☕ | 锄禾日当午，汗滴禾下土。——李绅《悯农》 |
+| 晚 | 17–22 | 晚安，夜色正好适合折腾 🌙 | 夕阳无限好，只是近黄昏。——李商隐《登乐游原》 |
+| 夜 | 23–04 | 夜深了，注意身体，别熬太晚 🌃 | 春眠不觉晓，处处闻啼鸟。——孟浩然《春晓》 |
+
+```bash
+mox                       # 无参：品牌字标 + 时相问候 + 古诗
+mox egg                   # 彩蛋暗号：egg / 彩蛋 / konami / 蛋
+mox-proot-distro time     # 单独打印时相 + 问候 + 古诗
+MOX_EGG=1 mox-proot-tui   # 环境变量亦可显式点名彩蛋
+```
+
+## 🖥️ TUI 控制台与版本选择
+
+```bash
+mox-proot-tui                              # 六标签 TUI（欢迎屏 / Gauge 进度 / 二维码）
+mox-proot-distro versions ubuntu           # 列出可选版本：24.04 LTS / 22.04 LTS / 20.04 LTS
+mox-proot-distro install alpine --version "3.19 (minirootfs)"   # 选版本号安装
+```
+
+TUI 六个标签：**发行版 / 短链 / 配方 / 日志 / 向导 / 账号**。启动先出欢迎屏
+（品牌字标 + 时相问候 + 古诗），任意键进入；安装改为后台线程，界面上跑
+实时 Gauge + Spinner，列表带滚动条，账号页内嵌登录入口二维码。各面板的
+简笔画示意图见 [docs/tui-showcase.md](docs/tui-showcase.md)。
 
 ## 🐛 欢迎来“批斗”我
 
 > 这是个刚起步的项目，**bug 肯定有，而且不少**。我不装完美——
 > 你踩到的每一个坑、每一个槽点，都是帮我把它养好的机会。
 
-- 💥 遇到崩溃 / 跑不起来 / 结果不对？→ [提个 Bug 报告](https://mox-site.pages.dev/go?r=moxsh-proot&p=issues)
-- 💡 有想要的功能？→ [开个需求](https://mox-site.pages.dev/go?r=moxsh-proot&p=issues)
+- 💥 遇到崩溃 / 跑不起来 / 结果不对？→ [提个 Bug 报告](https://mox-site.pages.dev/go?r=mox-proot&p=issues)
+- 💡 有想要的功能？→ [开个需求](https://mox-site.pages.dev/go?r=mox-proot&p=issues)
 - 🗯️ 单纯想吐槽、挑刺？→ 也欢迎开 issue，标签随便打 😄
 
 每个 issue 我都会看，能修的尽快修。一起把它从“能跑”养到“好用” 💪
@@ -76,13 +104,12 @@
 
 ## 🌟 MoX 系列
 
-moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的「PRoot 发行版」能力，引擎本体就住在这个仓库。一套审美，把桌面级工具搬进掌心。
+mox-proot 是 **MoX 工具系列**的基础设施组件：mox-proot 终端里的「PRoot 发行版」能力，引擎本体就住在这个仓库。一套审美，把桌面级工具搬进掌心。
 
 |      产品      |   状态   | 一句话定位                                                            |
 | :----------: | :----: | ---------------------------------------------------------------- |
-|   **moxsh**  |  已上线 | Android 液态玻璃终端，兼容 Termux 生态                                      |
+| **mox-proot** | 已上线 | 本仓库：Rust 自研 PRoot 容器引擎（Android 液态玻璃终端 / Termux 生态的发行版内核，也可独立使用） |
 | **mox-site** |  已上线 | 本系列官方门户（[官网](https://codecloud-dev.github.io/mox-site/)）              |
-| **moxsh-proot** | 已上线 | 本仓库：Rust 自研 PRoot 容器引擎（moxsh 的发行版内核，独立可用）                 |
 
 ### 🗺️ 路线图（0.2.0 进行中）
 
@@ -90,7 +117,7 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 | :--- | :--- | :--- |
 | 0.2.0 | `mx:` 短链系统（`mx:alpine` 即装即进）、落盘启动器（装了 kali 输 `kali` 就进）、容器内中文环境（locale/字体/输入法）、容器内控制台、base64 短命令 + 国内外自动分流 | 进行中 |
 | 0.3.0 | 配方系统（`mx:xfce` 一键桌面，XFCE/LXQt/KDE/MATE + VNC 双通道） | 规划中 |
-| 0.4.0 | TUI 控制台（ratatui 全功能面板） | 已实现（0.9.0 随 `moxsh-proot-tui` 交付） |
+| 0.4.0 | TUI 控制台（ratatui 全功能面板） | 已实现（0.9.0 随 `mox-proot-tui` 交付） |
 | 1.0.0 | 短链/配方/TUI 全齐的首个正式版 | 规划中 |
 
 完整决策记录见 [docs/roadmap.md](docs/roadmap.md)。
@@ -103,11 +130,11 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 | :--------------- | ---------------------------------------------- |
 | **Rust ptrace 引擎** | 路径翻译、多进程树跟踪、fake root 全部 Rust，内存安全、无外部运行时 |
 | **对齐上游命令面** | `-r/-0/-b/-w/-R/-e` 与 `--` 切分照旧，老用户零迁移；不支持的选项明确报错，不假装 |
-| **三二进制** | `moxsh-proot`（单命令容器）+ `moxsh-proot-distro`（四大发行版安装/登录/备份/恢复）+ `moxsh-proot-tui`（ratatui TUI 控制台） |
+| **三二进制** | `mox-proot`（单命令容器）+ `mox-proot-distro`（四大发行版安装/登录/备份/恢复）+ `mox-proot-tui`（ratatui TUI 控制台） |
 | **显式解释器调用** | 动态 ELF 自动走 guest 自带 loader（qemu-user 同款方案），初始 exec 与运行时 execve 双覆盖 |
 | **符号链接全链路** | 绝对 target 链接（Alpine applet 形态）在 exec / stat / openat 自动解析，tar 裸解包的 rootfs 也能跑 |
 | **fake root** | uid/gid 显示为 0、chown/setuid 系伪装成功——不需要真 root，不碰系统分区 |
-| **网络栈** | DNS 统一 + IPv6 双栈探测 + 出网边界报告（`moxsh-proot-distro net`） |
+| **网络栈** | DNS 统一 + IPv6 双栈探测 + 出网边界报告（`mox-proot-distro net`） |
 | **钩子运行时** | post-install / pre-login 生命周期，Python / Lua 双解释器，容器内脚本即插即用 |
 | **一键配方** | 声明式 TOML + shell 逃生舱，`recipe list/show/apply` 一键装桌面/VNC |
 | **一键安装** | bash 探测层（`curl \| bash` 零依赖）+ Go 安装器（install/update/probe），双层同源 |
@@ -116,7 +143,7 @@ moxsh-proot 是 **MoX 工具系列**的基础设施组件：moxsh 终端里的�
 
 ## 🔧 它是怎么工作的
 
-moxsh-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，它做的是
+mox-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，它做的是
 **ptrace 路径翻译**：子进程的每个文件系统调用都被拦截，guest 视角的
 路径在寄存器层改写为宿主 rootfs 内的真实路径，`chroot`、`mount --bind`、
 `binfmt_misc` 的效果由此实现，而**不需要任何特权**。
@@ -148,7 +175,7 @@ moxsh-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，�
 <summary>展开短命令（约 1.5 KB，点开复制整段粘贴执行）</summary>
 
 ```bash
-echo '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' | base64 -d | gzip -d | sh
+echo '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' | base64 -d | gzip -d | sh
 ```
 
 </details>
@@ -156,66 +183,66 @@ echo 'H4sICKc61moCA2Jvb3RzdHJhcC5zaAC1Vm1PG9kV/j6/4nTiQEw1TIDtqkoEatVEZFfbqkqoVG
 **方式二：标准命令**：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-moxsh-proot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/codecloud-dev/mox-proot/main/scripts/install-mox-proot.sh | bash
 ```
 
 **国内备援**（Gitee raw，直连）：
 
 ```bash
-curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
+curl -fsSL https://gitee.com/thousand-code-crafts/mox-proot/raw/main/scripts/install-mox-proot.sh | bash
 ```
 
 零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux
 （x86_64/arm64）与 Termux（Android）自动识别安装目录与架构（glibc / musl 自动选静态版），
 不再只绑 Termux。二进制按国内/国外自动探测选源下载，逐文件 sha256 校验，自动落盘
-`moxsh-proot` 与 `moxsh-proot-distro` 两个命令。
+`mox-proot` 与 `mox-proot-distro` 两个命令。
 
 > **国内/国外都稳**：二进制已同步到 Gitee 发布（与 GitHub 同源），GitHub 直连
 > 超时自动回退 **Gitee** 源；若两端皆不通，再经 **ghproxy** 镜像兜底，最后可走
-> 官网静态通道（`MOXSH_PROOT_WEBSITE_DL`）。无需手动折腾。
+> 官网静态通道（`MOX_PROOT_WEBSITE_DL`）。无需手动折腾。
 
 装完就能用：
 
 ```bash
-moxsh-proot -R ~/ubuntu -0 -- bash        # 推荐绑定集 + fake root 进发行版
-moxsh-proot --help                        # 完整用法
+mox-proot -R ~/ubuntu -0 -- bash        # 推荐绑定集 + fake root 进发行版
+mox-proot --help                        # 完整用法
 ```
 
 更丰富的安装/更新体验走 Go 安装器（Release 资产
-`moxsh-installer-<goos>-<arch>`，子命令 install / update / probe）：
+`mox-proot-installer-<goos>-<arch>`，子命令 install / update / probe）：
 
 ```bash
-moxsh-installer install
-moxsh-installer update
+mox-proot-installer install
+mox-proot-installer update
 ```
 
 ### 🔹 装个发行版玩玩
 
 ```bash
-moxsh-proot-distro install alpine     # Ubuntu / Debian / Kali / Alpine
-moxsh-proot-distro login alpine       # 进登录 shell
+mox-proot-distro install alpine     # Ubuntu / Debian / Kali / Alpine
+mox-proot-distro login alpine       # 进登录 shell
 ```
 
 也可以直接短链启动（未装自动装，装完直接进）：
 
 ```bash
-moxsh-proot-distro launch mx:alpine
+mox-proot-distro launch mx:alpine
 ```
 
 一条命令初始化（数据根 + 发行版 + 启动器 + 教学提示，重复跑只补缺的）：
 
 ```bash
-moxsh-proot-distro wizard                    # 默认 ~/.moxsh + alpine
-moxsh-proot-distro wizard --root /sd/data --distro ubuntu   # 自定义
+mox-proot-distro wizard                    # 默认 ~/.mox-proot + alpine
+mox-proot-distro wizard --root /sd/data --distro ubuntu   # 自定义
 ```
 
 **中文环境开箱即用**：登录时引擎自动注入 `LANG`/`TERM`（宿主中文环境会
 透传进容器；兜底 `C.UTF-8`，不乱码）。想要完整中文显示：容器内装
 locales 包并 `locale-gen zh_CN.UTF-8`，然后编辑 rootfs 里的
-`etc/moxsh/env` 把 `LANG` 改成 `zh_CN.UTF-8`。随时可查当前生效环境：
+`etc/mox-proot/env` 把 `LANG` 改成 `zh_CN.UTF-8`。随时可查当前生效环境：
 
 ```bash
-moxsh-proot-distro env alpine
+mox-proot-distro env alpine
 ```
 
 ### 🔹 容器内控制台
@@ -226,28 +253,28 @@ bind-mount 反穿透到宿主，装新发行版、查网络、看环境都不用
 ```bash
 # 容器内（任意发行版里）：
 mox                 # 管理控制台（list / install / remove / net / env）
-mox install kali    # 在容器里再装一个发行版（落到宿主 MOXSH_ROOT）
+mox install kali    # 在容器里再装一个发行版（落到宿主 MOX_ROOT）
 mox net             # 网络边界报告
 ```
 
 容器内不能再嵌套进其他容器（ptrace 不支持套娃），`mox login/shell/launch`
-会提示你先退出。`MOXSH_PROOT_CONSOLE=0` 可关闭整套控制台注入。
+会提示你先退出。`MOX_PROOT_CONSOLE=0` 可关闭整套控制台注入。
 
 ### 🔹 系统要求
 
 - 桌面 Linux（x86_64 / arm64），或 Termux（Android 9+，aarch64 / x86_64；32 位 ARM 需源码构建）
 - 约 50 MB 可用空间（引擎 + 一个 minirootfs）
 
-> 平台说明：moxsh-proot 是 **Linux / Android（Termux）的 ptrace 路径翻译引擎**，
+> 平台说明：mox-proot 是 **Linux / Android（Termux）的 ptrace 路径翻译引擎**，
 > 仅在 Linux 内核上运行容器（macOS / Windows 无 ptrace 等价能力，无法跑容器）。
-> 设备码扫码登录（`moxsh-proot login`）这类纯网络客户端在任意带 curl 的系统都可跑，
+> 设备码扫码登录（`mox-proot login`）这类纯网络客户端在任意带 curl 的系统都可跑，
 > 但**容器引擎本身不支持 macOS / Windows**。
 
 ### 🔹 从源码构建
 
 ```bash
-git clone https://github.com/codecloud-dev/moxsh-proot.git
-cd moxsh-proot
+git clone https://github.com/codecloud-dev/mox-proot.git
+cd mox-proot
 cargo build --release
 ```
 
@@ -262,7 +289,7 @@ cargo build --release
 | 目录            | 语言     | 职责                                  |
 | :------------ | :----- | ----------------------------------- |
 | `src/proot/`  | Rust   | 引擎核心：ptrace 翻译、ELF/exec 链、发行版、网络栈、钩子发现 |
-| `src/bin/`    | Rust   | `moxsh-proot` / `moxsh-proot-distro` 两个独立二进制 |
+| `src/bin/`    | Rust   | `mox-proot` / `mox-proot-distro` / `mox-proot-tui` 三个独立二进制 |
 | `go/`         | Go     | 安装器 + 下载器（install/update/probe），Linux / Termux 两靶 |
 | `py/runtime/` | Python | 容器内钩子（供给检查 / 登录快照），宿主侧可直跑自证 |
 | `py/verify/`  | Python | 三层验证脚本（单测 + 钩子直跑 + 真实 rootfs e2e） |
@@ -288,6 +315,8 @@ cargo build --release
 ## 📖 文档
 
 - [用法手册](docs/usage.md) —— 选项面、子命令、钩子、构建与验证
+- [TUI 简笔画图册](docs/tui-showcase.md) —— 六个标签页 + 欢迎屏 + 惊喜三件套的 ASCII 示意图
+- [路线图决策记录](docs/roadmap.md) —— 里程碑与设计取舍
 
 ---
 

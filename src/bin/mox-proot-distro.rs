@@ -1,24 +1,24 @@
-//! `moxsh-proot-distro` 独立可执行文件入口（原版 Termux 用户专用）。
+//! `mox-proot-distro` 独立可执行文件入口（原版 Termux 用户专用）。
 //!
-//! 与 `moxsh-proot` 的分工：后者按上游 proot 参数面跑**已有 rootfs**；
+//! 与 `mox-proot` 的分工：后者按上游 proot 参数面跑**已有 rootfs**；
 //! 本二进制管理 rootfs 本身（list/install/login/shell/remove/backup/restore），
 //! 语义对齐上游 `proot-distro` 子命令集。安装由一键脚本
-//! `scripts/install-moxsh-proot.sh` 一并落盘。
+//! `scripts/install-mox-proot.sh` 一并落盘。
 //!
-//! 目录布局（Termux 默认）：`$HOME/.moxsh/`
+//! 目录布局（Termux 默认）：`$HOME/.mox-proot/`
 //!
 //! - `containers/<id>/rootfs`   发行版根文件系统
 //! - `cache/`                   下载的归档缓存
 //!
-//! 可用 `MOXSH_ROOT` 环境变量覆盖根目录。
+//! 可用 `MOX_ROOT` 环境变量覆盖根目录。
 
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use moxsh_proot::proot::distro::DistroManager;
-use moxsh_proot::proot::cli;
-use moxsh_proot::proot::links;
+use mox_proot::proot::distro::DistroManager;
+use mox_proot::proot::cli;
+use mox_proot::proot::links;
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -30,11 +30,11 @@ fn main() {
         Some("tui") => {
             #[cfg(feature = "tui")]
             {
-                moxsh_proot::proot::tui::run_tui()
+                mox_proot::proot::tui::run_tui()
             }
             #[cfg(not(feature = "tui"))]
             {
-                eprintln!("moxsh-proot-distro: 本构建未启用 tui feature，无法进入 TUI 控制台。");
+                eprintln!("mox-proot-distro: 本构建未启用 tui feature，无法进入 TUI 控制台。");
                 2
             }
         }
@@ -47,16 +47,16 @@ fn main() {
     process::exit(code);
 }
 
-/// 默认根目录：`$MOXSH_ROOT` > `$HOME/.moxsh`。
+/// 默认根目录：`$MOX_ROOT` > `$HOME/.mox-proot`。
 /// Termux 的 `$HOME` 即 `/data/data/com.termux/files/home`，落在 App 私有
 /// 目录内（exec 允许、noexec 外部存储之外），符合 Android W^X 约束。
 fn default_root() -> PathBuf {
-    if let Some(r) = env::var_os("MOXSH_ROOT") {
+    if let Some(r) = env::var_os("MOX_ROOT") {
         return PathBuf::from(r);
     }
     let home = env::var_os("HOME")
         .unwrap_or_else(|| PathBuf::from("/data/data/com.termux/files/home").into_os_string());
-    Path::new(&home).join(".moxsh")
+    Path::new(&home).join(".mox-proot")
 }
 
 /// login/shell：解析 rootfs → 结构化配置 → 交引擎执行（不 textualize 成
@@ -71,7 +71,7 @@ fn default_root() -> PathBuf {
 fn exec_login(root: &Path, args: &[String]) -> i32 {
     let sub = args[0].as_str();
     let Some(spec) = args.get(1) else {
-        eprintln!("用法: moxsh-proot-distro {} <id|mx:名字> [-- 命令...]", sub);
+        eprintln!("用法: mox-proot-distro {} <id|mx:名字> [-- 命令...]", sub);
         return 2;
     };
     // 解析 -- 之后的用户命令（与 launch 一致）；无则按登录/非登录 shell 处理。
@@ -83,7 +83,7 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
         return match cli::launch_spec(root, spec, &tail) {
             Ok(code) => code,
             Err(e) => {
-                eprintln!("moxsh-proot-distro: {}", e);
+                eprintln!("mox-proot-distro: {}", e);
                 2
             }
         };
@@ -94,13 +94,13 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
     // 缺这步时 `login ../../etc` 会绕过校验直接拼 rootfs 路径（distro_rootfs
     // 用 Path::join 拼接，.. 会逃出 containers 目录），埋下 chroot 越界隐患。
     if let Err(e) = mgr.check_id(spec) {
-        eprintln!("moxsh-proot-distro: {}", e);
+        eprintln!("mox-proot-distro: {}", e);
         return 2;
     }
     let rootfs = mgr.distro_rootfs(spec);
     if !rootfs.is_dir() {
         eprintln!(
-            "moxsh-proot-distro: 发行版未安装: {}（先 install {} 或 launch mx:{}）",
+            "mox-proot-distro: 发行版未安装: {}（先 install {} 或 launch mx:{}）",
             spec, spec, spec
         );
         return 2;
@@ -124,7 +124,7 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
     match cli::exec_into(root, spec, &shell) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("moxsh-proot-distro: {}", e);
+            eprintln!("mox-proot-distro: {}", e);
             2
         }
     }
@@ -135,7 +135,7 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
 /// 见 [`cli::launch_spec`]。
 fn exec_launch(root: &Path, args: &[String]) -> i32 {
     let Some(spec) = args.get(1) else {
-        eprintln!("用法: moxsh-proot-distro launch <mx:名字|id> [-- 命令...]");
+        eprintln!("用法: mox-proot-distro launch <mx:名字|id> [-- 命令...]");
         return 2;
     };
     // `--` 之后的命令作为 tail（与 run_native 的口径一致）。
@@ -148,7 +148,7 @@ fn exec_launch(root: &Path, args: &[String]) -> i32 {
     match cli::launch_spec(root, spec, &tail) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("moxsh-proot-distro: {}", e);
+            eprintln!("mox-proot-distro: {}", e);
             2
         }
     }

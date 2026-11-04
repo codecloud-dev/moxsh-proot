@@ -4,7 +4,7 @@ name: 文档与脚本一致性检查
 #   - bootstrap.sh 语法检查（sh -n）
 #   - 短命令同步检查：README 里的 base64 内嵌命令必须与 bootstrap.sh 对得上
 #    （防改了 bootstrap 忘更新文档——那条命令是用户唯一可见的安装入口）
-#   - install-moxsh-proot.sh 语法检查 + 分流用例自测（probe/pick 逻辑回归）
+#   - install-mox-proot.sh 语法检查 + 分流用例自测（probe/pick 逻辑回归）
 on:
   push:
     branches: [main]
@@ -29,8 +29,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: bootstrap.sh 语法检查
         run: sh -n scripts/bootstrap.sh
-      - name: install-moxsh-proot.sh 语法检查
-        run: sh -n scripts/install-moxsh-proot.sh
+      - name: install-mox-proot.sh 语法检查
+        run: sh -n scripts/install-mox-proot.sh
       - name: 短命令与 README 同步检查
         run: bash scripts/gen-shortcmd.sh --check
       - name: 分流逻辑自测（用例集）

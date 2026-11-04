@@ -479,7 +479,7 @@ mod tests {
     }
 
     fn write_tmp(name: &str, bytes: &[u8]) -> PathBuf {
-        let p = std::env::temp_dir().join(format!("moxsh-elf-{}-{}", std::process::id(), name));
+        let p = std::env::temp_dir().join(format!("mox-proot-elf-{}-{}", std::process::id(), name));
         fs::write(&p, bytes).unwrap();
         p
     }
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn missing_file_is_not_elf() {
-        let info = read_elf_info(Path::new("/nonexistent/moxsh-nope")).unwrap();
+        let info = read_elf_info(Path::new("/nonexistent/mox-proot-nope")).unwrap();
         assert!(!info.is_elf);
     }
 
@@ -575,7 +575,7 @@ mod tests {
         static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let base = std::env::temp_dir().join(format!(
-            "moxsh-chain-{}-{}",
+            "mox-proot-chain-{}-{}",
             std::process::id(),
             n
         ));

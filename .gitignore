@@ -5,8 +5,8 @@
 go/dist/
 *.test
 
-# ── 本地安装演练残留（moxsh-installer 试装目录）────────────────
-/moxsh-root/
+# ── 本地安装演练残留（mox-proot-installer 试装目录）────────────────
+/mox-proot-root/
 
 # ── OS / editor noise ─────────────────────────────────────────
 .DS_Store
@@ -15,3 +15,7 @@ Thumbs.db
 
 # ── Agent / IDE internals ─────────────────────────────────────
 .codebuddy/
+
+# ── Python 校验（py_compile）产物 ──────────────────────────────
+__pycache__/
+*.pyc

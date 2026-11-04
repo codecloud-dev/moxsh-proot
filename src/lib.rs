@@ -1,11 +1,11 @@
 //! proot 容器引擎（Rust 核心，clean-room）。
 //!
-//! 本 crate 是 **moxsh-proot** 引擎的 Rust 侧主体：ptrace 路径翻译核心
+//! 本 crate 是 **mox-proot** 引擎的 Rust 侧主体：ptrace 路径翻译核心
 //! （[`proot::ptrace`]）、ELF/shebang 解析（[`proot::elf`]）、符号链接治理
 //! （[`proot::symlink_fix`]）、发行版管理（[`proot::distro`]）、网络栈
 //! （[`proot::net`]）与脚本运行时（[`proot::script`]，Python/Lua 钩子）。
 //!
-//! 对外暴露 `moxsh_proot_*` C-ABI 函数，供 [`crate::c`] 目录下的 JNI 桥
+//! 对外暴露 `mox_proot_*` C-ABI 函数，供 [`crate::c`] 目录下的 JNI 桥
 //! （c/proot_bridge.c）与独立可执行文件（src/bin/）调用。多语言分工见
 //! 仓库根 README：Rust=引擎核心 / Go=安装器 / Python=脚本运行时 /
 //! Lua=钩子配置层 / C=JNI 桥。
@@ -27,18 +27,18 @@ use std::os::raw::{c_char, c_int};
 //   -5 未安装 | -6 需要下载缓存 | -7 SHA-256 校验失败 | -8 解压失败
 //   -9 IO 错误 | -10 缓冲区不足 | -11 ptrace 失败
 //
-// 字符串返回统一采用"调用方缓冲 + 容量"模式（与 moxsh_copy_cells 一致）：
+// 字符串返回统一采用"调用方缓冲 + 容量"模式（与 mox_proot_copy_cells 一致）：
 // 返回正数=写入长度（不含 NUL）；0=缓冲区不足（调用方应扩容重试）；
 // 负数=错误码。避免堆指针跨界释放，调用方无需配对 free。
 
 /// FFI panic 屏障（P3）：`extern "C"` 里 unwind 属未定义行为（Rust 1.81+ 会 abort，
 /// 表现为宿主进程闪退）。所有重逻辑入口统一经 [ffi_guard] 执行：
-/// 内部 panic 被捕获并折叠为约定错误码 `-99`（MOXSH_ERR_PANIC），宿主存活、
+/// 内部 panic 被捕获并折叠为约定错误码 `-99`（MOX_ERR_PANIC），宿主存活、
 /// 调用侧可提示重试。只吞 panic 不吞错误：正常错误仍走各函数原有错误码。
 ///
 /// 错误码约定补遗（与模块头注释的错误码表并列）：`-99 = 内核内部 panic（不应出现，
 /// 出现请附日志上报）`。
-pub const MOXSH_ERR_PANIC: c_int = -99;
+pub const MOX_ERR_PANIC: c_int = -99;
 
 /// 安装/恢复等长任务的进度回调：参数为 (消息, 已完成字节, 总字节)。
 pub(crate) type ProgressCallback = Box<dyn FnMut(&str, u64, u64)>;
@@ -57,7 +57,7 @@ where
 
 /// 返回 `c_int` 错误码的入口统一用本包装：异常折叠为 -99。
 fn ffi_guard<F: FnOnce() -> c_int + std::panic::UnwindSafe>(f: F) -> c_int {
-    ffi_guard_ex(f, MOXSH_ERR_PANIC)
+    ffi_guard_ex(f, MOX_ERR_PANIC)
 }
 
 /// 读取 C 字符串为 Rust String（非法 UTF-8 / null 返回 None）。
@@ -103,18 +103,18 @@ unsafe fn write_cstr_buf(out: *mut c_char, cap: usize, s: &str) -> c_int {
 /// 需要外部下载时返回 -6（ProotError::DownloadRequired）。
 ///
 /// # Safety
-/// `id`/`moxsh_root` 必须指向合法 NUL 结尾 UTF-8 字符串；`cache_tar`/`dns_csv` 可为 null。
+/// `id`/`mox_proot_root` 必须指向合法 NUL 结尾 UTF-8 字符串；`cache_tar`/`dns_csv` 可为 null。
 #[no_mangle]
-pub unsafe extern "C" fn moxsh_proot_install(
+pub unsafe extern "C" fn mox_proot_install(
     id: *const c_char,
-    moxsh_root: *const c_char,
+    mox_proot_root: *const c_char,
     cache_tar: *const c_char,
     dns_csv: *const c_char,
 ) -> c_int {
     // SAFETY：FFI thin wrapper——契约见函数 # Safety 文档；unsafe 操作收敛于内层块。
     // P3 panic 屏障：安装链路（下载/解压/落盘）体量大，内部异常折叠为 -99。
     ffi_guard(move || unsafe {
-        let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(moxsh_root)) else {
+        let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(mox_proot_root)) else {
             return -1;
         };
         let mut mgr = proot::distro::DistroManager::new(std::path::Path::new(&root));
@@ -143,18 +143,18 @@ pub unsafe extern "C" fn moxsh_proot_install(
 /// 删除发行版。
 ///
 /// # Safety
-/// `id`/`moxsh_root` 必须指向合法 NUL 结尾 UTF-8 字符串。
+/// `id`/`mox_proot_root` 必须指向合法 NUL 结尾 UTF-8 字符串。
 #[no_mangle]
-pub unsafe extern "C" fn moxsh_proot_remove(id: *const c_char, moxsh_root: *const c_char) -> c_int {
+pub unsafe extern "C" fn mox_proot_remove(id: *const c_char, mox_proot_root: *const c_char) -> c_int {
     // P3 panic 屏障：C-ABI 入口禁止 unwind（extern "C" 边界 unwind 是 UB/abort），
-    // 异常折叠为 -99（MOXSH_ERR_PANIC）。
-    ffi_guard_ex(move || unsafe { moxsh_proot_remove_impl(id, moxsh_root) }, MOXSH_ERR_PANIC)
+    // 异常折叠为 -99（MOX_ERR_PANIC）。
+    ffi_guard_ex(move || unsafe { mox_proot_remove_impl(id, mox_proot_root) }, MOX_ERR_PANIC)
 }
 
-unsafe extern "C" fn moxsh_proot_remove_impl(id: *const c_char, moxsh_root: *const c_char) -> c_int {
+unsafe extern "C" fn mox_proot_remove_impl(id: *const c_char, mox_proot_root: *const c_char) -> c_int {
     // SAFETY：FFI thin wrapper——契约见函数 # Safety 文档；整体即不安全上下文。
     unsafe {
-        let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(moxsh_root)) else {
+        let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(mox_proot_root)) else {
             return -1;
         };
         proot::distro::DistroManager::new(std::path::Path::new(&root))
@@ -168,28 +168,28 @@ unsafe extern "C" fn moxsh_proot_remove_impl(id: *const c_char, moxsh_root: *con
 /// 返回所需长度（含 NUL，>0 成功）/ 0 缓冲不足 / 负错误码。
 ///
 /// # Safety
-/// `id`/`moxsh_root` 指向合法字符串；`out_buf` 指向至少 `cap` 字节可写内存。
+/// `id`/`mox_proot_root` 指向合法字符串；`out_buf` 指向至少 `cap` 字节可写内存。
 #[no_mangle]
-pub unsafe extern "C" fn moxsh_proot_login(
+pub unsafe extern "C" fn mox_proot_login(
     id: *const c_char,
-    moxsh_root: *const c_char,
+    mox_proot_root: *const c_char,
     out_buf: *mut c_char,
     cap: usize,
 ) -> c_int {
     // P3 panic 屏障：C-ABI 入口禁止 unwind（extern "C" 边界 unwind 是 UB/abort），
-    // 异常折叠为 -99（MOXSH_ERR_PANIC）。
-    ffi_guard_ex(move || unsafe { moxsh_proot_login_impl(id, moxsh_root, out_buf, cap) }, MOXSH_ERR_PANIC)
+    // 异常折叠为 -99（MOX_ERR_PANIC）。
+    ffi_guard_ex(move || unsafe { mox_proot_login_impl(id, mox_proot_root, out_buf, cap) }, MOX_ERR_PANIC)
 }
 
-unsafe extern "C" fn moxsh_proot_login_impl(
+unsafe extern "C" fn mox_proot_login_impl(
     id: *const c_char,
-    moxsh_root: *const c_char,
+    mox_proot_root: *const c_char,
     out_buf: *mut c_char,
     cap: usize,
 ) -> c_int {
     // SAFETY：FFI thin wrapper——契约见函数 # Safety 文档；整体即不安全上下文。
     unsafe {
-        let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(moxsh_root)) else {
+        let (Some(id), Some(root)) = (read_opt_cstr(id), read_opt_cstr(mox_proot_root)) else {
             return -1;
         };
         match proot::distro::DistroManager::new(std::path::Path::new(&root)).login_cmd(&id, None) {
@@ -202,26 +202,26 @@ unsafe extern "C" fn moxsh_proot_login_impl(
 /// 列出已安装发行版，写入 `out_buf`（行分隔协议：每行 `id|initialized|rootfs`）。
 ///
 /// # Safety
-/// `moxsh_root` 指向合法字符串；`out_buf` 指向至少 `cap` 字节可写内存。
+/// `mox_proot_root` 指向合法字符串；`out_buf` 指向至少 `cap` 字节可写内存。
 #[no_mangle]
-pub unsafe extern "C" fn moxsh_proot_list_installed(
-    moxsh_root: *const c_char,
+pub unsafe extern "C" fn mox_proot_list_installed(
+    mox_proot_root: *const c_char,
     out_buf: *mut c_char,
     cap: usize,
 ) -> c_int {
     // P3 panic 屏障：C-ABI 入口禁止 unwind（extern "C" 边界 unwind 是 UB/abort），
-    // 异常折叠为 -99（MOXSH_ERR_PANIC）。
-    ffi_guard_ex(move || unsafe { moxsh_proot_list_installed_impl(moxsh_root, out_buf, cap) }, MOXSH_ERR_PANIC)
+    // 异常折叠为 -99（MOX_ERR_PANIC）。
+    ffi_guard_ex(move || unsafe { mox_proot_list_installed_impl(mox_proot_root, out_buf, cap) }, MOX_ERR_PANIC)
 }
 
-unsafe extern "C" fn moxsh_proot_list_installed_impl(
-    moxsh_root: *const c_char,
+unsafe extern "C" fn mox_proot_list_installed_impl(
+    mox_proot_root: *const c_char,
     out_buf: *mut c_char,
     cap: usize,
 ) -> c_int {
     // SAFETY：FFI thin wrapper——契约见函数 # Safety 文档；整体即不安全上下文。
     unsafe {
-        let Some(root) = read_opt_cstr(moxsh_root) else {
+        let Some(root) = read_opt_cstr(mox_proot_root) else {
             return -1;
         };
         let list = match proot::distro::DistroManager::new(std::path::Path::new(&root)).list_installed() {
@@ -239,28 +239,28 @@ unsafe extern "C" fn moxsh_proot_list_installed_impl(
 /// 备份发行版 rootfs 到 `out_tar`（tar.gz）。
 ///
 /// # Safety
-/// `id`/`moxsh_root`/`out_tar` 必须指向合法 NUL 结尾 UTF-8 字符串。
+/// `id`/`mox_proot_root`/`out_tar` 必须指向合法 NUL 结尾 UTF-8 字符串。
 #[no_mangle]
-pub unsafe extern "C" fn moxsh_proot_backup(
+pub unsafe extern "C" fn mox_proot_backup(
     id: *const c_char,
-    moxsh_root: *const c_char,
+    mox_proot_root: *const c_char,
     out_tar: *const c_char,
 ) -> c_int {
     // P3 panic 屏障：C-ABI 入口禁止 unwind（extern "C" 边界 unwind 是 UB/abort），
-    // 异常折叠为 -99（MOXSH_ERR_PANIC）。
-    ffi_guard_ex(move || unsafe { moxsh_proot_backup_impl(id, moxsh_root, out_tar) }, MOXSH_ERR_PANIC)
+    // 异常折叠为 -99（MOX_ERR_PANIC）。
+    ffi_guard_ex(move || unsafe { mox_proot_backup_impl(id, mox_proot_root, out_tar) }, MOX_ERR_PANIC)
 }
 
-unsafe extern "C" fn moxsh_proot_backup_impl(
+unsafe extern "C" fn mox_proot_backup_impl(
     id: *const c_char,
-    moxsh_root: *const c_char,
+    mox_proot_root: *const c_char,
     out_tar: *const c_char,
 ) -> c_int {
     // SAFETY：FFI thin wrapper——契约见函数 # Safety 文档；整体即不安全上下文。
     unsafe {
         let (Some(id), Some(root), Some(out)) = (
             read_opt_cstr(id),
-            read_opt_cstr(moxsh_root),
+            read_opt_cstr(mox_proot_root),
             read_opt_cstr(out_tar),
         ) else {
             return -1;
@@ -275,20 +275,20 @@ unsafe extern "C" fn moxsh_proot_backup_impl(
 /// 从备份 tar.gz 恢复发行版（覆盖已有 rootfs）。
 ///
 /// # Safety
-/// `id`/`moxsh_root`/`tar_path` 必须指向合法 NUL 结尾 UTF-8 字符串。
+/// `id`/`mox_proot_root`/`tar_path` 必须指向合法 NUL 结尾 UTF-8 字符串。
 #[no_mangle]
-pub unsafe extern "C" fn moxsh_proot_restore(
+pub unsafe extern "C" fn mox_proot_restore(
     id: *const c_char,
-    moxsh_root: *const c_char,
+    mox_proot_root: *const c_char,
     tar_path: *const c_char,
 ) -> c_int {
     // P3 panic 屏障：C-ABI 入口禁止 unwind（extern "C" 边界 unwind 是 UB/abort），
-    // 异常折叠为 -99（MOXSH_ERR_PANIC）。rootfs 恢复 = 大 tar 解压 + 覆盖写，
+    // 异常折叠为 -99（MOX_ERR_PANIC）。rootfs 恢复 = 大 tar 解压 + 覆盖写，
     // 异常折叠为 -99。
     ffi_guard(move || unsafe {
         let (Some(id), Some(root), Some(tar)) = (
             read_opt_cstr(id),
-            read_opt_cstr(moxsh_root),
+            read_opt_cstr(mox_proot_root),
             read_opt_cstr(tar_path),
         ) else {
             return -1;
@@ -303,7 +303,7 @@ pub unsafe extern "C" fn moxsh_proot_restore(
 /// 路径翻译自检：运行内置用例，返回通过数。
 /// 等于 `proot::TRANSLATE_SELFTEST_TOTAL`（14）即全部通过，供宿主启动自检。
 #[no_mangle]
-pub extern "C" fn moxsh_proot_translate_selftest() -> c_int {
+pub extern "C" fn mox_proot_translate_selftest() -> c_int {
     proot::translate_selftest() as c_int
 }
 
@@ -313,7 +313,7 @@ mod tests {
     use std::os::raw::c_int;
 
     /// translate 自检——纯路径逻辑（不触碰文件系统/网络），随测试跑全量，
-    /// 断言通过数等于内置总数（与 so 内 `moxsh_proot_translate_selftest` 同源）。
+    /// 断言通过数等于内置总数（与 so 内 `mox_proot_translate_selftest` 同源）。
     #[test]
     fn translate_selftest_all_pass() {
         assert_eq!(proot::translate_selftest(), proot::TRANSLATE_SELFTEST_TOTAL);
@@ -322,7 +322,7 @@ mod tests {
     /// C-ABI 自检入口返回值断言（14 以内 usize→c_int 无损）。
     #[test]
     fn cabi_translate_selftest_code_matches() {
-        let code = super::moxsh_proot_translate_selftest();
+        let code = super::mox_proot_translate_selftest();
         assert_eq!(code, proot::TRANSLATE_SELFTEST_TOTAL as c_int);
     }
 }

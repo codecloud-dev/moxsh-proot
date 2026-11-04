@@ -109,8 +109,8 @@ mod tests {
     #[test]
     fn encodes_known_uri_stable() {
         // 同样输入必须编码出完全一致的矩阵（确定性，可复现）
-        let a = build_matrix("moxsh-proot-login", EcLevel::M).unwrap();
-        let b = build_matrix("moxsh-proot-login", EcLevel::M).unwrap();
+        let a = build_matrix("mox-proot-login", EcLevel::M).unwrap();
+        let b = build_matrix("mox-proot-login", EcLevel::M).unwrap();
         assert_eq!(a, b);
     }
 }

@@ -4,7 +4,7 @@
 -- 演示 Lua 配置层的消费方式：dofile 读 proot.lua 的用户偏好，
 -- 据此决定 motd / 网络快照是否打印——「配置与逻辑分离」的最小样本。
 
-local cfg_ok, cfg = pcall(dofile, "/moxsh/hooks/proot.lua")
+local cfg_ok, cfg = pcall(dofile, "/mox-proot/hooks/proot.lua")
 if not cfg_ok then
     cfg = {} -- 配置缺失/语法错误：用默认值，不阻断登录
 end
@@ -12,7 +12,7 @@ end
 local c = cfg.container or {}
 local n = cfg.network or {}
 
-local cid = os.getenv("MOXSH_CONTAINER_ID") or "?"
+local cid = os.getenv("MOX_CONTAINER_ID") or "?"
 io.write(string.format("[lua-hook] 容器 %s 登录中（Lua %s）\n", cid, _VERSION))
 
 if c.motd then

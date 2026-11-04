@@ -2,18 +2,18 @@
 --
 -- 定位：引擎（Rust）只认结构化事实（rootfs/bindings/fake_root/cwd/env），
 -- 面向用户的「偏好」由本文件承载，供 Lua 钩子 dofile 后读取——
--- Python 钩子经 MOXSH_HOOK_DIR 环境变量同样能找到它。
+-- Python 钩子经 MOX_HOOK_DIR 环境变量同样能找到它。
 --
--- 安装器把本文件与 lua/hooks/、py/runtime/ 一并种子到 $MOXSH_ROOT/hooks/，
+-- 安装器把本文件与 lua/hooks/、py/runtime/ 一并种子到 $MOX_ROOT/hooks/，
 -- 用户改配置无需碰引擎二进制；语法错误时钩子优雅降级（见 hooks 内写法）。
 --
--- 生效方式：钩子内 `dofile("/moxsh/hooks/proot.lua")`（guest 路径）。
+-- 生效方式：钩子内 `dofile("/mox-proot/hooks/proot.lua")`（guest 路径）。
 
 return {
     -- 容器身份
     container = {
         -- 登录欢迎语（pre-login.lua 打印；设 nil/false 关闭）
-        motd = "proot 容器 —— 无 root 的完整 Linux（moxsh 引擎）",
+        motd = "proot 容器 —— 无 root 的完整 Linux（mox-proot 引擎）",
         -- 登录钩子是否打印网络快照
         show_network = true,
     },

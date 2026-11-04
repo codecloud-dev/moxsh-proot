@@ -4,5 +4,5 @@ contact_links:
     url: "https://afdian.com/a/cloudharbor"
     about: "吐槽、赞助、或者只是打个招呼都行。"
   - name: "🔍 先搜搜有没有重复 / Search first"
-    url: "https://github.com/codecloud-dev/moxsh-proot/issues"
+    url: "https://github.com/codecloud-dev/mox-proot/issues"
     about: "提交前可以先看看有没有重复的 issue。"

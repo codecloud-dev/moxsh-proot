@@ -1,9 +1,9 @@
-//! moxsh 用户配置（0.2.0）：`config.toml` 极简子集解析。
+//! mox-proot 用户配置（0.2.0）：`config.toml` 极简子集解析。
 //!
 //! 配置面（`docs/roadmap.md` §1/§5，均经项目主人确认）：
 //!
-//! - **数据根三层**：`MOXSH_ROOT` 环境变量 > `config.toml` 的
-//!   `[general] root_dir` > 默认 `~/.moxsh`；
+//! - **数据根三层**：`MOX_ROOT` 环境变量 > `config.toml` 的
+//!   `[general] root_dir` > 默认 `~/.mox-proot`；
 //! - **每容器进/退命令**：全局默认 + 每容器覆盖（`[containers.<id>]` 段）。
 //!   「以防误触」语义：`enter` = 进容器时在容器内执行的**首个命令**
 //!   （替代默认登录 shell，可自带确认逻辑，如
@@ -11,8 +11,8 @@
 //!   **宿主侧**收尾命令（容器内 exit 由 shell 自身处理，引擎不拦 exit
 //!   syscall，故 exit 语义降级为收尾提示/清理，文档明示）。
 //!
-//! config.toml 与 links.toml 同目录：`~/.config/moxsh-proot/config.toml`
-//! （`MOXSH_CONFIG_DIR` 可覆盖目录）。
+//! config.toml 与 links.toml 同目录：`~/.config/mox-proot/config.toml`
+//! （`MOX_CONFIG_DIR` 可覆盖目录）。
 //!
 //! TOML 解析为手写极简子集（依赖极简约束，见 Cargo.toml 与
 //! [`crate::proot::links::parse_links_toml`] 注释），只认下面三种段。
@@ -21,8 +21,8 @@ use std::path::{Path, PathBuf};
 
 use crate::proot::{ProotError, ProotResult};
 
-/// 默认数据根目录名（`$HOME/.moxsh`）。
-pub const DEFAULT_ROOT_DIR_NAME: &str = ".moxsh";
+/// 默认数据根目录名（`$HOME/.mox-proot`）。
+pub const DEFAULT_ROOT_DIR_NAME: &str = ".mox-proot";
 
 /// 用户配置（config.toml 解析结果）。
 #[derive(Debug, Clone, Default)]
@@ -67,9 +67,9 @@ impl Settings {
     }
 
     /// 解析数据根目录（三层优先级，roadmap §5）：
-    /// `MOXSH_ROOT` 环境变量 > `config.toml` > `~/.moxsh`。
+    /// `MOX_ROOT` 环境变量 > `config.toml` > `~/.mox-proot`。
     pub fn resolve_root_dir(&self) -> PathBuf {
-        if let Some(r) = std::env::var_os("MOXSH_ROOT") {
+        if let Some(r) = std::env::var_os("MOX_ROOT") {
             if !r.is_empty() {
                 return PathBuf::from(r);
             }
@@ -99,19 +99,19 @@ impl Settings {
     }
 }
 
-/// 默认数据根：`$HOME/.moxsh`。
+/// 默认数据根：`$HOME/.mox-proot`。
 pub fn default_root_dir() -> PathBuf {
     let home = std::env::var_os("HOME").unwrap_or_default();
     Path::new(&home).join(DEFAULT_ROOT_DIR_NAME)
 }
 
-/// 配置目录：`MOXSH_CONFIG_DIR` > `~/.config/moxsh-proot`。
+/// 配置目录：`MOX_CONFIG_DIR` > `~/.config/mox-proot`。
 pub fn config_dir() -> PathBuf {
-    if let Some(d) = std::env::var_os("MOXSH_CONFIG_DIR") {
+    if let Some(d) = std::env::var_os("MOX_CONFIG_DIR") {
         return PathBuf::from(d);
     }
     let home = std::env::var_os("HOME").unwrap_or_default();
-    Path::new(&home).join(".config/moxsh-proot")
+    Path::new(&home).join(".config/mox-proot")
 }
 
 /// 展开 `~`/`~/` 前缀为 `$HOME`（其余原样）。
@@ -271,14 +271,14 @@ mod tests {
         let s = parse_config_toml(
             r#"
             [general]
-            root_dir = "~/moxsh-data"
+            root_dir = "~/mox-proot-data"
             [enter]
             default = "read -p 确认？ && /bin/bash -l"
             [exit]
             default = "echo 已退出容器"
             "#,
         );
-        assert_eq!(s.root_dir.as_deref(), Some("~/moxsh-data"));
+        assert_eq!(s.root_dir.as_deref(), Some("~/mox-proot-data"));
         assert_eq!(s.default_enter.as_deref(), Some("read -p 确认？ && /bin/bash -l"));
         assert_eq!(s.default_exit.as_deref(), Some("echo 已退出容器"));
     }
@@ -316,26 +316,26 @@ mod tests {
             junk = "x"
             root_dir = "应该被忽略"
             [general]
-            root_dir = "/data/moxsh"
+            root_dir = "/data/mox-proot"
             [other]
             enter = "y"
             "#,
         );
-        assert_eq!(s.root_dir.as_deref(), Some("/data/moxsh"));
+        assert_eq!(s.root_dir.as_deref(), Some("/data/mox-proot"));
         assert_eq!(s.default_enter, None);
     }
 
     #[test]
     fn tilde_expansion() {
         let home = std::env::var_os("HOME").unwrap_or_default();
-        assert_eq!(expand_tilde("~/moxsh"), Path::new(&home).join("moxsh"));
+        assert_eq!(expand_tilde("~/mox-proot"), Path::new(&home).join("mox-proot"));
         assert_eq!(expand_tilde("/abs/path"), PathBuf::from("/abs/path"));
         assert_eq!(expand_tilde("relative"), PathBuf::from("relative"));
     }
 
     #[test]
     fn load_missing_file_is_default() {
-        let s = Settings::load(Path::new("/nonexistent/moxsh/config.toml")).unwrap();
+        let s = Settings::load(Path::new("/nonexistent/mox-proot/config.toml")).unwrap();
         assert_eq!(s.root_dir, None);
         assert_eq!(s.enter_cmd("alpine"), None);
     }
@@ -344,7 +344,7 @@ mod tests {
     fn root_dir_priority_documented() {
         // env 优先于配置文件（不设 env 时走配置→默认）。
         let s = parse_config_toml("[general]\nroot_dir = \"/from/config\"\n");
-        // 注意：测试环境若设了 MOXSH_ROOT 会拿到 env 值——这里只验证配置层。
+        // 注意：测试环境若设了 MOX_ROOT 会拿到 env 值——这里只验证配置层。
         assert_eq!(s.root_dir(), Some(PathBuf::from("/from/config")));
         let empty = Settings::default();
         assert_eq!(empty.root_dir(), None);
@@ -354,11 +354,11 @@ mod tests {
 
     #[test]
     fn upsert_root_dir_empty_text_appends_section() {
-        let got = upsert_general_root_dir("", "/data/moxsh");
-        assert_eq!(got, "[general]\nroot_dir = \"/data/moxsh\"\n");
+        let got = upsert_general_root_dir("", "/data/mox-proot");
+        assert_eq!(got, "[general]\nroot_dir = \"/data/mox-proot\"\n");
         assert_eq!(
             parse_config_toml(&got).root_dir.as_deref(),
-            Some("/data/moxsh")
+            Some("/data/mox-proot")
         );
     }
 
@@ -382,24 +382,24 @@ mod tests {
     fn upsert_root_dir_inserts_at_section_end() {
         // general 在中间：root_dir 补在段尾（[enter] 之前），不串段。
         let text = "[general]\n# 没有 root_dir\n[enter]\ndefault = \"x\"\n";
-        let got = upsert_general_root_dir(text, "~/moxsh-data");
+        let got = upsert_general_root_dir(text, "~/mox-proot-data");
         assert_eq!(
             got,
-            "[general]\n# 没有 root_dir\nroot_dir = \"~/moxsh-data\"\n[enter]\ndefault = \"x\"\n"
+            "[general]\n# 没有 root_dir\nroot_dir = \"~/mox-proot-data\"\n[enter]\ndefault = \"x\"\n"
         );
         assert_eq!(
             parse_config_toml(&got).root_dir.as_deref(),
-            Some("~/moxsh-data")
+            Some("~/mox-proot-data")
         );
     }
 
     #[test]
     fn upsert_root_dir_general_is_last_section() {
         let text = "[enter]\ndefault = \"x\"\n[general]\n";
-        let got = upsert_general_root_dir(text, "/data/moxsh");
+        let got = upsert_general_root_dir(text, "/data/mox-proot");
         assert_eq!(
             got,
-            "[enter]\ndefault = \"x\"\n[general]\nroot_dir = \"/data/moxsh\"\n"
+            "[enter]\ndefault = \"x\"\n[general]\nroot_dir = \"/data/mox-proot\"\n"
         );
     }
 }

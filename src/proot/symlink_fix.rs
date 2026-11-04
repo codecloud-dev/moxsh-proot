@@ -148,7 +148,7 @@ pub fn rewrite_link_in_place(link: &Path, rules: &TranslateRules) -> bool {
     let Some(name) = link.file_name() else {
         return false;
     };
-    let tmp = link.with_file_name(format!(".{}.moxsh-l2s-tmp", name.to_string_lossy()));
+    let tmp = link.with_file_name(format!(".{}.mox-proot-l2s-tmp", name.to_string_lossy()));
     let _ = fs::remove_file(&tmp);
     if std::os::unix::fs::symlink(&rel, &tmp).is_err() {
         let _ = fs::remove_file(&tmp);
@@ -318,7 +318,7 @@ mod tests {
         // 每次调用唯一目录：并行测试互不踩（同 PID 多线程共享会互相删）。
         static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        std::env::temp_dir().join(format!("moxsh-l2s-{}-{}", std::process::id(), n))
+        std::env::temp_dir().join(format!("mox-proot-l2s-{}-{}", std::process::id(), n))
     }
 
     fn fresh() -> PathBuf {

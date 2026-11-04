@@ -1,6 +1,6 @@
 //! 专属解锁客户端（0.6.0）——「脚本 ↔ 官网」握手，**在线校验 + localhost 回环自动收码**。
 //!
-//! 流程（手机 / Termux，灰度首发于 moxsh-proot 脚本，旗舰 moxsh 后上）：
+//! 流程（手机 / Termux，灰度首发于 mox-proot 脚本，旗舰 mox-proot 后上）：
 //!   1. 在终端敲 `mox fan login`（入口命令由运营渠道自动回复告知，**手动触发，
 //!      不自动跳**）→ 脚本在 `127.0.0.1` 起一个一次性回环监听 → 唤起手机浏览器打开
 //!      专属页面（官网导航不可见），URL 带上 `redirect=<回环地址>&state=<随机>`；
@@ -8,7 +8,7 @@
 //!   3. 点「确认领取」= 后端 `POST /fan/issue` 用**服务端密钥**签发一个激活码，
 //!      页面带 `code` 跳回 `redirect`（回环）→ 脚本**自动收到**码；
 //!   4. 脚本 `POST /fan/verify {code}` **联网经服务端真实校验**（服务端持密钥、可吊销）
-//!      → 通过则把档位/到期落盘 `$MOXSH_ROOT/fan.toml` → 解锁 fan_only 配方。
+//!      → 通过则把档位/到期落盘 `$MOX_ROOT/fan.toml` → 解锁 fan_only 配方。
 //!
 //! 桌面 Linux（没浏览器可调）：页面手动取激活码 → `mox fan redeem <code>`（同样联网验）。
 //!
@@ -16,12 +16,12 @@
 //! - **零外部依赖**：不做任何客户端加解密——激活码由服务端签发、服务端校验，手机只
 //!   `curl` 转发（网络层用 curl，Rust 不引 reqwest）。这比"客户端 HMAC 自带密钥"更硬：
 //!   密钥只在服务端，手机二进制里没有可伪造材料。
-//! - **灰度开关**：`MOXSH_FAN_ENABLE=1` 才启用（默认关）；后端 `/fan/issue` 另有
+//! - **灰度开关**：`MOX_FAN_ENABLE=1` 才启用（默认关）；后端 `/fan/issue` 另有
 //!   GitHub 白名单，双保险（见 cli.rs `cmd_fan`）。
 //! - **不做设备绑定/自动恢复**：删了本地 `fan.toml` 就重新登录领取（项目主人拍板）。
 //!
 //! 与后端（mox-id）的验签契约（实现后端时按此对齐）：
-//!   `POST <MOXSH_REDEEM_API>`  body `{"code":"<激活码>"}`
+//!   `POST <MOX_REDEEM_API>`  body `{"code":"<激活码>"}`
 //!     成功 → HTTP 200，body 为一行：`ok <tier> <exp_unix_秒>`
 //!     失败 → 非 200 或 body 非 `ok` 开头（如 `err not_in_canary` / `err bad_code` / `err expired`）
 //!   激活码本身由后端 HS256（服务端 `JWT_SECRET`/`FAN_SECRET`）签发，手机不解析、只转发。
@@ -34,15 +34,15 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::proot::{ProotError, ProotResult};
 
-/// 令牌文件相对 `$MOXSH_ROOT` 的位置（账号级，删容器不删它；删了需重新领取）。
+/// 令牌文件相对 `$MOX_ROOT` 的位置（账号级，删容器不删它；删了需重新领取）。
 pub const FAN_FILE_REL: &str = "fan.toml";
 
-/// 灰度总开关：`MOXSH_FAN_ENABLE=1` 才启用登录/兑换（默认关）。
-pub const FAN_ENABLE_ENV: &str = "MOXSH_FAN_ENABLE";
-/// 专属页面 URL（`MOXSH_FAN_PAGE` 覆盖；默认占位，部署后改或设环境变量）。
-pub const FAN_PAGE_ENV: &str = "MOXSH_FAN_PAGE";
-/// 后端验签端点（`MOXSH_REDEEM_API` 覆盖；默认占位）。
-pub const REDEEM_API_ENV: &str = "MOXSH_REDEEM_API";
+/// 灰度总开关：`MOX_FAN_ENABLE=1` 才启用登录/兑换（默认关）。
+pub const FAN_ENABLE_ENV: &str = "MOX_FAN_ENABLE";
+/// 专属页面 URL（`MOX_FAN_PAGE` 覆盖；默认占位，部署后改或设环境变量）。
+pub const FAN_PAGE_ENV: &str = "MOX_FAN_PAGE";
+/// 后端验签端点（`MOX_REDEEM_API` 覆盖；默认占位）。
+pub const REDEEM_API_ENV: &str = "MOX_REDEEM_API";
 
 /// 回环等待浏览器回跳的超时（粉丝要登录+点领取，给宽点）。
 const LOOPBACK_TIMEOUT: Duration = Duration::from_secs(240);
@@ -63,7 +63,7 @@ pub enum Opened {
     Failed,
 }
 
-/// 灰度是否开启（`MOXSH_FAN_ENABLE=1`）。
+/// 灰度是否开启（`MOX_FAN_ENABLE=1`）。
 pub fn fan_enabled() -> bool {
     std::env::var(FAN_ENABLE_ENV).as_deref() == Ok("1")
 }
@@ -73,7 +73,7 @@ pub fn verify_mode() -> &'static str {
     "online"
 }
 
-/// 专属页面 URL（`MOXSH_FAN_PAGE` 覆盖）。
+/// 专属页面 URL（`MOX_FAN_PAGE` 覆盖）。
 /// 默认指向官网（GitHub Pages）的隐藏页 fan.html——导航里没有入口，
 /// 只能由本命令带 redirect/state 唤起（项目主人拍板：不给密钥 URL）。
 pub fn fan_page_url() -> String {
@@ -85,7 +85,7 @@ pub fn fan_page_url() -> String {
         .to_string()
 }
 
-/// 后端验签端点（`MOXSH_REDEEM_API` 覆盖）。
+/// 后端验签端点（`MOX_REDEEM_API` 覆盖）。
 fn redeem_api() -> String {
     std::env::var(REDEEM_API_ENV)
         .ok()
@@ -110,7 +110,7 @@ fn make_state() -> String {
     format!("{:x}{:x}", std::process::id(), t)
 }
 
-// ============================ 令牌落盘（$MOXSH_ROOT/fan.toml） ============================
+// ============================ 令牌落盘（$MOX_ROOT/fan.toml） ============================
 
 /// 令牌文件绝对路径。
 pub fn fan_file_path(root: &Path) -> PathBuf {
@@ -161,7 +161,7 @@ pub fn load_state(root: &Path) -> Option<FanState> {
 pub fn save_state(root: &Path, state: &FanState) -> ProotResult<()> {
     std::fs::create_dir_all(root).map_err(ProotError::Io)?;
     let text = format!(
-        "# moxsh 粉丝令牌（由 `mox fan` 写入，请勿手改）。删除本文件 = 解除，需重新登录领取。\n\
+        "# mox-proot 粉丝令牌（由 `mox fan` 写入，请勿手改）。删除本文件 = 解除，需重新登录领取。\n\
          [fan]\n\
          code = \"{}\"\n\
          tier = \"{}\"\n\
@@ -309,7 +309,7 @@ pub fn parse_callback(request: &str) -> Option<(String, String)> {
 
 /// 回给浏览器的成功页（提示可关闭）。
 fn success_html() -> String {
-    "<!DOCTYPE html><meta charset=utf-8><title>moxsh</title>\
+    "<!DOCTYPE html><meta charset=utf-8><title>mox-proot</title>\
      <body style=\"font-family:sans-serif;text-align:center;padding:60px\">\
      <h2>✅ 已领取，返回终端查看</h2><p>可以关闭这个页面了。</p>"
         .to_string()
@@ -411,7 +411,7 @@ mod tests {
     use super::*;
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("moxsh-fan2-test-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!("mox-proot-fan2-test-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

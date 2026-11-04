@@ -21,14 +21,14 @@
 //! # 目录约定
 //!
 //! ```text
-//! $MOXSH_ROOT/hooks/          # 钩子目录（安装器从仓库 py/runtime、lua/hooks 种子复制）
+//! $MOX_ROOT/hooks/          # 钩子目录（安装器从仓库 py/runtime、lua/hooks 种子复制）
 //!   post-install.py           # 命名：<kind>.<后缀>，kind 见 HookKind
 //!   post-install.lua
 //!   pre-login.py
 //! ```
 //!
 //! 钩子在 guest 内可见路径固定为 [`GUEST_HOOK_DIR`]（经 `-b` 绑定进入），
-//! 与宿主目录解耦——脚本里写死 `/moxsh/hooks/xxx` 即可跨设备复用。
+//! 与宿主目录解耦——脚本里写死 `/mox-proot/hooks/xxx` 即可跨设备复用。
 
 use std::fmt;
 use std::fs;
@@ -37,7 +37,7 @@ use std::path::{Path, PathBuf};
 use super::{ProotConfig, ProotResult};
 
 /// 钩子目录在 guest 内的固定可见路径（经 `-b` 绑定）。
-pub const GUEST_HOOK_DIR: &str = "/moxsh/hooks";
+pub const GUEST_HOOK_DIR: &str = "/mox-proot/hooks";
 
 /// 脚本运行时类型（探测顺序即优先级：Python 先于 Lua）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +125,7 @@ impl HookKind {
         }
     }
 
-    /// 注入 guest 的环境变量名（MOXSH_HOOK_KIND 的值）。
+    /// 注入 guest 的环境变量名（MOX_HOOK_KIND 的值）。
     pub fn env_value(&self) -> &'static str {
         match self {
             HookKind::PostInstall => "post-install",
@@ -134,7 +134,7 @@ impl HookKind {
     }
 }
 
-/// 钩子宿主目录：`$MOXSH_ROOT/hooks`。
+/// 钩子宿主目录：`$MOX_ROOT/hooks`。
 pub fn hooks_dir(root: &Path) -> PathBuf {
     root.join("hooks")
 }
@@ -193,10 +193,10 @@ pub fn discover_hooks(root: &Path, kind: HookKind) -> Vec<(Runtime, PathBuf)> {
 /// 钩子执行环境变量（guest 内可见，脚本据此自适配）。
 pub fn hook_env(id: &str, kind: HookKind) -> Vec<(String, String)> {
     vec![
-        ("MOXSH_PROOT".to_string(), "1".to_string()),
-        ("MOXSH_CONTAINER_ID".to_string(), id.to_string()),
-        ("MOXSH_HOOK_KIND".to_string(), kind.env_value().to_string()),
-        ("MOXSH_HOOK_DIR".to_string(), GUEST_HOOK_DIR.to_string()),
+        ("MOX_PROOT".to_string(), "1".to_string()),
+        ("MOX_CONTAINER_ID".to_string(), id.to_string()),
+        ("MOX_HOOK_KIND".to_string(), kind.env_value().to_string()),
+        ("MOX_HOOK_DIR".to_string(), GUEST_HOOK_DIR.to_string()),
     ]
 }
 
@@ -258,7 +258,7 @@ impl HookReport {
 /// - 安装类钩子失败不回滚 rootfs（钩子是用户脚本，语义上不属引擎核心），
 ///   但会进报告由调用方决定是否提示。
 ///
-/// `root` 为 `$MOXSH_ROOT`（钩子目录所在），`rootfs` 为容器 rootfs 宿主路径
+/// `root` 为 `$MOX_ROOT`（钩子目录所在），`rootfs` 为容器 rootfs 宿主路径
 /// （解释器探测与 ptrace 目标）。
 pub fn run_hooks(root: &Path, rootfs: &Path, id: &str, kind: HookKind) -> ProotResult<HookReport> {
     let hooks = discover_hooks(root, kind);
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn probe_interpreters_real_fs() {
-        let tmp = std::env::temp_dir().join("moxsh-proot-probe-test");
+        let tmp = std::env::temp_dir().join("mox-proot-probe-test");
         let _ = fs::remove_dir_all(&tmp);
         let rootfs = tmp.join("rootfs");
         // 空 rootfs：无解释器
@@ -357,7 +357,7 @@ mod tests {
 
     #[test]
     fn discover_hooks_real_fs_ordering() {
-        let tmp = std::env::temp_dir().join("moxsh-proot-hooks-test");
+        let tmp = std::env::temp_dir().join("mox-proot-hooks-test");
         let _ = fs::remove_dir_all(&tmp);
         let dir = hooks_dir(&tmp);
         fs::create_dir_all(&dir).unwrap();
@@ -379,7 +379,7 @@ mod tests {
         assert_eq!(pre[0].0, Runtime::Python);
 
         // 空目录 / 不存在目录：零钩子不报错
-        let empty = std::env::temp_dir().join("moxsh-proot-hooks-empty");
+        let empty = std::env::temp_dir().join("mox-proot-hooks-empty");
         let _ = fs::remove_dir_all(&empty);
         assert!(discover_hooks(&empty, HookKind::PostInstall).is_empty());
         let _ = fs::remove_dir_all(&tmp);
@@ -389,10 +389,10 @@ mod tests {
     fn hook_env_contract() {
         let env = hook_env("ubuntu", HookKind::PostInstall);
         let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.clone());
-        assert_eq!(get("MOXSH_PROOT").as_deref(), Some("1"));
-        assert_eq!(get("MOXSH_CONTAINER_ID").as_deref(), Some("ubuntu"));
-        assert_eq!(get("MOXSH_HOOK_KIND").as_deref(), Some("post-install"));
-        assert_eq!(get("MOXSH_HOOK_DIR").as_deref(), Some(GUEST_HOOK_DIR));
+        assert_eq!(get("MOX_PROOT").as_deref(), Some("1"));
+        assert_eq!(get("MOX_CONTAINER_ID").as_deref(), Some("ubuntu"));
+        assert_eq!(get("MOX_HOOK_KIND").as_deref(), Some("post-install"));
+        assert_eq!(get("MOX_HOOK_DIR").as_deref(), Some(GUEST_HOOK_DIR));
     }
 
     #[test]

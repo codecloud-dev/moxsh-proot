@@ -1,4 +1,4 @@
-//! `moxsh-proot-distro wizard` 一次性初始化向导的端到端测试（0.2.0，roadmap §5）。
+//! `mox-proot-distro wizard` 一次性初始化向导的端到端测试（0.2.0，roadmap §5）。
 //!
 //! 全部走**子进程跑真二进制**：env 只注入子进程，测试进程零污染，
 //! 也不需要和 lib 单测抢环境变量（跨进程，无竞态）。
@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-const BIN: &str = env!("CARGO_BIN_EXE_moxsh-proot-distro");
+const BIN: &str = env!("CARGO_BIN_EXE_mox-proot-distro");
 
 /// 一次性测试沙箱：root（数据根）/ cfg（配置目录）/ home / prefix 四层全隔离，
 /// Drop 时整目录销毁。
@@ -17,7 +17,7 @@ struct Sandbox {
 
 impl Sandbox {
     fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("moxsh-wizard-it-{}-{}", tag, std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mox-proot-wizard-it-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         Self { dir }
@@ -48,8 +48,8 @@ impl Sandbox {
     fn run(&self, args: &[&str]) -> Output {
         Command::new(BIN)
             .args(args)
-            .env("MOXSH_ROOT", self.root())
-            .env("MOXSH_CONFIG_DIR", self.cfg())
+            .env("MOX_ROOT", self.root())
+            .env("MOX_CONFIG_DIR", self.cfg())
             .env("HOME", self.home())
             .env("PREFIX", self.prefix())
             .output()

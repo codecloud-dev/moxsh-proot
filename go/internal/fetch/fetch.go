@@ -3,7 +3,7 @@
 //
 // 定位：Go 安装器的下载层。只依赖标准库（net/http、crypto/sha256、io），
 // 与引擎产物布局约定：<BASE_URL>/<ASSET> 与 <BASE_URL>/<ASSET>.sha256
-// 两个文件成对存在（与 scripts/install-moxsh-proot.sh 的 bash 版同约定）。
+// 两个文件成对存在（与 scripts/install-mox-proot.sh 的 bash 版同约定）。
 package fetch
 
 import (
@@ -33,7 +33,7 @@ type Options struct {
 	// Channels 下载通道 URL 基址列表，按优先级排序（主站 → 镜像）。
 	// 每个通道下按 <base>/<asset> 与 <base>/<asset>.sha256 布局寻址。
 	Channels []string
-	// Asset 资产文件名（如 moxsh-proot-linux-amd64-musl）。
+	// Asset 资产文件名（如 mox-proot-linux-amd64-musl）。
 	Asset string
 	// Dest 本地落盘路径。
 	Dest string

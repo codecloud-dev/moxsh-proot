@@ -11,8 +11,8 @@
 //! CI 无需 `--privileged`）。`libc::alarm` 兜底防挂死（失败即超时杀，
 //! 不会把测试框架吊死）。
 
-use moxsh_proot::proot::ptrace::Tracer;
-use moxsh_proot::proot::translate::TranslateRules;
+use mox_proot::proot::ptrace::Tracer;
+use mox_proot::proot::translate::TranslateRules;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -56,7 +56,7 @@ fn proot_engine_e2e() {
     //   b) 对照组（不开 fake root）：同一命令真的降权 → 输出 1000。
     // 对照组证明本用例在伪装失效时必然失败，不是装饰品。
     {
-        let dir = std::env::temp_dir().join(format!("moxsh-it-fakeroot-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mox-proot-it-fakeroot-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("mkdir");
         let out = dir.join("uid.txt");
@@ -113,15 +113,15 @@ fn proot_engine_e2e() {
 
     // ---- 用例 4：绑定路径翻译（guest 视角读写落到 host 目标）----
     {
-        let guest_dir = std::env::temp_dir().join(format!("moxsh-it-bind-{}", std::process::id()));
-        let host_dir = std::env::temp_dir().join(format!("moxsh-it-host-{}", std::process::id()));
+        let guest_dir = std::env::temp_dir().join(format!("mox-proot-it-bind-{}", std::process::id()));
+        let host_dir = std::env::temp_dir().join(format!("mox-proot-it-host-{}", std::process::id()));
         let _ = fs::remove_dir_all(&guest_dir);
         let _ = fs::remove_dir_all(&host_dir);
         fs::create_dir_all(&guest_dir).expect("mkdir guest");
         fs::create_dir_all(&host_dir).expect("mkdir host");
 
         let mut rules = TranslateRules::new(Path::new("/"));
-        // guest /moxsh-it-bind → host /moxsh-it-host（isolate 绑定）。
+        // guest /mox-proot-it-bind → host /mox-proot-it-host（isolate 绑定）。
         rules.add_binding(
             guest_dir.to_str().unwrap(),
             host_dir.to_str().unwrap(),
@@ -151,7 +151,7 @@ fn proot_engine_e2e() {
 
     // ---- 用例 5：execve 路径翻译（rootfs 内可执行文件）----
     {
-        let rootfs = std::env::temp_dir().join(format!("moxsh-it-rootfs-{}", std::process::id()));
+        let rootfs = std::env::temp_dir().join(format!("mox-proot-it-rootfs-{}", std::process::id()));
         let _ = fs::remove_dir_all(&rootfs);
         let tool = rootfs.join("tool");
         fs::create_dir_all(&tool).expect("mkdir tool");
@@ -195,8 +195,8 @@ fn proot_engine_e2e() {
     //    输出用**绑定目录之外的绝对路径**：dash 的相对重定向按字面路径
     //    交内核解析，会落到真实 cwd（host 目录），与断言无关故绕开。
     {
-        let guest_dir = std::env::temp_dir().join(format!("moxsh-it-cwd-g-{}", std::process::id()));
-        let host_dir = std::env::temp_dir().join(format!("moxsh-it-cwd-h-{}", std::process::id()));
+        let guest_dir = std::env::temp_dir().join(format!("mox-proot-it-cwd-g-{}", std::process::id()));
+        let host_dir = std::env::temp_dir().join(format!("mox-proot-it-cwd-h-{}", std::process::id()));
         let _ = fs::remove_dir_all(&guest_dir);
         let _ = fs::remove_dir_all(&host_dir);
         fs::create_dir_all(&guest_dir).expect("mkdir guest");
@@ -208,7 +208,7 @@ fn proot_engine_e2e() {
         rules.add_binding(guest_dir.to_str().unwrap(), host_dir.to_str().unwrap());
         let t = Tracer::new(rules);
 
-        let out_file = std::env::temp_dir().join(format!("moxsh-it-cwd-out-{}", std::process::id()));
+        let out_file = std::env::temp_dir().join(format!("mox-proot-it-cwd-out-{}", std::process::id()));
         let _ = fs::remove_file(&out_file);
         let child = Tracer::spawn_traced(&[
             "/bin/sh",
@@ -260,7 +260,7 @@ fn proot_engine_e2e() {
     //      os.readlink 是长度视图抓 b)。
     {
         let out_file =
-            std::env::temp_dir().join(format!("moxsh-it-selfexe-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mox-proot-it-selfexe-{}", std::process::id()));
         let _ = fs::remove_file(&out_file);
 
         let rules = TranslateRules::new(Path::new("/"));
@@ -290,7 +290,7 @@ fn proot_engine_e2e() {
         // 环境无 python3 时跳过（CI 镜像必装，本地沙箱亦有）。
         if Path::new("/usr/bin/python3").exists() {
             let py_out =
-                std::env::temp_dir().join(format!("moxsh-it-selfexe-py-{}", std::process::id()));
+                std::env::temp_dir().join(format!("mox-proot-it-selfexe-py-{}", std::process::id()));
             let _ = fs::remove_file(&py_out);
             let rules = TranslateRules::new(Path::new("/"));
             let t = Tracer::new(rules);
@@ -316,7 +316,7 @@ fn proot_engine_e2e() {
         }
     }
 
-    // ---- seccomp 加速器回归（MOXSH_SECCOMP=1，SIGSTOP 引导握手）----
+    // ---- seccomp 加速器回归（MOX_SECCOMP=1，SIGSTOP 引导握手）----
     // 复用上面核心场景，验证「非拦截 syscall 经 SECCOMP_RET_ALLOW 零开销
     // 直通 + 拦截面触发 PTRACE_EVENT_SECCOMP 入口停」模型在真实多进程树下
     // 不挂死、翻译不失效。关键防线：初始 execve 在 tracer 设好
@@ -324,7 +324,7 @@ fn proot_engine_e2e() {
     // 握手（src/proot/ptrace.rs run 循环）正是堵这个洞。本 fn 内串行执行，
     // env 切换无线程竞争。
     {
-        std::env::set_var("MOXSH_SECCOMP", "1");
+        std::env::set_var("MOX_SECCOMP", "1");
 
         // 退出码透传（单进程）。
         {
@@ -347,7 +347,7 @@ fn proot_engine_e2e() {
         // /proc/self/exe 还原（运行期动态 exec 链路在 seccomp 模式下仍不穿帮）。
         {
             let out_file =
-                std::env::temp_dir().join(format!("moxsh-it-selfexe-sec-{}", std::process::id()));
+                std::env::temp_dir().join(format!("mox-proot-it-selfexe-sec-{}", std::process::id()));
             let _ = fs::remove_file(&out_file);
             let rules = TranslateRules::new(Path::new("/"));
             let t = Tracer::new(rules);
@@ -371,16 +371,16 @@ fn proot_engine_e2e() {
         // chdir 翻译 + getcwd 反向还原（RestoreOnExit）在 seccomp 模式下同样成立。
         {
             let guest_dir =
-                std::env::temp_dir().join(format!("moxsh-it-cwd-g-sec-{}", std::process::id()));
+                std::env::temp_dir().join(format!("mox-proot-it-cwd-g-sec-{}", std::process::id()));
             let host_dir =
-                std::env::temp_dir().join(format!("moxsh-it-cwd-h-sec-{}", std::process::id()));
+                std::env::temp_dir().join(format!("mox-proot-it-cwd-h-sec-{}", std::process::id()));
             let _ = fs::remove_dir_all(&guest_dir);
             let _ = fs::remove_dir_all(&host_dir);
             fs::create_dir_all(&guest_dir).expect("mkdir guest");
             fs::create_dir_all(&host_dir).expect("mkdir host");
             fs::write(host_dir.join("marker"), "HOST\n").expect("write marker");
             let out_file =
-                std::env::temp_dir().join(format!("moxsh-it-cwd-out-sec-{}", std::process::id()));
+                std::env::temp_dir().join(format!("mox-proot-it-cwd-out-sec-{}", std::process::id()));
             let _ = fs::remove_file(&out_file);
 
             let mut rules = TranslateRules::new(Path::new("/"));
@@ -411,7 +411,7 @@ fn proot_engine_e2e() {
             let _ = fs::remove_file(&out_file);
         }
 
-        std::env::remove_var("MOXSH_SECCOMP");
+        std::env::remove_var("MOX_SECCOMP");
     }
 
     unsafe { libc::alarm(0) };

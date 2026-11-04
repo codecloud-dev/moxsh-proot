@@ -1,15 +1,15 @@
 [package]
-name = "moxsh-proot"
+name = "mox-proot"
 version = "0.9.0"
 edition = "2021"
-description = "proot 容器引擎：五语言融合（Rust ptrace 核心 / Go 安装器 / Python 脚本运行时 / Lua 钩子 / C JNI 桥）的无 root Linux 容器引擎，moxsh 系列专用。"
+description = "proot 容器引擎：五语言融合（Rust ptrace 核心 / Go 安装器 / Python 脚本运行时 / Lua 钩子 / C JNI 桥）的无 root Linux 容器引擎，mox-proot 系列专用。"
 license = "GPL-3.0"
-repository = "https://github.com/codecloud-dev/moxsh-proot"
+repository = "https://github.com/codecloud-dev/mox-proot"
 readme = "README.md"
 
 [lib]
-name = "moxsh_proot"
-# cdylib 产出 libmoxsh_proot.so（内含 Rust 引擎 + C JNI 桥接，由 build.rs 链接）；
+name = "mox_proot"
+# cdylib 产出 libmox_proot.so（内含 Rust 引擎 + C JNI 桥接，由 build.rs 链接）；
 # rlib 供本机 `cargo test` 与独立二进制使用（cdylib-only 无法承载测试 harness）。
 crate-type = ["cdylib", "rlib"]
 
@@ -22,12 +22,12 @@ libc = "=0.2.189"
 tar = "=0.4.46"
 flate2 = "=1.1.10"
 
-# TUI 控制台（0.4.0，roadmap §6）：仅 `tui` feature 启用，桌面二进制 moxsh-proot-tui 专用。
+# TUI 控制台（0.4.0，roadmap §6）：仅 `tui` feature 启用，桌面二进制 mox-proot-tui 专用。
 # 不污染 Android NDK 构建——cdylib 在 feature 关闭时不编入 ratatui/crossterm。
 # 版本用 ^ 容差由 Cargo.lock 钉死（首次解析后转 = 精确锁定，对齐全仓策略）。
 ratatui = { version = "0.29", optional = true }
 crossterm = { version = "0.28", optional = true }
-# 终端二维码（半块字符渲染）：仅 TUI/桌面 `moxsh-proot-tui` 与 `login` 子命令（tui feature）启用，
+# 终端二维码（半块字符渲染）：仅 TUI/桌面 `mox-proot-tui` 与 `login` 子命令（tui feature）启用，
 # 与 ratatui/crossterm 同样特性门控，不污染引擎 cdylib 与 Android 构建。
 # 选用 qrcode 0.14：纯 Rust、无 unsafe、支持 byte 模式 + 多 ECC 等级，足够承载 <300 字节的 verification_uri。
 qrcode = { version = "=0.14.1", optional = true }
@@ -37,22 +37,22 @@ qrcode = { version = "=0.14.1", optional = true }
 cc = "=1.5.1"
 
 [features]
-# 默认不含 TUI：引擎 cdylib 与 `moxsh-proot`/`moxsh-proot-distro` 保持零额外依赖。
-# 桌面发布与 `moxsh-proot-tui` 二进制启用本 feature。
+# 默认不含 TUI：引擎 cdylib 与 `mox-proot`/`mox-proot-distro` 保持零额外依赖。
+# 桌面发布与 `mox-proot-tui` 二进制启用本 feature。
 default = []
 tui = ["dep:ratatui", "dep:crossterm", "dep:qrcode"]
 
 [[bin]]
-name = "moxsh-proot"
-path = "src/bin/moxsh-proot.rs"
+name = "mox-proot"
+path = "src/bin/mox-proot.rs"
 
 [[bin]]
-name = "moxsh-proot-distro"
-path = "src/bin/moxsh-proot-distro.rs"
+name = "mox-proot-distro"
+path = "src/bin/mox-proot-distro.rs"
 
 [[bin]]
-name = "moxsh-proot-tui"
-path = "src/bin/moxsh-proot-tui.rs"
+name = "mox-proot-tui"
+path = "src/bin/mox-proot-tui.rs"
 required-features = ["tui"]
 
 [profile.release]

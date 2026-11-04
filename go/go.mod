@@ -1,3 +1,3 @@
-module github.com/codecloud-dev/moxsh-proot/go
+module github.com/codecloud-dev/mox-proot/go
 
 go 1.21

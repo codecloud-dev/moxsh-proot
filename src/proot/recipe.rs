@@ -106,15 +106,15 @@ impl RecipeIndex {
     /// 运行时加载：按环境变量与可执行文件同目录探测配方目录，
     /// 找不到则回退到内嵌索引（脚本内容以 `script` 文件名在候选路径查找）。
     pub fn load() -> RecipeIndex {
-        if let Ok(d) = std::env::var("MOXSH_RECIPE_DIR") {
+        if let Ok(d) = std::env::var("MOX_RECIPE_DIR") {
             if let Ok(idx) = RecipeIndex::from_dir(Path::new(&d)) {
                 return idx;
             }
         }
         if let Ok(exe) = std::env::current_exe() {
             if let Some(bin) = exe.parent() {
-                // <bin>/../share/moxsh-proot/recipes（安装布局）
-                let candidate = bin.join("../share/moxsh-proot/recipes");
+                // <bin>/../share/mox-proot/recipes（安装布局）
+                let candidate = bin.join("../share/mox-proot/recipes");
                 if let Ok(idx) = RecipeIndex::from_dir(&candidate) {
                     return idx;
                 }
@@ -153,7 +153,7 @@ impl RecipeIndex {
         if let Ok(exe) = std::env::current_exe() {
             if let Some(bin) = exe.parent() {
                 let p = bin
-                    .join("../share/moxsh-proot/recipes")
+                    .join("../share/mox-proot/recipes")
                     .join(&recipe.script);
                 if p.exists() {
                     return std::fs::read_to_string(&p).map_err(ProotError::Io);
@@ -165,7 +165,7 @@ impl RecipeIndex {
 
     /// 应用配方：把公共库 + 脚本落进目标容器的 /tmp，再在容器内执行。
     ///
-    /// - `root`：moxsh 数据根（`MOXSH_ROOT` 解析后）。
+    /// - `root`：mox-proot 数据根（`MOX_ROOT` 解析后）。
     /// - `recipe_id`：配方 id。
     /// - `distro_id`：已安装发行版 id（未装报错）。
     ///
@@ -198,16 +198,16 @@ impl RecipeIndex {
         let script = self.read_script(recipe)?;
         let tmp = rootfs.join("tmp");
         std::fs::create_dir_all(&tmp).map_err(ProotError::Io)?;
-        // 公共库先落，配方脚本首行 `source /tmp/moxsh-lib.sh` 即生效。
-        std::fs::write(tmp.join("moxsh-lib.sh"), EMBEDDED_LIB).map_err(ProotError::Io)?;
-        let script_name = format!("moxsh-recipe-{}.sh", recipe.id);
+        // 公共库先落，配方脚本首行 `source /tmp/mox-proot-lib.sh` 即生效。
+        std::fs::write(tmp.join("mox-proot-lib.sh"), EMBEDDED_LIB).map_err(ProotError::Io)?;
+        let script_name = format!("mox-proot-recipe-{}.sh", recipe.id);
         std::fs::write(tmp.join(&script_name), &script).map_err(ProotError::Io)?;
         // 经 exec_into 在容器内执行（复用引擎 PATH/环境/控制台绑定）。
         let tail = vec![
             "/bin/sh".to_string(),
             "-c".to_string(),
             format!(
-                "sh /tmp/{} && echo 'moxsh: 配方 {} 完成' || echo 'moxsh: 配方 {} 失败'",
+                "sh /tmp/{} && echo 'mox-proot: 配方 {} 完成' || echo 'mox-proot: 配方 {} 失败'",
                 script_name, recipe.id, recipe.id
             ),
         ];
@@ -270,7 +270,7 @@ script = "vnc.sh"
 
     #[test]
     fn from_dir_resolves_script() {
-        let dir = std::env::temp_dir().join("moxsh-recipe-test");
+        let dir = std::env::temp_dir().join("mox-proot-recipe-test");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("index.toml"), SAMPLE).unwrap();
@@ -288,10 +288,10 @@ script = "vnc.sh"
     #[test]
     fn apply_missing_rootfs_errors_without_running_engine() {
         // 容器未安装 → DistroNotInstalled，不触碰 proot 引擎（CI 无 proot 二进制）。
-        let dir = std::env::temp_dir().join("moxsh-recipe-apply-test");
+        let dir = std::env::temp_dir().join("mox-proot-recipe-apply-test");
         let _ = std::fs::remove_dir_all(&dir);
         let idx = RecipeIndex::parse(SAMPLE);
-        let root = dir.join("moxsh-root");
+        let root = dir.join("mox-proot-root");
         let _ = std::fs::remove_dir_all(&root);
         let err = idx.apply(&root, "xfce", "ubuntu").unwrap_err();
         assert!(matches!(err, ProotError::DistroNotInstalled(_)));
@@ -315,7 +315,7 @@ script = "vnc.sh"
         let idx = RecipeIndex::parse(
             "[[recipe]]\nid=\"fb\"\nname=\"x\"\nscript=\"fb.sh\"\nfan_only = true\n",
         );
-        let root = std::env::temp_dir().join("moxsh-recipe-fan-gate");
+        let root = std::env::temp_dir().join("mox-proot-recipe-fan-gate");
         let _ = std::fs::remove_dir_all(&root);
         let err = idx.apply(&root, "fb", "ubuntu").unwrap_err();
         assert!(
@@ -344,7 +344,7 @@ script = "vnc.sh"
             "[[recipe]]\nid=\"pb\"\nname=\"x\"\nscript=\"pb.sh\"\nrequires = \"proot-pro\"\n",
         );
         let root =
-            std::env::temp_dir().join(format!("moxsh-recipe-req-gate-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mox-proot-recipe-req-gate-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let err = idx.apply(&root, "pb", "ubuntu").unwrap_err();
         let msg = err.to_string();
@@ -365,7 +365,7 @@ script = "vnc.sh"
             "[[recipe]]\nid=\"pb\"\nname=\"x\"\nscript=\"pb.sh\"\nrequires = \"proot-pro\"\n",
         );
         let root =
-            std::env::temp_dir().join(format!("moxsh-recipe-req-ok-{}", std::process::id()));
+            std::env::temp_dir().join(format!("mox-proot-recipe-req-ok-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         crate::proot::redeem::save_ents(&root, &[crate::proot::redeem::Entitlement {
             product_id: "proot-pro".into(),

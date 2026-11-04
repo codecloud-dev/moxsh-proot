@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 /// 后端基址默认常量（部署后替换为真实 mox-id 域名）。可用环境变量 `MOX_ID_BASE` 覆盖。
-pub const DEFAULT_BASE: &str = "https://mox-id.moxsh.app";
+pub const DEFAULT_BASE: &str = "https://mox-id.mox-proot.app";
 
 #[derive(Debug, Clone)]
 pub struct DeviceCodeResp {
@@ -203,7 +203,7 @@ pub fn parse_token(json: &str) -> PollOutcome {
     PollOutcome::Error(format!("未知的设备码响应: {json}"))
 }
 
-/// 完整登录流程（供 `moxsh-proot login` 子命令调用）：发码 → 终端二维码 → 轮询 → 落盘。
+/// 完整登录流程（供 `mox-proot login` 子命令调用）：发码 → 终端二维码 → 轮询 → 落盘。
 ///
 /// 不依赖 TUI；纯 stdout 输出（二维码 + 提示），可被脚本/管道安全使用（二维码走 stderr 之外的
 /// 人眼区，符合文档「人眼区/数据流分离」军规）。返回进程退出码：0 成功，非 0 失败。
@@ -239,7 +239,7 @@ pub fn run_login_flow() -> i32 {
     let interval = std::time::Duration::from_secs(resp.interval.max(1));
     loop {
         if std::time::Instant::now() >= deadline {
-            eprintln!("✗ 等待超时（{}s），请重新运行 moxsh-proot login", resp.expires_in);
+            eprintln!("✗ 等待超时（{}s），请重新运行 mox-proot login", resp.expires_in);
             return 2;
         }
         std::thread::sleep(interval);

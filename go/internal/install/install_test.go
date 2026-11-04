@@ -53,13 +53,13 @@ func TestPlaceAndAppendPath(t *testing.T) {
 	root := t.TempDir()
 	staged := filepath.Join(root, "staged")
 	os.MkdirAll(staged, 0o755)
-	os.WriteFile(filepath.Join(staged, "moxsh-proot-linux-amd64"), []byte("fake-bin-1"), 0o644)
-	os.WriteFile(filepath.Join(staged, "moxsh-proot-distro-linux-amd64"), []byte("fake-bin-2"), 0o644)
+	os.WriteFile(filepath.Join(staged, "mox-proot-linux-amd64"), []byte("fake-bin-1"), 0o644)
+	os.WriteFile(filepath.Join(staged, "mox-proot-distro-linux-amd64"), []byte("fake-bin-2"), 0o644)
 
-	installRoot := filepath.Join(root, "opt", "moxsh")
+	installRoot := filepath.Join(root, "opt", "mox-proot")
 	res, err := Place(installRoot, staged, map[string]string{
-		"moxsh-proot-linux-amd64":        "moxsh-proot",
-		"moxsh-proot-distro-linux-amd64": "moxsh-proot-distro",
+		"mox-proot-linux-amd64":        "mox-proot",
+		"mox-proot-distro-linux-amd64": "mox-proot-distro",
 	})
 	if err != nil {
 		t.Fatal(err)

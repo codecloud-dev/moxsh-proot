@@ -2,8 +2,8 @@
 # 配方：GPU / WebGPU 加速透传（ProoT 增值服务 proot-pro 专属）
 # 在容器内启用 Mesa 软件/硬件 GL、Vulkan 与 WebGPU 转发支持，
 # 让图形渲染与 AI 推理能调用宿主 GPU（需宿主启用相应设备透传）。
-. /tmp/moxsh-lib.sh
-moxsh_info "配置 GPU / WebGPU 加速透传（ProoT 增值能力）…"
+. /tmp/mox-proot-lib.sh
+mox-proot_info "配置 GPU / WebGPU 加速透传（ProoT 增值能力）…"
 
 case "$(detect_family)" in
   debian)
@@ -29,4 +29,4 @@ esac
 export LIBGL_ALWAYS_SOFTWARE="${LIBGL_ALWAYS_SOFTWARE:-0}"
 export EGL_PLATFORM="${EGL_PLATFORM:-surfaceless}"
 
-moxsh_ok "GPU 透传就绪：glxinfo/vulkaninfo 可验证；WebGPU 由 Mesa 的 lavapipe 提供软件兜底"
+mox-proot_ok "GPU 透传就绪：glxinfo/vulkaninfo 可验证；WebGPU 由 Mesa 的 lavapipe 提供软件兜底"

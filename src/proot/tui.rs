@@ -1,6 +1,6 @@
 //! TUI 控制台（路线图 0.4.0）。
 //!
-//! ratatui 实现的第三二进制 `moxsh-proot-tui`，以及 `moxsh-proot tui` 子命令
+//! ratatui 实现的第三二进制 `mox-proot-tui`，以及 `mox-proot tui` 子命令
 //! 共用的入口 [`run_tui`]。覆盖：发行版管理（列表 / 登录 / 安装 / 删除 / 备份）、
 //! 短链浏览与安装、配方浏览与安装、日志诊断、安装向导入口。
 //!
@@ -15,7 +15,9 @@
 use std::io::{self, Stdout, Write};
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
@@ -27,14 +29,67 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Tabs, Wrap},
+    widgets::{
+        Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Scrollbar,
+        ScrollbarOrientation, ScrollbarState, Tabs, Wrap,
+    },
     Terminal,
 };
 
+use crate::proot::delight;
 use crate::proot::distro::{builtin_specs, DistroManager, DistroSpec, InstalledDistro};
 use crate::proot::links;
+use crate::proot::qrcode_term;
 use crate::proot::recipe::RecipeIndex;
 use crate::proot::settings::{self, Settings};
+
+/// 自绘 Spinner 帧（braille 点阵，零额外依赖——不引 throbber 类 crate）。
+const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// 后台安装任务通过 channel 回传的事件。
+enum InstallEvent {
+    /// 进度更新（阶段说明 / 已完成 / 总量）。
+    Progress { stage: String, done: u64, total: u64 },
+    /// 安装结束（Ok / Err 文本）。
+    Finished(Result<(), String>),
+}
+
+/// 一次后台安装的运行态（TUI 侧只持有接收端 + 最新进度快照）。
+struct InstallTask {
+    rx: Receiver<InstallEvent>,
+    stage: String,
+    done: u64,
+    total: u64,
+    spinner_tick: usize,
+    started: Instant,
+}
+
+impl InstallTask {
+    fn new(rx: Receiver<InstallEvent>) -> InstallTask {
+        InstallTask {
+            rx,
+            stage: "正在准备…".to_string(),
+            done: 0,
+            total: 0,
+            spinner_tick: 0,
+            started: Instant::now(),
+        }
+    }
+
+    /// 当前进度比（0.0–1.0）；无总量时回 0（Gauge 显示 indeterminate 文案）。
+    fn ratio(&self) -> f64 {
+        if self.total == 0 {
+            0.0
+        } else {
+            (self.done as f64 / self.total as f64).clamp(0.0, 1.0)
+        }
+    }
+
+    /// 当前 Spinner 帧。
+    fn spinner(&self) -> &'static str {
+        SPINNER_FRAMES[self.spinner_tick % SPINNER_FRAMES.len()]
+    }
+}
 
 const TAB_TITLES: [&str; 6] = ["发行版", "短链", "配方", "日志", "向导", "账号"];
 const TAB_DISTROS: usize = 0;
@@ -64,10 +119,14 @@ struct App {
     link_state: ListState,
     recipe_state: ListState,
     status: String,
-    /// 设备绑定状态（运行时从落盘的 device_token 推断；二维码绑定走 `moxsh-proot login`）。
+    /// 设备绑定状态（运行时从落盘的 device_token 推断；二维码绑定走 `mox-proot login`）。
     account_bound: bool,
     /// 绑定后用于展示的 device_token 掩码（前 8 位 + …）。
     account_mask: String,
+    /// 启动欢迎屏（时间问候 + 古诗；按任意键进入主界面）。
+    welcome: bool,
+    /// 后台安装任务（Some = 正在跑，TUI 画 Gauge + Spinner）。
+    install: Option<InstallTask>,
 }
 
 impl App {
@@ -93,6 +152,8 @@ impl App {
             status: String::new(),
             account_bound: false,
             account_mask: String::new(),
+            welcome: true,
+            install: None,
         };
         app.refresh_account();
         app.rebuild_rows(&installed, &specs);
@@ -160,6 +221,37 @@ impl App {
                 self.recipes = RecipeIndex::load();
             }
             Err(e) => self.status = format!("刷新失败: {}", e),
+        }
+    }
+
+    /// 非阻塞收取后台安装事件：更新进度快照；结束则清任务并刷新列表。
+    /// 事件循环每帧调用一次，配合 `spinner_tick` 让 Gauge / Spinner 实时动起来。
+    fn poll_install(&mut self) {
+        let mut finished: Option<Result<(), String>> = None;
+        if let Some(task) = &mut self.install {
+            while let Ok(ev) = task.rx.try_recv() {
+                match ev {
+                    InstallEvent::Progress { stage, done, total } => {
+                        task.stage = stage;
+                        task.done = done;
+                        task.total = total;
+                    }
+                    InstallEvent::Finished(r) => {
+                        finished = Some(r);
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(r) = finished {
+            self.install = None;
+            match r {
+                Ok(()) => {
+                    self.status = "✅ 安装完成（列表已刷新）".into();
+                    self.refresh();
+                }
+                Err(e) => self.status = format!("❌ 安装失败: {}", e),
+            }
         }
     }
 
@@ -234,7 +326,13 @@ impl App {
         }
     }
 
+    /// 启动后台安装：把阻塞的下载/校验/解压放到工作线程，进度经 channel 回传，
+    /// 由 [`App::poll_install`] 每帧消费——TUI 不再卡住，Gauge / Spinner 实时刷新。
     fn install(&mut self, id: &str) {
+        if self.install.is_some() {
+            self.status = "已有安装任务进行中，请稍候…".into();
+            return;
+        }
         let spec = match DistroManager::find_spec(id) {
             Ok(s) => s,
             Err(e) => {
@@ -242,18 +340,25 @@ impl App {
                 return;
             }
         };
-        self.status = format!("正在安装 {} …（下载 + 校验 + 解压）", spec.name);
-        let cb: &mut dyn FnMut(&str, u64, u64) = &mut |stage: &str, _done, _total| {
-            // 安装为同步阻塞，进度文本随下一帧重绘显示（实时进度条留待后台线程优化）。
-            let _ = stage;
-        };
-        match self.mgr.install(&spec, None, cb) {
-            Ok(()) => {
-                self.status = format!("✅ {} 安装完成", spec.name);
-                self.refresh();
-            }
-            Err(e) => self.status = format!("❌ 安装失败: {}", e),
-        }
+        let root = self.root.clone();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            // 线程内自建 DistroManager（避免跨线程共享 &mut self）。
+            let mgr = DistroManager::new(&root);
+            let result = {
+                let cb: &mut dyn FnMut(&str, u64, u64) = &mut |stage, done, total| {
+                    let _ = tx.send(InstallEvent::Progress {
+                        stage: stage.to_string(),
+                        done,
+                        total,
+                    });
+                };
+                mgr.install(&spec, None, cb)
+            };
+            let _ = tx.send(InstallEvent::Finished(result.map_err(|e| e.to_string())));
+        });
+        self.install = Some(InstallTask::new(rx));
+        self.status = format!("后台安装 {} 已启动（下载 + 校验 + 解压）…", id);
     }
 
     fn install_link(&mut self, name: &str) {
@@ -294,7 +399,7 @@ impl App {
     }
 
     fn run_wizard(&mut self) {
-        let wizard = "moxsh-proot-distro wizard".to_string();
+        let wizard = "mox-proot-distro wizard".to_string();
         throw_to_shell(&wizard);
     }
 }
@@ -309,14 +414,14 @@ pub fn run_tui() -> i32 {
     let mut terminal = match Terminal::new(backend) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("moxsh-proot-tui: 终端初始化失败: {}", e);
+            eprintln!("mox-proot-tui: 终端初始化失败: {}", e);
             return 2;
         }
     };
 
     if enter_altscreen(&mut terminal).is_err() {
         let _ = restore_altscreen(&mut terminal);
-        eprintln!("moxsh-proot-tui: 无法进入备用屏幕（非交互终端？）");
+        eprintln!("mox-proot-tui: 无法进入备用屏幕（非交互终端？）");
         return 2;
     }
 
@@ -324,7 +429,7 @@ pub fn run_tui() -> i32 {
         Ok(a) => a,
         Err(e) => {
             let _ = restore_altscreen(&mut terminal);
-            eprintln!("moxsh-proot-tui: 初始化失败: {}", e);
+            eprintln!("mox-proot-tui: 初始化失败: {}", e);
             return 2;
         }
     };
@@ -334,7 +439,7 @@ pub fn run_tui() -> i32 {
     match res {
         Ok(()) => 0,
         Err(e) => {
-            eprintln!("moxsh-proot-tui: 运行错误: {}", e);
+            eprintln!("mox-proot-tui: 运行错误: {}", e);
             1
         }
     }
@@ -345,10 +450,35 @@ fn run_app(
     mut app: App,
 ) -> Result<(), Box<dyn std::error::Error>> {
     loop {
-        terminal.draw(|f| ui(f, &app))?;
-        if event::poll(Duration::from_millis(200))? {
+        // 每帧：消费后台安装进度 + 推进 Spinner 帧（即使无按键也保持动画）。
+        app.poll_install();
+        if let Some(t) = &mut app.install {
+            t.spinner_tick = t.spinner_tick.wrapping_add(1);
+        }
+        terminal.draw(|f| {
+            if app.welcome {
+                render_welcome(f, &app);
+            } else {
+                ui(f, &app);
+            }
+        })?;
+        if event::poll(Duration::from_millis(120))? {
             if let Event::Key(key) = event::read()? {
                 if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                // 欢迎屏：任意键进入主界面，q / Esc 直接退出。
+                if app.welcome {
+                    match key.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break,
+                        _ => app.welcome = false,
+                    }
+                    continue;
+                }
+                // 安装进行中：屏蔽重复触发键（其余导航/退出照常）。
+                if app.install.is_some()
+                    && matches!(key.code, KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('b'))
+                {
                     continue;
                 }
                 match key.code {
@@ -418,7 +548,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
 
     let title = Line::from(vec![
         Span::styled(
-            "moxsh-proot ",
+            "mox-proot ",
             Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
         ),
         Span::styled("TUI 控制台", Style::default().fg(Color::Cyan)),
@@ -451,6 +581,142 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     };
     let status = Paragraph::new(status_line).block(Block::default().borders(Borders::ALL));
     f.render_widget(status, chunks[2]);
+
+    // 安装浮层盖在最上层（Gauge + Spinner），不受当前 tab 影响。
+    if let Some(task) = &app.install {
+        render_install_overlay(f, size, task);
+    }
+}
+
+/// 启动欢迎屏：品牌字标 + 时间上下文问候 + 古诗 + 彩蛋提示（#450 惊喜三件套）。
+/// 复用 [`crate::proot::delight`] 的 Rust 单一来源，与 `mox` 控制台同源。
+fn render_welcome(f: &mut ratatui::Frame, app: &App) {
+    let size = f.area();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" mox-proot TUI ")
+        .border_style(Style::default().fg(Color::Magenta));
+    let inner = block.inner(size);
+    f.render_widget(block, size);
+
+    let phase = delight::current_phase();
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(""));
+    for l in crate::proot::brand::BANNER.lines() {
+        lines.push(Line::from(Span::styled(
+            l.to_string(),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        phase.greeting(),
+        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(Span::styled(
+        format!("{} {}", phase.poem(), phase.poem_from()),
+        Style::default().fg(Color::Yellow),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(format!("  数据根：{}", app.root.display())));
+    lines.push(Line::from(format!(
+        "  时相：{}   ·   已装 {} 个发行版",
+        phase.name(),
+        app.rows.iter().filter(|r| r.installed).count()
+    )));
+    lines.push(Line::from(""));
+    // MOX_EGG=1 时欢迎屏直接展开彩蛋（与 README 承诺一致）。
+    if delight::egg_enabled_via_env() {
+        if let Some(t) = delight::easter_egg("egg") {
+            for l in t.lines() {
+                lines.push(Line::from(Span::styled(
+                    l.to_string(),
+                    Style::default().fg(Color::LightMagenta),
+                )));
+            }
+        }
+    } else {
+        lines.push(Line::from(Span::styled(
+            "  🥚 彩蛋暗号：mox egg  /  mox-proot-distro egg",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  按任意键进入控制台   ·   q 退出",
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+    )));
+
+    let p = Paragraph::new(Text::from(lines)).alignment(Alignment::Center);
+    f.render_widget(p, inner);
+}
+
+/// 居中弹窗区域（百分比宽 + 固定高）。
+fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
+    let vertical = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(r.height.saturating_sub(height) / 2),
+            Constraint::Length(height.min(r.height)),
+            Constraint::Min(0),
+        ])
+        .split(r)[1];
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(vertical)[1]
+}
+
+/// 后台安装浮层：Spinner 标题 + Gauge 实时进度 + 阶段说明 + 耗时。
+fn render_install_overlay(f: &mut ratatui::Frame, area: Rect, task: &InstallTask) {
+    let popup = centered_rect(64, 9, area);
+    f.render_widget(Clear, popup);
+    let secs = task.started.elapsed().as_secs();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {} 安装进行中 ", task.spinner()))
+        .border_style(Style::default().fg(Color::Cyan));
+    let inner = block.inner(popup);
+    f.render_widget(block, popup);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(2),
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(1),
+        ])
+        .split(inner);
+
+    let stage = Paragraph::new(format!("{} {}", task.spinner(), task.stage))
+        .style(Style::default().fg(Color::Yellow))
+        .wrap(Wrap { trim: true });
+    f.render_widget(stage, chunks[0]);
+
+    let pct = (task.ratio() * 100.0) as u16;
+    let label = if task.total == 0 {
+        format!("{} …", pct)
+    } else {
+        format!("{}%  ({}/{})", pct, task.done, task.total)
+    };
+    let gauge = Gauge::default()
+        .gauge_style(Style::default().fg(Color::Green).bg(Color::DarkGray))
+        .ratio(task.ratio())
+        .label(label);
+    f.render_widget(gauge, chunks[1]);
+
+    let hint = Paragraph::new(Line::from(Span::styled(
+        format!("已用时 {}s   ·   q 退出 / 进度在后台继续", secs),
+        Style::default().fg(Color::DarkGray),
+    )));
+    f.render_widget(hint, chunks[2]);
 }
 
 fn render_distros(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -476,6 +742,16 @@ fn render_distros(f: &mut ratatui::Frame, area: Rect, app: &App) {
         .highlight_style(Style::default().fg(Color::Black).bg(Color::Yellow))
         .highlight_symbol(">> ");
     f.render_stateful_widget(list, area, &mut app.distro_state.clone());
+    // 右侧滚动条：内容超过可视区时给出位置感（ScrollbarState 每帧按选中项重算）。
+    let mut sb = ScrollbarState::new(app.rows.len())
+        .position(app.distro_state.selected().unwrap_or(0));
+    f.render_stateful_widget(
+        Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("↑"))
+            .end_symbol(Some("↓")),
+        area,
+        &mut sb,
+    );
 }
 
 fn render_links(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -551,7 +827,7 @@ fn render_logs(f: &mut ratatui::Frame, area: Rect, app: &App) {
 
 fn render_wizard(f: &mut ratatui::Frame, area: Rect, _app: &App) {
     let p = Paragraph::new(
-        "安装向导：一次性初始化数据根、安装首个发行版、落启动器与控制台。\n\n按 Enter 运行 `moxsh-proot-distro wizard`。",
+        "安装向导：一次性初始化数据根、安装首个发行版、落启动器与控制台。\n\n按 Enter 运行 `mox-proot-distro wizard`。",
     )
     .block(Block::default().borders(Borders::ALL).title("安装向导"))
     .alignment(Alignment::Left)
@@ -600,6 +876,21 @@ fn render_account(f: &mut ratatui::Frame, area: Rect, app: &App) {
         lines.push(Line::from("  3. 确认后终端自动轮询拿到 device_token 并落盘，回到本页即显示「已绑定」"));
     }
 
+    // 宽屏时右侧内嵌一枚「登录入口」二维码（qrcode_term 半块字符，T4）。
+    // 说明：这是固定入口示意图；真正带 user_code 的一次性二维码在按 Enter
+    // 后由 run_login_flow 在原生终端渲染（不被 TUI 盒子裁切、可直接扫）。
+    let qr_uri = format!("{}/activate", crate::proot::device_code::DEFAULT_BASE);
+    let qr_text = qrcode_term::render_uri(&qr_uri).unwrap_or_default();
+    let (text_area, qr_area) = if area.width >= 72 {
+        let cols = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Min(30), Constraint::Length(34)])
+            .split(area);
+        (cols[0], Some(cols[1]))
+    } else {
+        (area, None)
+    };
+
     let p = Paragraph::new(Text::from(lines))
         .block(
             Block::default()
@@ -608,7 +899,20 @@ fn render_account(f: &mut ratatui::Frame, area: Rect, app: &App) {
                 .border_style(Style::default().fg(state_color)),
         )
         .wrap(Wrap { trim: true });
-    f.render_widget(p, area);
+    f.render_widget(p, text_area);
+
+    if let Some(qa) = qr_area {
+        let qr_lines: Vec<Line> = qr_text.lines().map(|l| Line::from(l.to_string())).collect();
+        let qr = Paragraph::new(Text::from(qr_lines))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("登录入口（示意）")
+                    .border_style(Style::default().fg(Color::Blue)),
+            )
+            .alignment(Alignment::Center);
+        f.render_widget(qr, qa);
+    }
 }
 
 // ── 终端模式切换 ────────────────────────────────────────────────
@@ -636,7 +940,7 @@ fn leave_tui_for<F: FnOnce() -> i32>(f: F) -> i32 {
     let _ = disable_raw_mode();
     let _ = io::stdout().flush();
 
-    // 执行目标逻辑（如 moxsh-proot 进容器 / 设备码绑定）；退出后回到这里。
+    // 执行目标逻辑（如 mox-proot 进容器 / 设备码绑定）；退出后回到这里。
     let rc = f();
 
     // 恢复 TUI。
@@ -660,7 +964,7 @@ mod tests {
 
     #[test]
     fn app_new_populates_builtins_without_panic() {
-        let tmp = std::env::temp_dir().join(format!("moxsh_tui_test_{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("mox_proot_tui_test_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&tmp);
         let app = App::new(&tmp).expect("App::new 不应失败");
         // 至少应有 4 个预置发行版可供安装。
@@ -677,5 +981,44 @@ mod tests {
         assert_eq!(TAB_TITLES.len(), 6);
         assert_eq!(TAB_WIZARD, 4);
         assert_eq!(TAB_ACCOUNT, 5);
+    }
+
+    #[test]
+    fn app_starts_on_welcome_screen() {
+        let tmp = std::env::temp_dir().join(format!("mox_proot_tui_welcome_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&tmp);
+        let app = App::new(&tmp).unwrap();
+        assert!(app.welcome, "启动应停留在欢迎屏");
+        assert!(app.install.is_none(), "初始无后台安装任务");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn spinner_frames_and_ratio() {
+        assert_eq!(SPINNER_FRAMES.len(), 10);
+        let (_tx, rx) = mpsc::channel();
+        let mut t = InstallTask::new(rx);
+        assert_eq!(t.total, 0);
+        assert_eq!(t.ratio(), 0.0, "无总量时 indeterminate");
+        t.total = 100;
+        t.done = 40;
+        assert!((t.ratio() - 0.4).abs() < 1e-9);
+        t.done = 150;
+        assert_eq!(t.ratio(), 1.0, "超总量钳到 1.0");
+        assert_eq!(t.spinner(), SPINNER_FRAMES[0]);
+        t.spinner_tick = 3;
+        assert_eq!(t.spinner(), SPINNER_FRAMES[3]);
+    }
+
+    #[test]
+    fn account_qr_renders_halfblocks() {
+        let uri = format!("{}/activate", crate::proot::device_code::DEFAULT_BASE);
+        let qr = qrcode_term::render_uri(&uri).unwrap();
+        let lines: Vec<&str> = qr.lines().collect();
+        assert!(lines.len() > 4, "二维码应有足够行数");
+        assert!(
+            qr.contains('█') || qr.contains('▀') || qr.contains('▄'),
+            "应含半块字符"
+        );
     }
 }

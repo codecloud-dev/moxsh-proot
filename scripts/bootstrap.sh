@@ -1,9 +1,9 @@
 #!/bin/sh
-# moxsh-proot 微型引导（bootstrap）——base64 内嵌进「一键安装」短命令里。
+# mox-proot 微型引导（bootstrap）——base64 内嵌进「一键安装」短命令里。
 #
 # 职责边界（roadmap §5）：本脚本只做「并行探测选最快源 → 拉全量安装器 → exec 交棒」，
 # **不重复实现安装逻辑**。全量脚本永远从 main 拉，天然最新，无需自更新；
-# 国内/国外下载源分流由全量安装器（scripts/install-moxsh-proot.sh）自行探测，
+# 国内/国外下载源分流由全量安装器（scripts/install-mox-proot.sh）自行探测，
 # 本层只管「把安装器本身用最快的源拿到手」。
 #
 # 让引导下载特别快（参考 tmoe 的「就近源优选 + 短超时快失败」并重写优化）：
@@ -16,20 +16,20 @@
 set -u
 
 # 镜像源（标签 + URL）。国内 gitee 优先，海外 github，jsdelivr 作 CDN 兜底。
-GH="https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-moxsh-proot.sh"
-GT="https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh"
-JS="https://cdn.jsdelivr.net/gh/codecloud-dev/moxsh-proot@main/scripts/install-moxsh-proot.sh"
+GH="https://raw.githubusercontent.com/codecloud-dev/mox-proot/main/scripts/install-mox-proot.sh"
+GT="https://gitee.com/thousand-code-crafts/mox-proot/raw/main/scripts/install-mox-proot.sh"
+JS="https://cdn.jsdelivr.net/gh/codecloud-dev/mox-proot@main/scripts/install-mox-proot.sh"
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
 command -v curl >/dev/null 2>&1 || die "未找到 curl（Termux 里执行: pkg install curl）"
 
-TMP="${TMPDIR:-/tmp}/moxsh-installer.$$"
+TMP="${TMPDIR:-/tmp}/mox-proot-installer.$$"
 trap 'rm -f "$TMP"' EXIT
 
 # ---- 1) 并行探测：各源后台 GET 计时，结果写 per-label 文件，wait 收齐 ----
-probe_dir="${TMPDIR:-/tmp}/moxsh-probe.$$"
+probe_dir="${TMPDIR:-/tmp}/mox-proot-probe.$$"
 mkdir -p "$probe_dir"
 for pair in "gh $GH" "gt $GT" "js $JS"; do
     set -- $pair

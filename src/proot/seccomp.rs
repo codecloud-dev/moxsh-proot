@@ -7,7 +7,7 @@
 //! 直通越多，后续挂接特殊子系统（共享内存/IPC）的摩擦面越小。
 //!
 //! # 门控与失败回落
-//! - 仅当子进程 env `MOXSH_SECCOMP=1` 时由 spawn 在 `TRACEME` 后、`execve`
+//! - 仅当子进程 env `MOX_SECCOMP=1` 时由 spawn 在 `TRACEME` 后、`execve`
 //!   前安装；默认关，保留既有 `PTRACE_SYSCALL` 双停路径为安全默认。
 //! - 安装失败（无 `CAP_SYS_ADMIN` 且 `PR_SET_NO_NEW_PRIVS` 也失败、或 cBPF
 //!   被拒）→ 子进程 `_exit(124)`，tracer 立即报错而非「静默跑成未翻译」——

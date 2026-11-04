@@ -4,13 +4,13 @@
 //! 两层都做，函数优先、命令兜底）：
 //!
 //! 1. **落盘启动器**：install 后在 bin 目录写一个 `<id>` 可执行脚本，
-//!    `exec moxsh-proot-distro launch mx:<id> "$@"`。不加载 rc 的环境
+//!    `exec mox-proot-distro launch mx:<id> "$@"`。不加载 rc 的环境
 //!    （cron、部分 IDE 终端）也能用；
 //! 2. **shell 函数注入**：往 `.bashrc`/`.zshrc` 追加一段带标记的函数块
-//!    （`alpine() { moxsh-proot-distro launch mx:alpine "$@"; }`），
+//!    （`alpine() { mox-proot-distro launch mx:alpine "$@"; }`），
 //!    函数优先于 PATH 查找，且便于将来扩展（如 `--ro` 参数透传）。
 //!
-//! 幂等性：函数块用 `# >>> moxsh-proot >>>` / `# <<< moxsh-proot <<<`
+//! 幂等性：函数块用 `# >>> mox-proot >>>` / `# <<< mox-proot <<<`
 //! 标记包裹，重复注入先删旧块再写新块（容器增减后刷新）。
 
 use std::path::{Path, PathBuf};
@@ -18,8 +18,8 @@ use std::path::{Path, PathBuf};
 use crate::proot::ProotResult;
 
 /// shell 函数块的起止标记（幂等识别）。
-pub const BLOCK_BEGIN: &str = "# >>> moxsh-proot (自动生成) >>>";
-pub const BLOCK_END: &str = "# <<< moxsh-proot <<<";
+pub const BLOCK_BEGIN: &str = "# >>> mox-proot (自动生成) >>>";
+pub const BLOCK_END: &str = "# <<< mox-proot <<<";
 
 /// 启动器 bin 目录：`$PREFIX/bin`（Termux 安装器落点）优先，
 /// 其次 `~/.local/bin`（桌面 Linux 惯例；不存在则创建）。
@@ -33,7 +33,7 @@ pub fn default_bin_dir() -> PathBuf {
     Path::new(&home).join(".local/bin")
 }
 
-/// 写单个启动器 `bin_dir/<name>`（`exec moxsh-proot-distro launch mx:<name> "$@"`）。
+/// 写单个启动器 `bin_dir/<name>`（`exec mox-proot-distro launch mx:<name> "$@"`）。
 ///
 /// `name` 为短链名（内置四大发行版 id 或 links.toml 自定义名）；
 /// 由调用方保证已过 [`crate::proot::distro::DistroManager::valid_id`]
@@ -43,9 +43,9 @@ pub fn write_launcher(bin_dir: &Path, name: &str) -> ProotResult<PathBuf> {
     let path = bin_dir.join(name);
     let script = format!(
         "#!/bin/sh\n\
-         # moxsh-proot 启动器（安装时自动生成）。\n\
-         # 删除容器（moxsh-proot-distro remove {name}）后可随手删掉本文件。\n\
-         exec moxsh-proot-distro launch mx:{name} \"$@\"\n",
+         # mox-proot 启动器（安装时自动生成）。\n\
+         # 删除容器（mox-proot-distro remove {name}）后可随手删掉本文件。\n\
+         exec mox-proot-distro launch mx:{name} \"$@\"\n",
         name = name
     );
     std::fs::write(&path, script)?;
@@ -62,7 +62,7 @@ pub fn function_block(names: &[String]) -> String {
     out.push('\n');
     for n in names {
         out.push_str(&format!(
-            "{n}() {{ command moxsh-proot-distro launch mx:{n} \"$@\"; }}\n",
+            "{n}() {{ command mox-proot-distro launch mx:{n} \"$@\"; }}\n",
             n = n
         ));
     }
@@ -134,7 +134,7 @@ mod tests {
     use super::*;
 
     fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("moxsh-launcher-test-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!("mox-proot-launcher-test-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -146,7 +146,7 @@ mod tests {
         assert_eq!(p, dir.join("alpine"));
         let text = std::fs::read_to_string(&p).unwrap();
         assert!(text.starts_with("#!/bin/sh"), "启动器要可执行: {}", text);
-        assert!(text.contains("moxsh-proot-distro launch mx:alpine"));
+        assert!(text.contains("mox-proot-distro launch mx:alpine"));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -165,7 +165,7 @@ mod tests {
 
         assert!(inject_shell_functions(&rc, &["alpine".to_string()]).unwrap());
         let after_first = std::fs::read_to_string(&rc).unwrap();
-        assert!(after_first.contains("alpine() { command moxsh-proot-distro launch mx:alpine"));
+        assert!(after_first.contains("alpine() { command mox-proot-distro launch mx:alpine"));
         assert!(after_first.contains("export PS1='x'"), "原内容要保留");
 
         // 再注入同一批：无变化（幂等）。

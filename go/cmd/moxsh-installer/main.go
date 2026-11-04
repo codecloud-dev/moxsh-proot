@@ -1,4 +1,4 @@
-// moxsh-installer 是 moxsh PRoot 引擎的 Go 安装器（bash 探测层之后的第二层）。
+// mox-proot-installer 是 mox-proot PRoot 引擎的 Go 安装器（bash 探测层之后的第二层）。
 //
 // 职责（用户定口径：bash 探测 + Go 安装器两层）：
 //   - install：环境勘察（Termux/Linux、libc、架构、root/非 root）→ 自动选
@@ -6,11 +6,11 @@
 //   - update：检查远端新版本，向用户征求是否更新（不强制、不静默）；
 //   - probe：只打印勘察报告（调试/验证用）。
 //
-// 与 bash 引导桩（scripts/install-moxsh-proot.sh）的环境变量约定一致：
-//   - MOXSH_PROOT_REPO（默认 codecloud-dev/moxsh-proot）
-//   - MOXSH_PROOT_RELEASE（默认 proot-latest）
-//   - MOXSH_PROOT_BASE_URL（覆盖主通道，指向国内镜像）
-//   - MOXSH_PROOT_VERSION（update 检查用的版本号，默认同 RELEASE）
+// 与 bash 引导桩（scripts/install-mox-proot.sh）的环境变量约定一致：
+//   - MOX_PROOT_REPO（默认 codecloud-dev/mox-proot）
+//   - MOX_PROOT_RELEASE（默认 proot-latest）
+//   - MOX_PROOT_BASE_URL（覆盖主通道，指向国内镜像）
+//   - MOX_PROOT_VERSION（update 检查用的版本号，默认同 RELEASE）
 package main
 
 import (
@@ -20,13 +20,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codecloud-dev/moxsh-proot/go/internal/fetch"
-	"github.com/codecloud-dev/moxsh-proot/go/internal/install"
-	"github.com/codecloud-dev/moxsh-proot/go/internal/probe"
+	"github.com/codecloud-dev/mox-proot/go/internal/fetch"
+	"github.com/codecloud-dev/mox-proot/go/internal/install"
+	"github.com/codecloud-dev/mox-proot/go/internal/probe"
 )
 
 const (
-	defaultRepo    = "codecloud-dev/moxsh-proot"
+	defaultRepo    = "codecloud-dev/mox-proot"
 	defaultRelease = "proot-latest"
 )
 
@@ -50,7 +50,7 @@ func main() {
 		os.Exit(2)
 	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "moxsh-installer: %v\n", err)
+		fmt.Fprintf(os.Stderr, "mox-proot-installer: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -59,18 +59,18 @@ func main() {
 var version = "dev"
 
 func usage() {
-	fmt.Fprint(os.Stderr, `moxsh-installer — moxsh PRoot 引擎安装器（Go）
+	fmt.Fprint(os.Stderr, `mox-proot-installer — mox-proot PRoot 引擎安装器（Go）
 
 用法：
-  moxsh-installer install   勘察环境并安装引擎
-  moxsh-installer update    检查更新并征求是否升级
-  moxsh-installer probe     只打印环境勘察报告
+  mox-proot-installer install   勘察环境并安装引擎
+  mox-proot-installer update    检查更新并征求是否升级
+  mox-proot-installer probe     只打印环境勘察报告
 
 环境变量：
-  MOXSH_PROOT_REPO        GitHub 仓库（默认 codecloud-dev/moxsh-proot）
-  MOXSH_PROOT_RELEASE     发布 tag（默认 proot-latest）
-  MOXSH_PROOT_BASE_URL    覆盖下载主通道（国内镜像，布局需与 GitHub 一致）
-  MOXSH_PROOT_VERSION     update 检查的版本号（默认同 RELEASE）
+  MOX_PROOT_REPO        GitHub 仓库（默认 codecloud-dev/mox-proot）
+  MOX_PROOT_RELEASE     发布 tag（默认 proot-latest）
+  MOX_PROOT_BASE_URL    覆盖下载主通道（国内镜像，布局需与 GitHub 一致）
+  MOX_PROOT_VERSION     update 检查的版本号（默认同 RELEASE）
 `)
 }
 
@@ -94,11 +94,11 @@ func langStrings() strings_ {
 // channels 下载通道列表（主 → 镜像），顺序即优先级。
 func channels() []string {
 	var ch []string
-	if base := os.Getenv("MOXSH_PROOT_BASE_URL"); base != "" {
+	if base := os.Getenv("MOX_PROOT_BASE_URL"); base != "" {
 		ch = append(ch, base)
 	}
-	repo := envOr("MOXSH_PROOT_REPO", defaultRepo)
-	release := envOr("MOXSH_PROOT_RELEASE", defaultRelease)
+	repo := envOr("MOX_PROOT_REPO", defaultRepo)
+	release := envOr("MOX_PROOT_RELEASE", defaultRelease)
 	ch = append(ch, fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, release))
 	return ch
 }
@@ -119,8 +119,8 @@ func cmdInstall() error {
 	rep := probe.Detect(libcHint)
 
 	fmt.Println(s.pick(
-		"== moxsh PRoot 引擎安装器 ==",
-		"== moxsh PRoot engine installer =="))
+		"== mox-proot PRoot 引擎安装器 ==",
+		"== mox-proot PRoot engine installer =="))
 	fmt.Printf("  %s %s | %s %s | %s | root=%v\n",
 		s.pick("环境:", "env:"), rep.Env,
 		s.pick("发行版:", "distro:"), rep.Distro,
@@ -133,16 +133,16 @@ func cmdInstall() error {
 	installRoot := rep.InstallPath(home)
 	if rep.NeedsSudo() {
 		fmt.Println(s.pick(
-			"提示：系统级安装（/opt/moxsh）需要 root 权限；你也可以设置用户级安装。",
-			"Note: system-wide install (/opt/moxsh) needs root; a user-level install is also available."))
+			"提示：系统级安装（/opt/mox-proot）需要 root 权限；你也可以设置用户级安装。",
+			"Note: system-wide install (/opt/mox-proot) needs root; a user-level install is also available."))
 	}
 
 	// 资产映射：引擎两个 bin 各自对应本平台资产名
 	assets := map[string]string{
-		rep.AssetName():      "moxsh-proot",
-		distroAssetName(rep): "moxsh-proot-distro",
+		rep.AssetName():      "mox-proot",
+		distroAssetName(rep): "mox-proot-distro",
 	}
-	staged := filepath.Join(os.TempDir(), "moxsh-installer-staged")
+	staged := filepath.Join(os.TempDir(), "mox-proot-installer-staged")
 	os.MkdirAll(staged, 0o755)
 
 	fmt.Println(s.pick("下载引擎二进制…", "Downloading engine binaries…"))
@@ -177,8 +177,8 @@ func cmdInstall() error {
 	}
 	if len(downloaded) == 0 {
 		return fmt.Errorf("%s", s.pick(
-			"所有下载通道均失败（可设 MOXSH_PROOT_BASE_URL 指向国内镜像）",
-			"all download channels failed (set MOXSH_PROOT_BASE_URL for a mirror)"))
+			"所有下载通道均失败（可设 MOX_PROOT_BASE_URL 指向国内镜像）",
+			"all download channels failed (set MOX_PROOT_BASE_URL for a mirror)"))
 	}
 
 	res, err := install.Place(installRoot, staged, assets)
@@ -201,16 +201,16 @@ func cmdInstall() error {
 		fmt.Println(res.PathHint)
 	}
 	fmt.Println(s.pick(
-		"试试：moxsh-proot-distro install alpine && moxsh-proot-distro login alpine",
-		"Try: moxsh-proot-distro install alpine && moxsh-proot-distro login alpine"))
+		"试试：mox-proot-distro install alpine && mox-proot-distro login alpine",
+		"Try: mox-proot-distro install alpine && mox-proot-distro login alpine"))
 	return nil
 }
 
-// distroAssetName proot-distro 的资产名（与 moxsh-proot 同平台后缀）。
+// distroAssetName proot-distro 的资产名（与 mox-proot 同平台后缀）。
 func distroAssetName(rep probe.Report) string {
 	n := rep.AssetName()
-	// moxsh-proot-linux-amd64[-musl] → moxsh-proot-distro-linux-amd64[-musl]
-	return strings.Replace(n, "moxsh-proot-", "moxsh-proot-distro-", 1)
+	// mox-proot-linux-amd64[-musl] → mox-proot-distro-linux-amd64[-musl]
+	return strings.Replace(n, "mox-proot-", "mox-proot-distro-", 1)
 }
 
 // probeLibcHint 探 ldd 输出头几行作为 libc 线索（探测失败返回空，由 FS 兜底）。
@@ -265,10 +265,10 @@ func cmdUpdate() error {
 
 // currentVersion 从环境变量解析远端版本号（CI/发布约定注入）。
 func currentVersion() string {
-	if v := os.Getenv("MOXSH_PROOT_VERSION"); v != "" {
+	if v := os.Getenv("MOX_PROOT_VERSION"); v != "" {
 		return v
 	}
-	if v := os.Getenv("MOXSH_PROOT_RELEASE"); v != "" && v != defaultRelease {
+	if v := os.Getenv("MOX_PROOT_RELEASE"); v != "" && v != defaultRelease {
 		return v
 	}
 	return "latest"

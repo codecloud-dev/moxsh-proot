@@ -9,8 +9,8 @@
 //!
 //! ## 独立二进制入口（[`run_native`]）
 //!
-//! 除 App 内嵌路径外，本 crate 还编出 `moxsh-proot` 独立可执行文件
-//! （`src/bin/moxsh-proot.rs`）：让**原版 Termux 用户**不装 moxsh App 也能
+//! 除 App 内嵌路径外，本 crate 还编出 `mox-proot` 独立可执行文件
+//! （`src/bin/mox-proot.rs`）：让**原版 Termux 用户**不装 mox-proot App 也能
 //! 用上同一套自研引擎（Rust ptrace 路径翻译，非上游 C 版 proot 的封装）。
 //! 参数面与上游 proot 常用选项对齐：`-r/-0/-b/-w/-R/-S/-e`，`--` 后接命令。
 
@@ -33,12 +33,12 @@ use crate::proot::translate::TranslateRules;
 use crate::proot::{ProotConfig, ProotError, ProotResult};
 
 /// 命令路由入口：`command` 为 `proot` 或 `proot-distro`，`args` 为其余参数。
-pub fn route(command: &str, args: &[&str], moxsh_root: &Path) -> String {
+pub fn route(command: &str, args: &[&str], mox_proot_root: &Path) -> String {
     match command {
-        "proot-distro" => proot_distro(args, moxsh_root),
-        // `proot` 原生参数面：moxsh 引擎内嵌（无独立二进制），给出等效用法说明
-        // 并支持 -r/-0/-b/-w 组装预览；实际启动走 moxsh UI 或 login 命令。
-        "proot" => proot_native(args, moxsh_root),
+        "proot-distro" => proot_distro(args, mox_proot_root),
+        // `proot` 原生参数面：mox-proot 引擎内嵌（无独立二进制），给出等效用法说明
+        // 并支持 -r/-0/-b/-w 组装预览；实际启动走 mox-proot UI 或 login 命令。
+        "proot" => proot_native(args, mox_proot_root),
         other => format!("proot: 未知命令 {}", other),
     }
 }
@@ -49,7 +49,7 @@ pub fn route(command: &str, args: &[&str], moxsh_root: &Path) -> String {
 /// 错误信息写 stderr（不混入 stdout，管道/重定向不受污染）。
 ///
 /// 与 [`route`] 的分工：`route` 服务 App 内嵌 shell 的**文本交互**；
-/// 本函数服务**真执行**（原版 Termux 用户直接 `moxsh-proot ...`）。
+/// 本函数服务**真执行**（原版 Termux 用户直接 `mox-proot ...`）。
 pub fn run_native(args: &[String]) -> i32 {
     // `tui` 子命令（路线图 0.4.0，特性门控）：仅桌面 `--features tui` 构建提供，
     // 拉起 ratatui 控制台。原版 Termux 无此子命令（App 内自有原生 UI）。
@@ -72,7 +72,7 @@ pub fn run_native(args: &[String]) -> i32 {
         return match launch_spec(&root, &spec, &tail) {
             Ok(c) => c,
             Err(e) => {
-                eprintln!("moxsh-proot: mx: 启动失败: {}", e);
+                eprintln!("mox-proot: mx: 启动失败: {}", e);
                 2
             }
         };
@@ -94,7 +94,7 @@ pub fn run_native(args: &[String]) -> i32 {
                 print_usage(&mut std::io::stdout());
                 return 0;
             }
-            eprintln!("moxsh-proot: {}", e);
+            eprintln!("mox-proot: {}", e);
             usage_to_stderr();
             return 2;
         }
@@ -110,7 +110,7 @@ pub fn run_native(args: &[String]) -> i32 {
 /// 用结构化配置直接起引擎跑目标命令（login/shell 与 [`run_native`] 共用）。
 ///
 /// 与 `run_native` 的分工：后者解析上游风格 CLI 参数面；本函数服务
-/// "已有 [`ProotConfig`] 就直接执行"的场景（`moxsh-proot-distro login`）。
+/// "已有 [`ProotConfig`] 就直接执行"的场景（`mox-proot-distro login`）。
 /// 返回进程退出码（0 = 成功；非 0 = 引擎报错或目标命令退出码）。
 pub fn run_config(
     config: &crate::proot::ProotConfig,
@@ -137,7 +137,7 @@ pub fn run_config(
     ) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("moxsh-proot: 启动失败: {}", e);
+            eprintln!("mox-proot: 启动失败: {}", e);
             return 126;
         }
     };
@@ -146,7 +146,7 @@ pub fn run_config(
     match tracer.run(child) {
         Ok(code) => code,
         Err(e) => {
-            eprintln!("moxsh-proot: 引擎错误: {}", e);
+            eprintln!("mox-proot: 引擎错误: {}", e);
             125
         }
     }
@@ -301,7 +301,7 @@ struct NativeArgs {
     env: Vec<String>,
 }
 
-/// 解析 `moxsh-proot` 参数面（对齐上游 proot 常用选项）。
+/// 解析 `mox-proot` 参数面（对齐上游 proot 常用选项）。
 ///
 /// `-b` 语法与上游一致：`host_path:guest_location`（host 在前）。
 /// guest_location 尾缀 `!` = 不反向还原（沿用本仓 translate 层语义）。
@@ -411,7 +411,7 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
                 env.push(v.to_string());
             }
             "--kill-on-exit" => {
-                // 接受：moxsh-proot 作为 ptrace tracer 在退出时统一回收所有子 tracee，
+                // 接受：mox-proot 作为 ptrace tracer 在退出时统一回收所有子 tracee，
                 // 等价于 proot-distro 的 --kill-on-exit，无需额外 flag（login_cmd 默认带此旗标）。
             }
             "--link2symlink" => {
@@ -440,7 +440,7 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
                 // 注意：宏参数里的相邻字符串字面量**不会**隐式拼接（与普通表达式
                 // 不同），必须写成单个字面量，否则 rustc 报 "expected `,`"。
                 return Err(format!(
-                    "不支持的选项 {}（可用项见 moxsh-proot --help；上游 -q/-k 等未实现，勿假装支持）",
+                    "不支持的选项 {}（可用项见 mox-proot --help；上游 -q/-k 等未实现，勿假装支持）",
                     other
                 ));
             }
@@ -540,7 +540,7 @@ fn parse_fake_id(spec: &str) -> Result<(u32, u32), String> {
 fn print_usage(w: &mut dyn std::io::Write) {
     write!(
         w,
-        "用法: moxsh-proot [-r rootfs | -R rootfs | -S rootfs] [-0] [-i uid:gid] \
+        "用法: mox-proot [-r rootfs | -R rootfs | -S rootfs] [-0] [-i uid:gid] \
          [-H path]... [-v]... [-b host:guest]... [-w dir] [-e K=V]... [--] 命令 [参数...]\n\
          \n\
            -r, --rootfs <path>   guest 根目录\n\
@@ -564,30 +564,99 @@ fn usage_to_stderr() {
     print_usage(&mut std::io::stderr());
 }
 
+// ==================== 颜色 / 进度条（T2：NO_COLOR 感知） ====================
+use std::io::IsTerminal;
+//
+// 遵循 no-color.org 约定：`NO_COLOR` 设了任意值即关闭全部 ANSI 着色；
+// 另外只在 stderr 是终端时才上色（管道/CI 下保持纯文本，不污染重定向输出）。
+
+const C_CYAN: &str = "\x1b[36m";
+const C_GREEN: &str = "\x1b[32m";
+const C_YELLOW: &str = "\x1b[33m";
+const C_RED: &str = "\x1b[31m";
+const C_BOLD: &str = "\x1b[1m";
+const C_RESET: &str = "\x1b[0m";
+
+/// 是否允许着色：无 `NO_COLOR` 且 stderr 为终端。
+fn use_color() -> bool {
+    std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+}
+
+/// 给字符串包一层 ANSI 颜色（不开放则原样返回）。
+fn paint(s: &str, code: &str) -> String {
+    if use_color() {
+        format!("{}{}{}", code, s, C_RESET)
+    } else {
+        s.to_string()
+    }
+}
+
+/// 进度条：`[====>   ] 45%`；`NO_COLOR` 或总量为 0 时退化为纯百分比文本。
+fn progress_bar(done: u64, total: u64) -> String {
+    if total == 0 {
+        return String::new();
+    }
+    let pct = ((done * 100) / total).min(100) as usize;
+    if !use_color() {
+        return format!("[{}%]", pct);
+    }
+    let width = 24usize;
+    let filled = (pct * width) / 100;
+    let mut bar = String::from("[");
+    for i in 0..width {
+        match i.cmp(&filled) {
+            std::cmp::Ordering::Less => bar.push('='),
+            std::cmp::Ordering::Equal => bar.push('>'),
+            std::cmp::Ordering::Greater => bar.push(' '),
+        }
+    }
+    bar.push(']');
+    format!("{} {}%", bar, pct)
+}
+
+/// 统一的安装进度回调（彩色进度条 + 阶段说明，输出到 stderr）。
+///
+/// 供 `cmd_install` / `launch_spec` / `cmd_wizard` 共用，避免三处各写一遍。
+fn install_progress(msg: &str, done: u64, total: u64) {
+    if total > 0 {
+        eprintln!(
+            "{} {} {}",
+            paint("[安装]", C_CYAN),
+            progress_bar(done, total),
+            msg
+        );
+    } else {
+        eprintln!("{} {}", paint("[安装]", C_CYAN), msg);
+    }
+}
+
 /// `proot-distro` 主路由（对齐上游子命令集）。
-pub fn proot_distro(args: &[&str], moxsh_root: &Path) -> String {
-    let mgr = DistroManager::new(moxsh_root);
+pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
+    let mgr = DistroManager::new(mox_proot_root);
     let (sub, rest) = args.split_first().map_or(("", &[][..]), |(s, r)| (*s, r));
     match sub {
         "list" => cmd_list(&mgr),
+        "versions" => cmd_versions(rest),
         "install" => cmd_install(&mgr, rest),
         "login" => cmd_login(&mgr, rest),
         "shell" => cmd_shell(&mgr, rest),
         "remove" => cmd_remove(&mgr, rest),
         "backup" => cmd_backup(&mgr, rest),
-        "restore" => cmd_restore(&mgr, rest, moxsh_root),
+        "restore" => cmd_restore(&mgr, rest, mox_proot_root),
         "net" => cmd_net(&mgr, rest),
         "env" => cmd_env(&mgr, rest),
-        "recipe" => cmd_recipe(rest, moxsh_root),
-        "fan" => cmd_fan(rest, moxsh_root),
-        "redeem" => cmd_redeem(rest, moxsh_root),
-        "access" => cmd_access(rest, moxsh_root),
+        "recipe" => cmd_recipe(rest, mox_proot_root),
+        "fan" => cmd_fan(rest, mox_proot_root),
+        "redeem" => cmd_redeem(rest, mox_proot_root),
+        "access" => cmd_access(rest, mox_proot_root),
+        "time" => cmd_time(),
+        "egg" => cmd_egg(),
         "wizard" => cmd_wizard(rest),
         // launch 需真起引擎（未装自动装），不在文本路由内执行——
         // bin 层 main 把 login/shell/launch 一并路由到 exec 分支；
         // 走到这里（App 内嵌文本路由）只给用法提示。
-        "launch" => "用法: moxsh-proot-distro launch mx:<名字> [-- 命令...]\n\
-             （mx:alpine / mx:ubuntu / mx:debian / mx:kali；自定义见 ~/.config/moxsh-proot/links.toml）"
+        "launch" => "用法: mox-proot-distro launch mx:<名字> [-- 命令...]\n\
+             （mx:alpine / mx:ubuntu / mx:debian / mx:kali；自定义见 ~/.config/mox-proot/links.toml）"
             .to_string(),
         "help" | "--help" | "-h" | "" => HELP.to_string(),
         other => format!("proot-distro: 未知子命令 {}\n{}", other, HELP),
@@ -618,7 +687,7 @@ fn cmd_net(mgr: &DistroManager, args: &[&str]) -> String {
 /// 完全同源（[`ProotConfig::env_command`]），所见即所得。
 fn cmd_env(mgr: &DistroManager, args: &[&str]) -> String {
     let Some(id) = args.first().copied() else {
-        return "用法: moxsh-proot-distro env <id>".to_string();
+        return "用法: mox-proot-distro env <id>".to_string();
     };
     let rootfs = mgr.distro_rootfs(id);
     if !rootfs.is_dir() {
@@ -650,11 +719,11 @@ fn cmd_env(mgr: &DistroManager, args: &[&str]) -> String {
 ///
 /// - `status`：本地视图（灰度关时粉丝档位不显示）。
 /// - `sync`：管理后台统一刷新（授权重拉 + 粉丝状态重读，使服务端吊销即时生效）。
-fn cmd_access(args: &[&str], moxsh_root: &Path) -> String {
+fn cmd_access(args: &[&str], mox_proot_root: &Path) -> String {
     match args.first().copied() {
         Some("status") => {
-            let s = crate::proot::access::status(moxsh_root);
-            let mut out = String::from("moxsh 访问状态：\n");
+            let s = crate::proot::access::status(mox_proot_root);
+            let mut out = String::from("mox-proot 访问状态：\n");
             if let Some(tier) = &s.fan_tier {
                 out.push_str(&format!("  粉丝档位: {}\n", tier));
             } else if s.fan_enabled {
@@ -672,7 +741,7 @@ fn cmd_access(args: &[&str], moxsh_root: &Path) -> String {
             }
             out
         }
-        Some("sync") => match crate::proot::access::sync(moxsh_root) {
+        Some("sync") => match crate::proot::access::sync(mox_proot_root) {
             Ok(s) => format!(
                 "已同步访问状态：粉丝{}，商品授权 {} 项",
                 if s.fan_tier.is_some() {
@@ -688,12 +757,34 @@ fn cmd_access(args: &[&str], moxsh_root: &Path) -> String {
     }
 }
 
+/// `time`：时间上下文感知问候 + 古诗（#450 惊喜三件套的 Rust 单一来源）。
+///
+/// 与容器内控制台 `mox` 的无参问候、TUI 欢迎屏同源；本子命令便于
+/// 脚本/测试直接取用，且永远与 delight 模块保持一致。
+fn cmd_time() -> String {
+    let phase = crate::proot::delight::current_phase();
+    let mut out = String::from(paint("mox-proot 时间上下文", C_BOLD).as_str());
+    out.push('\n');
+    out.push_str(&format!("  时相：{}\n", phase.name()));
+    out.push_str(&format!("  {}\n", phase.greeting()));
+    out.push_str(&format!("  {} {}\n", phase.poem(), phase.poem_from()));
+    out
+}
+
+/// `egg`：隐藏彩蛋（#450）。命中暗号才吐文案；平时不显。
+fn cmd_egg() -> String {
+    match crate::proot::delight::easter_egg("egg") {
+        Some(t) => t.to_string(),
+        None => "（没有彩蛋）".to_string(),
+    }
+}
+
 /// `recipe list|show <id>|apply <id> <distro>`：配方系统（0.3.0，roadmap §4）。
 ///
 /// - `list`：枚举可用配方（id/名称/描述）。
 /// - `show <id>`：配方详情 + 应用命令。
 /// - `apply <id> <distro>`：把脚本落进容器 /tmp 后在容器内执行（复用引擎）。
-fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
+fn cmd_recipe(args: &[&str], mox_proot_root: &Path) -> String {
     let idx = RecipeIndex::load();
     match args.first().copied() {
         None | Some("list") => {
@@ -701,17 +792,17 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                 return "配方：当前无可用配方（recipes/index.toml 为空）".to_string();
             }
             let mut out = String::from(
-                "可用配方（应用：moxsh-proot-distro recipe apply <id> <distro>）：\n",
+                "可用配方（应用：mox-proot-distro recipe apply <id> <distro>）：\n",
             );
             for r in idx.all() {
                 let lock = if r.fan_only {
-                    if fan::is_fan(moxsh_root) {
+                    if fan::is_fan(mox_proot_root) {
                         " [✓]"
                     } else {
                         " [🔒]"
                     }
                 } else if !r.requires.is_empty() {
-                    if redeem::has_entitlement(moxsh_root, &r.requires) {
+                    if redeem::has_entitlement(mox_proot_root, &r.requires) {
                         " [✓]"
                     } else {
                         " [🔒]"
@@ -730,13 +821,13 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
             Some(id) => match idx.find(id) {
                 Ok(r) => {
                     let mut s = format!(
-                        "配方 {}\n  名称：{}\n  描述：{}\n  标签：{}\n  脚本：{}\n  应用：moxsh-proot-distro recipe apply {} <distro>",
+                        "配方 {}\n  名称：{}\n  描述：{}\n  标签：{}\n  脚本：{}\n  应用：mox-proot-distro recipe apply {} <distro>",
                         r.id, r.name, r.description, r.tags.join("/"), r.script, r.id
                     );
                     if r.fan_only {
                         s.push_str(&format!(
                             "\n  专属：{}",
-                            if fan::is_fan(moxsh_root) {
+                            if fan::is_fan(mox_proot_root) {
                                 "已解锁".to_string()
                             } else {
                                 "未解锁".to_string()
@@ -747,7 +838,7 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                         s.push_str(&format!(
                             "\n  商品：{}（{}）",
                             r.requires,
-                            if redeem::has_entitlement(moxsh_root, &r.requires) {
+                            if redeem::has_entitlement(mox_proot_root, &r.requires) {
                                 "已授权".to_string()
                             } else {
                                 "未授权，mox redeem status 刷新".to_string()
@@ -758,23 +849,23 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
                 }
                 Err(e) => format!("recipe: {}", e),
             },
-            None => "用法: moxsh-proot-distro recipe show <id>".to_string(),
+            None => "用法: mox-proot-distro recipe show <id>".to_string(),
         },
         Some("apply") => {
             let rid = args.get(1).copied();
             let did = args.get(2).copied();
             match (rid, did) {
-                (Some(rid), Some(did)) => match idx.apply(moxsh_root, rid, did) {
+                (Some(rid), Some(did)) => match idx.apply(mox_proot_root, rid, did) {
                     Ok(code) => format!("配方 {} 已应用（容器内退出码 {}）", rid, code),
                     Err(e) => format!("recipe: 应用失败: {}", e),
                 },
-                _ => "用法: moxsh-proot-distro recipe apply <id> <distro>".to_string(),
+                _ => "用法: mox-proot-distro recipe apply <id> <distro>".to_string(),
             }
         }
         Some(other) => format!(
             "recipe: 未知子命令 {}\n{}",
             other,
-            "用法: moxsh-proot-distro recipe list|show <id>|apply <id> <distro>"
+            "用法: mox-proot-distro recipe list|show <id>|apply <id> <distro>"
         ),
     }
 }
@@ -785,13 +876,13 @@ fn cmd_recipe(args: &[&str], moxsh_root: &Path) -> String {
 ///   专属页面（入口命令由运营渠道告知）→ 页内 GitHub 登录 + 点「确认领取」
 ///   = 后端签发激活码 → 页面带 `code` 跳回回环，脚本 **自动收码** →
 ///   `POST /fan/verify` 经服务端**联网真实校验** → 落盘
-///   `$MOXSH_ROOT/fan.toml` 解锁 fan_only 配方。全程无需手输兑换码；
+///   `$MOX_ROOT/fan.toml` 解锁 fan_only 配方。全程无需手输兑换码；
 /// - `redeem <code>`：手动路径（桌面 Linux 没浏览器可调时）——页面
 ///   手动领取后回来 `mox fan redeem <code>`，同样联网验；
 /// - `status`：当前解锁状态与验签模式（纯在线，客户端零密钥）。
 ///
-/// 灰度：`MOXSH_FAN_ENABLE=1` 才开放（后端 `/fan/issue` 另有白名单，双保险）。
-fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
+/// 灰度：`MOX_FAN_ENABLE=1` 才开放（后端 `/fan/issue` 另有白名单，双保险）。
+fn cmd_fan(args: &[&str], mox_proot_root: &Path) -> String {
     if !fan::fan_enabled() {
         return format!(
             "粉丝专属：灰度测试中（{}=1 开启，正式版自动开放）。\n\
@@ -800,7 +891,7 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
         );
     }
     match args.first().copied() {
-        None | Some("login") => match fan::login(moxsh_root) {
+        None | Some("login") => match fan::login(mox_proot_root) {
             Ok(o) => {
                 let mut out = String::new();
                 match o.opened {
@@ -816,7 +907,7 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
                     "\n页面步骤：登录（GitHub）→ 点「确认领取」→ 自动回到本终端。\n\
                      ✅ 官方在线校验已通过，粉丝专属已解锁（档位：{}）。\n\
                      \x20 mox fan status                   # 查看状态\n\
-                     \x20 moxsh-proot-distro recipe list   # 粉丝专属配方已亮起 🔓",
+                     \x20 mox-proot-distro recipe list   # 粉丝专属配方已亮起 🔓",
                     o.tier
                 ));
                 out
@@ -824,11 +915,11 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
             Err(e) => format!("fan: {}\n（重试：mox fan login；桌面 Linux 可先开专属页面 URL 手动领取，再 mox fan redeem <code>）", e),
         },
         Some("redeem") => match args.get(1).copied() {
-            Some(code) => match fan::redeem(moxsh_root, code) {
+            Some(code) => match fan::redeem(mox_proot_root, code) {
                 Ok(tier) => format!(
                     "兑换成功，粉丝专属已解锁（档位：{}）。\n\
                      \x20 mox fan status                        # 查看状态\n\
-                     \x20 moxsh-proot-distro recipe list        # 粉丝专属配方已亮起",
+                     \x20 mox-proot-distro recipe list        # 粉丝专属配方已亮起",
                     tier
                 ),
                 Err(e) => format!("fan: {}", e),
@@ -837,13 +928,13 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
         },
         Some("status") => {
             let mode = fan::verify_mode();
-            match fan::load_state(moxsh_root) {
+            match fan::load_state(mox_proot_root) {
                 Some(st) => format!(
                     "粉丝专属：已解锁\n  档位：{}\n  验签模式：{}\n  兑换码：{}\n  令牌文件：{}\n  （删除本文件 = 解除绑定，需重新 mox fan login）",
                     st.tier,
                     mode,
                     st.code,
-                    fan::fan_file_path(moxsh_root).display()
+                    fan::fan_file_path(mox_proot_root).display()
                 ),
                 None => format!(
                     "粉丝专属：未解锁\n  验签模式：{}\n  mox fan login    # 唤起浏览器 → 登录 → 确认领取 → 自动收码解锁",
@@ -870,9 +961,9 @@ fn cmd_fan(args: &[&str], moxsh_root: &Path) -> String {
 ///
 /// 购买/兑换在官网 redeem 页（兑换码或爱发电订单号 → 选设备赋予）；
 /// 换设备每月 1 次，也在官网操作。客户端零密钥，判定全在服务端。
-fn cmd_redeem(args: &[&str], moxsh_root: &Path) -> String {
+fn cmd_redeem(args: &[&str], mox_proot_root: &Path) -> String {
     match args.first().copied() {
-        None | Some("login") => match redeem::login(moxsh_root) {
+        None | Some("login") => match redeem::login(mox_proot_root) {
             Ok(o) => {
                 let mut out = String::new();
                 match o.opened {
@@ -895,7 +986,7 @@ fn cmd_redeem(args: &[&str], moxsh_root: &Path) -> String {
             }
             Err(e) => format!("redeem: {}\n（重试：mox redeem login）", e),
         },
-        Some("status") => match redeem::refresh_ents(moxsh_root) {
+        Some("status") => match redeem::refresh_ents(mox_proot_root) {
             Ok(ents) => {
                 let mut out = String::from("商品授权（已联网刷新）：\n");
                 if ents.is_empty() {
@@ -905,24 +996,24 @@ fn cmd_redeem(args: &[&str], moxsh_root: &Path) -> String {
                         out.push_str(&format!("  {}  档位 {}  {}\n", e.product_id, e.tier, exp_text(e.exp)));
                     }
                 }
-                if let Some(d) = redeem::load_device(moxsh_root) {
+                if let Some(d) = redeem::load_device(mox_proot_root) {
                     out.push_str(&format!(
                         "\n设备：{}（{}）\n设备文件：{}\n",
                         d.name,
                         d.platform,
-                        redeem::device_file_path(moxsh_root).display()
+                        redeem::device_file_path(mox_proot_root).display()
                     ));
                 }
                 out.push_str(&format!(
                     "授权缓存：{}\n（超过 7 天未刷新门禁显示 🔒；换设备每月 1 次，官网 redeem 页操作）",
-                    redeem::ents_file_path(moxsh_root).display()
+                    redeem::ents_file_path(mox_proot_root).display()
                 ));
                 out
             }
             Err(e) => {
                 // 联网失败不空手：有缓存就摆出来（标注可能过期），并提示重试。
                 let mut out = format!("商品授权：联网刷新失败（{}）\n", e);
-                match redeem::load_ents(moxsh_root) {
+                match redeem::load_ents(mox_proot_root) {
                     Some(c) if !c.ents.is_empty() => {
                         out.push_str("本地缓存授权（可能已过期，恢复网络后刷新）：\n");
                         for e in &c.ents {
@@ -936,10 +1027,10 @@ fn cmd_redeem(args: &[&str], moxsh_root: &Path) -> String {
             }
         },
         Some("check") => {
-            if !redeem::ents_fresh(moxsh_root) {
+            if !redeem::ents_fresh(mox_proot_root) {
                 return "商品授权：无有效缓存\n  mox redeem status    # 联网刷新授权".to_string();
             }
-            let c = redeem::load_ents(moxsh_root).unwrap_or_default();
+            let c = redeem::load_ents(mox_proot_root).unwrap_or_default();
             let mut out = String::from("商品授权（本地缓存，离线只读）：\n");
             if c.ents.is_empty() {
                 out.push_str("  （无）\n");
@@ -997,29 +1088,76 @@ fn cmd_list(mgr: &DistroManager) -> String {
     out
 }
 
-/// `install <id>`：安装（缓存归档优先，否则内部下载兜底）。
+/// `install <id> [--cache <tar>] [--version <v>]`：安装（缓存归档优先，否则内部下载兜底）。
+///
+/// `--version` 校验必须落在 [`DistroSpec::versions`] 清单内（T3）；
+/// 当前仅默认版本接入下载 URL，非默认版本在选择时被记录并提示。
 fn cmd_install(mgr: &DistroManager, args: &[&str]) -> String {
     let Some(id) = args.first() else {
-        return "用法: proot-distro install <id>".into();
+        return "用法: proot-distro install <id> [--cache <tar>] [--version <v>]".into();
     };
     let spec = match DistroManager::find_spec(id) {
         Ok(s) => s,
         Err(e) => return format!("proot-distro: {}", e),
     };
-    // --cache <path>：指定外部已下载归档（Android 场景由 UI 层下载）。
+    // --cache <path>：指定外部已下载归档；--version <v>：选择版本（须清单内）。
     let mut cache: Option<PathBuf> = None;
+    let mut version: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        if *a == "--cache" {
-            cache = it.next().map(PathBuf::from);
+        match *a {
+            "--cache" => cache = it.next().map(PathBuf::from),
+            "--version" => version = it.next().map(|s| s.to_string()),
+            _ => {}
+        }
+    }
+    // 版本校验：给出的值必须在清单内（否则提示可用项）。
+    if let Some(v) = &version {
+        if !spec.versions.iter().any(|x| *x == v) {
+            return format!(
+                "proot-distro: 版本 {} 不在 {} 的可选清单（{}）",
+                v,
+                spec.id,
+                spec.versions.join(" / ")
+            );
         }
     }
     let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
-        let _ = (msg, done, total); // 文本 CLI 简化：完成时统一输出
+        install_progress(msg, done, total);
     });
     match mgr.install(&spec, cache.as_deref(), &mut progress) {
-        Ok(()) => install_hint(spec.id, mgr),
-        Err(e) => format!("proot-distro: 安装失败: {}", e),
+        Ok(()) => {
+            let mut h = install_hint(spec.id, mgr);
+            if let Some(v) = &version {
+                h.push_str(&format!("已选版本：{}（默认：{}）\n", v, spec.version));
+            }
+            h
+        }
+        Err(e) => format!("{} {}", paint("proot-distro: 安装失败:", C_RED), e),
+    }
+}
+
+/// `versions <id>`：列出该发行版的可选版本（T3）。
+///
+/// 与 `DistroSpec::versions` 同源；默认版本标「（默认）」。
+fn cmd_versions(args: &[&str]) -> String {
+    let Some(id) = args.first() else {
+        return "用法: proot-distro versions <id>".into();
+    };
+    match DistroManager::find_spec(id) {
+        Ok(spec) => {
+            let mut out = format!("发行版 {} 可选版本：\n", spec.id);
+            for v in spec.versions {
+                let mark = if *v == spec.version {
+                    paint("（默认）", C_GREEN).as_str().to_string()
+                } else {
+                    String::new()
+                };
+                out.push_str(&format!("  {:<24} {}{}\n", v, spec.name, mark));
+            }
+            out
+        }
+        Err(e) => format!("proot-distro: {}", e),
     }
 }
 
@@ -1044,8 +1182,8 @@ fn install_hint(id: &str, mgr: &DistroManager) -> String {
     match launcher::write_launcher(&bin_dir, id) {
         Ok(p) => out.push_str(&format!("启动器已就绪：直接输入 {} 即可进容器（{}）\n", id, p.display())),
         Err(e) => out.push_str(&format!(
-            "警告：启动器写入失败（{}），可用 moxsh-proot-distro launch mx:{} 进入\n",
-            e, id
+            "{} 启动器写入失败（{}），可用 mox-proot-distro launch mx:{} 进入\n",
+            paint("警告：", C_YELLOW), e, id
         )),
     }
     // 容器内控制台入口 mox（roadmap §3：固定命令，不开放自定义）。
@@ -1057,8 +1195,8 @@ fn install_hint(id: &str, mgr: &DistroManager) -> String {
             p.display()
         )),
         Err(e) => out.push_str(&format!(
-            "警告：控制台脚本写入失败（{}），容器内可用 moxsh-proot-distro 排障\n",
-            e
+            "{} 控制台脚本写入失败（{}），容器内可用 mox-proot-distro 排障\n",
+            paint("警告：", C_YELLOW), e
         )),
     }
     // 函数块覆盖全部已装容器（旧块整块替换，幂等）。
@@ -1087,7 +1225,7 @@ fn install_hint(id: &str, mgr: &DistroManager) -> String {
 /// `wizard [--root <目录>] [--distro <id>]`：一次性初始化向导（0.2.0，roadmap §5）。
 ///
 /// 默认值驱动、**无 stdin 阻塞**（脚本/CI 友好；交互式问答是 0.4.0 TUI 的事）：
-///   ① 数据根：`--root` 或保持现值（默认 `~/.moxsh`）→ upsert 进 config.toml；
+///   ① 数据根：`--root` 或保持现值（默认 `~/.mox-proot`）→ upsert 进 config.toml；
 ///   ② 发行版：`--distro`（默认 alpine）→ 已装跳过，未装走完整安装链路；
 ///   ③ 教学提示：换源 / 中文 / 控制台 / 启动器一次说清。
 /// 幂等：重复跑只补缺失步骤，不重复下载、不重复提问。
@@ -1105,7 +1243,7 @@ fn cmd_wizard(args: &[&str]) -> String {
                     i += 2;
                 }
                 None => {
-                    return "用法: moxsh-proot-distro wizard [--root <目录>] [--distro <id>]（--root 缺参数）"
+                    return "用法: mox-proot-distro wizard [--root <目录>] [--distro <id>]（--root 缺参数）"
                         .to_string()
                 }
             },
@@ -1115,13 +1253,13 @@ fn cmd_wizard(args: &[&str]) -> String {
                     i += 2;
                 }
                 None => {
-                    return "用法: moxsh-proot-distro wizard [--root <目录>] [--distro <id>]（--distro 缺参数）"
+                    return "用法: mox-proot-distro wizard [--root <目录>] [--distro <id>]（--distro 缺参数）"
                         .to_string()
                 }
             },
             other => {
                 return format!(
-                    "wizard: 未知参数 {}\n用法: moxsh-proot-distro wizard [--root <目录>] [--distro <id>]",
+                    "wizard: 未知参数 {}\n用法: mox-proot-distro wizard [--root <目录>] [--distro <id>]",
                     other
                 )
             }
@@ -1137,7 +1275,7 @@ fn cmd_wizard(args: &[&str]) -> String {
         );
     }
 
-    let mut out = String::from("moxsh-proot 初始化向导\n\n");
+    let mut out = String::from("mox-proot 初始化向导\n\n");
 
     // 1) 数据根：upsert 进 config.toml（保留用户其余配置）。
     let cfg_path = Settings::user_path();
@@ -1182,11 +1320,7 @@ fn cmd_wizard(args: &[&str]) -> String {
                     spec.id, spec.name, spec.version
                 ));
                 let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
-                    if total > 0 && done >= total {
-                        eprintln!("[安装] {}", msg);
-                    } else {
-                        eprintln!("[安装] {}（{}/{}）", msg, done, total);
-                    }
+                    install_progress(msg, done, total);
                 });
                 match mgr.install(&spec, None, &mut progress) {
                     Ok(()) => out.push_str(&format!("② {} 安装完成\n", spec.id)),
@@ -1204,7 +1338,7 @@ fn cmd_wizard(args: &[&str]) -> String {
     // 3) 落盘启动器 + 控制台 + 教学提示（install_hint 复用同一套）。
     out.push_str(&str::replace(&install_hint(&distro, &mgr), "安装完成。\n", ""));
     out.push_str(&format!(
-        "\n接下来：\n  moxsh-proot-distro launch mx:{d}    # 直接进容器\n  {d}                                  # 启动器（已落盘）\n  moxsh-proot-distro env {d}            # 查中文环境\n  容器内输入 mox                        # 管理控制台（固定命令）\n",
+        "\n接下来：\n  mox-proot-distro launch mx:{d}    # 直接进容器\n  {d}                                  # 启动器（已落盘）\n  mox-proot-distro env {d}            # 查中文环境\n  容器内输入 mox                        # 管理控制台（固定命令）\n",
         d = distro
     ));
     out
@@ -1295,7 +1429,7 @@ fn cmd_backup(mgr: &DistroManager, args: &[&str]) -> String {
 }
 
 /// `restore <id> <tar>`：恢复。
-fn cmd_restore(mgr: &DistroManager, args: &[&str], _moxsh_root: &Path) -> String {
+fn cmd_restore(mgr: &DistroManager, args: &[&str], _mox_proot_root: &Path) -> String {
     let (Some(id), Some(tar)) = (args.first(), args.get(1)) else {
         return "用法: proot-distro restore <id> <tar.tar.gz>".into();
     };
@@ -1310,10 +1444,10 @@ fn cmd_restore(mgr: &DistroManager, args: &[&str], _moxsh_root: &Path) -> String
 /// 启动核心：解析 `mx:xxx` 或普通发行版 id → 未装自动装 → 起引擎进容器。
 ///
 /// 两套登录入口在此汇合（roadmap §1，呼应文心手册"登录融合成一个"诉求）：
-/// - `moxsh-proot -r mx:alpine -- bash`（引擎侧选项值 scheme）；
-/// - `moxsh-proot-distro launch mx:alpine`（短链子命令）；
-/// - `moxsh-proot-distro login ubuntu` / `shell ubuntu`（传统 id，与 launch 互通）；
-/// - `moxsh-proot-distro launch ubuntu`（普通 id 也放行，等价于 mx: 短链）。
+/// - `mox-proot -r mx:alpine -- bash`（引擎侧选项值 scheme）；
+/// - `mox-proot-distro launch mx:alpine`（短链子命令）；
+/// - `mox-proot-distro login ubuntu` / `shell ubuntu`（传统 id，与 launch 互通）；
+/// - `mox-proot-distro launch ubuntu`（普通 id 也放行，等价于 mx: 短链）。
 ///
 /// 无论哪种入口，最终都走「解析 → 未装自动装 → exec_into」，行为完全一致。
 /// 返回进程退出码。
@@ -1332,11 +1466,7 @@ pub fn launch_spec(root: &Path, spec: &str, tail: &[String]) -> ProotResult<i32>
     };
 
     let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
-        if total > 0 && done >= total {
-            eprintln!("[安装] {}", msg);
-        } else {
-            eprintln!("[安装] {}（{}/{}）", msg, done, total);
-        }
+        install_progress(msg, done, total);
     });
     if !mgr.distro_rootfs(&id).is_dir() {
         if let Some(urls) = custom_urls {
@@ -1344,7 +1474,7 @@ pub fn launch_spec(root: &Path, spec: &str, tail: &[String]) -> ProotResult<i32>
             mgr.install_custom(&id, &tar, None, &mut progress)?;
         } else {
             let specd = DistroManager::find_spec(&id)?;
-            eprintln!("moxsh-proot: {} 未安装，开始自动安装（{} {}）…", id, specd.name, specd.version);
+            eprintln!("mox-proot: {} 未安装，开始自动安装（{} {}）…", id, specd.name, specd.version);
             mgr.install(&specd, None, &mut progress)?;
         }
     }
@@ -1386,7 +1516,7 @@ fn fs_create_dir_all(p: &Path) -> ProotResult<()> {
     std::fs::create_dir_all(p).map_err(ProotError::Io)
 }
 
-/// 起引擎进容器（提炼自 `moxsh-proot-distro login/shell` 的 exec 路径，
+/// 起引擎进容器（提炼自 `mox-proot-distro login/shell` 的 exec 路径，
 /// 叠加 0.2.0 的进/退命令语义，roadmap §1）：
 ///
 /// - `tail` 非空 = 用户显式命令（`mx:alpine -- vim`），替代登录 shell；
@@ -1403,10 +1533,10 @@ pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
     // pre-login 钩子：失败仅警告不阻断（钩子是用户脚本，不该把人挡在容器外）。
     match script::run_hooks(root, &rootfs, id, script::HookKind::PreLogin) {
         Ok(r) if r.has_failure() => {
-            eprintln!("moxsh-proot: pre-login 钩子存在失败项：{}", r.summary())
+            eprintln!("mox-proot: pre-login 钩子存在失败项：{}", r.summary())
         }
         Ok(_) => {}
-        Err(e) => eprintln!("moxsh-proot: pre-login 钩子异常：{}", e),
+        Err(e) => eprintln!("mox-proot: pre-login 钩子异常：{}", e),
     }
 
     // 命令三源：显式 tail > 配置 enter > 引擎默认探测。
@@ -1425,8 +1555,8 @@ pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
     };
 
     let mut cfg = ProotConfig::with_distro_defaults(&rootfs);
-    // 容器内控制台：bind 宿主 bin + MOXSH_ROOT，注入 mox 固定命令
-    // （roadmap §3；MOXSH_PROOT_CONSOLE=0 可关）。
+    // 容器内控制台：bind 宿主 bin + MOX_ROOT，注入 mox 固定命令
+    // （roadmap §3；MOX_PROOT_CONSOLE=0 可关）。
     console::bind_console(&mut cfg, root, &console::host_bin_dir());
     // env_command() 形如 ["/usr/bin/env", "-i", "HOME=...", ...]，跳过前两个
     // 前缀词即纯 KEY=VALUE 列表（spawn 直接 execve 用）。
@@ -1443,7 +1573,7 @@ pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
 }
 
 /// 在参数表里找 `mx:` 形式的 rootfs 值（-r/-R/-S 的后一个词，或 --rootfs=）。
-/// 找到即短链启动路径（`moxsh-proot -r mx:alpine`）。
+/// 找到即短链启动路径（`mox-proot -r mx:alpine`）。
 pub fn find_mx_rootfs_arg(args: &[String]) -> Option<String> {
     let mut i = 0;
     while i < args.len() {
@@ -1471,8 +1601,8 @@ pub fn tail_after_dashdash(args: &[String]) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `proot` 原生参数面：识别 -r/-0/-i/-H/-v/-b/-w 并输出等效 moxsh 引擎配置预览。
-fn proot_native(args: &[&str], _moxsh_root: &Path) -> String {
+/// `proot` 原生参数面：识别 -r/-0/-i/-H/-v/-b/-w 并输出等效 mox-proot 引擎配置预览。
+fn proot_native(args: &[&str], _mox_proot_root: &Path) -> String {
     let mut rootfs: Option<String> = None;
     let mut fake_root = false;
     let mut fake_id: Option<String> = None;
@@ -1499,25 +1629,25 @@ fn proot_native(args: &[&str], _moxsh_root: &Path) -> String {
                 }
             }
             "-h" | "--help" => return PROOT_HELP.to_string(),
-            other => return format!("proot: 暂不支持参数 {}（moxsh 引擎内嵌，UI 启动或 proot-distro login）", other),
+            other => return format!("proot: 暂不支持参数 {}（mox-proot 引擎内嵌，UI 启动或 proot-distro login）", other),
         }
     }
     let Some(rootfs) = rootfs else {
         return "用法: proot -r <rootfs> [-0] [-b host:guest]... [-w /dir] -- cmd".into();
     };
     let mut out = format!(
-        "moxsh proot 引擎配置预览：\n  rootfs: {}\n  fake_root(-0): {}\n  fake_id(-i): {:?}\n  verbose(-v): {}\n  hide(-H): {:?}\n  cwd(-w): {}\n  绑定(-b):\n",
+        "mox-proot proot 引擎配置预览：\n  rootfs: {}\n  fake_root(-0): {}\n  fake_id(-i): {:?}\n  verbose(-v): {}\n  hide(-H): {:?}\n  cwd(-w): {}\n  绑定(-b):\n",
         rootfs, fake_root, fake_id, verbose, hidden, cwd
     );
     for b in binds {
         out.push_str(&format!("    {}\n", b));
     }
-    out.push_str("（实际启动：moxsh 图形界面选择发行版，或 proot-distro login <id>）");
+    out.push_str("（实际启动：mox-proot 图形界面选择发行版，或 proot-distro login <id>）");
     out
 }
 
 /// proot-distro 帮助文本（对齐上游子命令集）。
-const HELP: &str = "proot-distro（moxsh 兼容实现）
+const HELP: &str = "proot-distro（mox-proot 兼容实现）
 用法:
   proot-distro list                      列出已安装与可安装发行版
   proot-distro install <id> [--cache <tar>]   安装（--cache 指定已下载归档）
@@ -1533,10 +1663,12 @@ const HELP: &str = "proot-distro（moxsh 兼容实现）
   proot-distro fan login|redeem <code>|status   粉丝专属解锁（灰度中，默认隐藏）
   proot-distro redeem login|status|check       商品授权：绑定设备 + 在线校验
   proot-distro access status|sync             统一访问面（粉丝+授权融合；粉丝默认隐藏）
+  proot-distro time                         时间上下文问候 + 古诗（惊喜三件套）
+  proot-distro egg                          隐藏彩蛋（惊喜三件套）
   proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
 
 /// proot 原生参数帮助。
-const PROOT_HELP: &str = "proot（moxsh 引擎内嵌版，支持参数：-r/--rootfs -0/--root-id -b/--bind -w/--cwd）";
+const PROOT_HELP: &str = "proot（mox-proot 引擎内嵌版，支持参数：-r/--rootfs -0/--root-id -b/--bind -w/--cwd）";
 
 #[cfg(test)]
 mod tests {
@@ -1557,6 +1689,45 @@ mod tests {
     fn install_unknown_id() {
         let out = proot_distro(&["install", "windows"], Path::new("/tmp"));
         assert!(out.contains("未知发行版"));
+    }
+
+    /// versions 子命令：列出可选版本并标注默认。
+    #[test]
+    fn versions_lists_and_marks_default() {
+        let out = proot_distro(&["versions", "ubuntu"], Path::new("/tmp"));
+        assert!(out.contains("可选版本"), "{}", out);
+        assert!(out.contains("24.04 LTS (base)"), "应含默认版本：{}", out);
+        assert!(out.contains("22.04 LTS"), "应含可选版本：{}", out);
+        assert!(out.contains("默认"), "应标注默认：{}", out);
+    }
+
+    /// 未知 id 的 versions 报错。
+    #[test]
+    fn versions_unknown_id() {
+        let out = proot_distro(&["versions", "windows"], Path::new("/tmp"));
+        assert!(out.contains("未知发行版"));
+    }
+
+    /// install --version 校验：不在清单内报错。
+    #[test]
+    fn install_invalid_version_rejected() {
+        let out = proot_distro(
+            &["install", "alpine", "--version", "9.99"],
+            Path::new("/tmp"),
+        );
+        assert!(out.contains("不在"), "应提示版本不在清单：{}", out);
+    }
+
+    /// install --version 合法值落在清单内（纯成员判定，不触发下载）。
+    #[test]
+    fn versions_contains_valid_choice() {
+        let spec = DistroManager::find_spec("alpine").unwrap();
+        assert!(
+            spec.versions.contains(&"3.19 (minirootfs)"),
+            "清单应含可选版本：{:?}",
+            spec.versions
+        );
+        assert!(spec.versions.contains(&spec.version), "清单应含默认版本");
     }
 
     /// login 未安装报错。
@@ -1613,9 +1784,24 @@ mod tests {
         assert!(proot_distro(&["frobnicate"], Path::new("/x")).contains("未知子命令"));
     }
 
+    /// time 子命令：应景问候 + 古诗（惊喜三件套，Rust 单一来源）。
+    #[test]
+    fn time_subcommand_shows_poem() {
+        let out = proot_distro(&["time"], Path::new("/x"));
+        assert!(out.contains("时相"), "应含时相：{}", out);
+        assert!(out.contains("——"), "应含古诗出处：{}", out);
+    }
+
+    /// egg 子命令：命中暗号吐彩蛋文案。
+    #[test]
+    fn egg_subcommand_reveals() {
+        let out = proot_distro(&["egg"], Path::new("/x"));
+        assert!(out.contains("彩蛋"), "应含彩蛋文案：{}", out);
+    }
+
     /// fan 子命令：灰度关时任何子命令都给灰度提示（默认关，不误触专属流）。
     ///
-    /// 三个改 `MOXSH_FAN_ENABLE` 的用例共用一把测试锁串行化——env 是进程级
+    /// 三个改 `MOX_FAN_ENABLE` 的用例共用一把测试锁串行化——env 是进程级
     /// 全局态，并行跑会互相覆盖（曾撞出「灰度关却进了 login 回环等 240s」）。
     static FAN_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -1672,7 +1858,7 @@ mod tests {
     /// redeem check：有新鲜缓存时离线展示授权（含「永久」文案）。
     #[test]
     fn redeem_check_reads_cache_offline() {
-        let root = std::env::temp_dir().join(format!("moxsh-redeem-check-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("mox-proot-redeem-check-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         redeem::save_ents(
@@ -1706,7 +1892,7 @@ mod tests {
             if let Ok((mut s, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
                 let _ = s.read(&mut buf);
-                let body = "ok proot-pro pro 0\nok moxsh-plus plus 4102444800\n";
+                let body = "ok proot-pro pro 0\nok mox-proot-plus plus 4102444800\n";
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -1716,7 +1902,7 @@ mod tests {
                 let _ = s.flush();
             }
         });
-        let root = std::env::temp_dir().join(format!("moxsh-redeem-status-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("mox-proot-redeem-status-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::env::set_var(
             redeem::ENTITLEMENT_API_ENV,
@@ -1727,11 +1913,11 @@ mod tests {
         handle.join().unwrap();
         assert!(out.contains("已联网刷新"), "应报告联网刷新：{}", out);
         assert!(out.contains("proot-pro"));
-        assert!(out.contains("moxsh-plus"));
+        assert!(out.contains("mox-proot-plus"));
         assert!(out.contains("永久"));
         // 落盘缓存 → 门禁同源生效
         assert!(redeem::has_entitlement(&root, "proot-pro"));
-        assert!(redeem::has_entitlement(&root, "moxsh-plus"));
+        assert!(redeem::has_entitlement(&root, "mox-proot-plus"));
         assert!(!redeem::has_entitlement(&root, "no-such"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -1788,7 +1974,7 @@ mod tests {
     /// 依赖真实目录（rf.is_dir() 校验），用临时目录隔离。
     #[test]
     fn parse_native_args_full_surface() {
-        let rf = std::env::temp_dir().join("moxsh-test-rf");
+        let rf = std::env::temp_dir().join("mox-proot-test-rf");
         std::fs::create_dir_all(&rf).unwrap();
         let rf_s = rf.to_str().unwrap();
 
@@ -1857,7 +2043,7 @@ mod tests {
     /// 未给 -w 有 rootfs / 两者皆无。
     #[test]
     fn initial_cwd_semantics() {
-        let rf = std::env::temp_dir().join("moxsh-test-cwd");
+        let rf = std::env::temp_dir().join("mox-proot-test-cwd");
         std::fs::create_dir_all(&rf).unwrap();
 
         // 1) 显式 -w 绝对路径：走规则翻译（rootfs 前缀命中 → 原样；否则拼 rootfs）。
@@ -1964,11 +2150,11 @@ mod launch_tests {
     /// `env` 子命令：未安装报错；装好后预览含 LANG 与 env 文件路径提示。
     #[test]
     fn env_subcommand_preview() {
-        let root = std::env::temp_dir().join("moxsh-cli-envtest");
+        let root = std::env::temp_dir().join("mox-proot-cli-envtest");
         let _ = std::fs::remove_dir_all(&root);
         let rootfs = root.join("containers/fake/rootfs");
-        std::fs::create_dir_all(rootfs.join("etc/moxsh")).unwrap();
-        std::fs::write(rootfs.join("etc/moxsh/env"), "LANG=zh_CN.UTF-8\n").unwrap();
+        std::fs::create_dir_all(rootfs.join("etc/mox-proot")).unwrap();
+        std::fs::write(rootfs.join("etc/mox-proot/env"), "LANG=zh_CN.UTF-8\n").unwrap();
 
         // 未安装 id：明确报错。
         let out = proot_distro(&["env", "nosuch"], &root);
@@ -1977,7 +2163,7 @@ mod launch_tests {
         // 已安装：预览里应含文件里的 LANG 与文件路径提示。
         let out = proot_distro(&["env", "fake"], &root);
         assert!(out.contains("LANG=zh_CN.UTF-8"), "env 文件值应进预览: {}", out);
-        assert!(out.contains("etc/moxsh/env"), "应提示 env 文件路径: {}", out);
+        assert!(out.contains("etc/mox-proot/env"), "应提示 env 文件路径: {}", out);
         assert!(out.contains("存在"), "应标记文件已存在: {}", out);
 
         // 无参数：用法提示。

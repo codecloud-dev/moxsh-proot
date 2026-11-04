@@ -10,7 +10,7 @@
 //!    HOME/PATH 垫底，LANG/LC_ALL/LC_CTYPE/TERM 从宿主透传，宿主没设
 //!    才回落 `C.UTF-8` / `xterm-256color`（musl 与新版 glibc 均内建
 //!    C.UTF-8，最通用）；
-//! 2. **容器 env 文件**：`<rootfs>/etc/moxsh/env`，每行 `KEY=VALUE`
+//! 2. **容器 env 文件**：`<rootfs>/etc/mox-proot/env`，每行 `KEY=VALUE`
 //!    （`#` 注释），登录时读入合并。优先级（低到高）：引擎默认、
 //!    宿主透传、容器文件、用户显式 `-e`。文件随 rootfs 打包
 //!    （backup/restore）走，即 tmoe 社区同款「rootfs 内 env 文件
@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use super::ProotResult;
 
 /// 容器 env 文件相对 rootfs 的位置。
-pub const ENV_FILE_REL: &str = "etc/moxsh/env";
+pub const ENV_FILE_REL: &str = "etc/mox-proot/env";
 
 /// 容器 env 文件绝对路径。
 pub fn env_file_path(rootfs: &Path) -> PathBuf {
@@ -70,7 +70,7 @@ pub fn load_container_env(rootfs: &Path) -> Vec<(String, String)> {
 /// 默认 env 文件内容：装完即用（C.UTF-8 保底不乱码）。
 /// 想要完整中文显示：容器内装 locales 包 → `locale-gen zh_CN.UTF-8`
 /// → 把 LANG 改成 `zh_CN.UTF-8`（文件即定制点，无需改引擎）。
-pub const DEFAULT_ENV_FILE: &str = "# moxsh-proot 容器环境（登录时由引擎自动注入，backup/restore 随包走）。
+pub const DEFAULT_ENV_FILE: &str = "# mox-proot 容器环境（登录时由引擎自动注入，backup/restore 随包走）。
 # 每行 KEY=VALUE；本文件优先于引擎默认，低于命令行 -e。
 # 完整中文显示：容器内安装 locales 包后 locale-gen zh_CN.UTF-8，再把下行改成它。
 LANG=C.UTF-8
@@ -110,16 +110,16 @@ mod tests {
 
     #[test]
     fn load_container_env_missing_file_is_empty() {
-        let dir = std::env::temp_dir().join("moxsh-locale-test-missing");
+        let dir = std::env::temp_dir().join("mox-proot-locale-test-missing");
         let _ = fs::remove_dir_all(&dir);
         assert!(load_container_env(&dir).is_empty());
     }
 
     #[test]
     fn load_container_env_roundtrip() {
-        let dir = std::env::temp_dir().join("moxsh-locale-test-rt");
+        let dir = std::env::temp_dir().join("mox-proot-locale-test-rt");
         let _ = fs::remove_dir_all(&dir);
-        fs::create_dir_all(dir.join("etc/moxsh")).unwrap();
+        fs::create_dir_all(dir.join("etc/mox-proot")).unwrap();
         fs::write(env_file_path(&dir), "LANG=zh_CN.UTF-8\n").unwrap();
         let got = load_container_env(&dir);
         assert_eq!(got, vec![("LANG".to_string(), "zh_CN.UTF-8".to_string())]);
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn write_default_env_file_idempotent_and_content() {
-        let dir = std::env::temp_dir().join("moxsh-locale-test-write");
+        let dir = std::env::temp_dir().join("mox-proot-locale-test-write");
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         // 首次写入。

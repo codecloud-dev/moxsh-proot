@@ -6,14 +6,14 @@
 -- 并存时按文件名排序依次执行（10-post-install.lua 先于 20-post-install.py）。
 --
 -- 约定（引擎注入的环境变量）：
---   MOXSH_CONTAINER_ID   容器 id
---   MOXSH_HOOK_KIND      钩子类型（post-install）
---   MOXSH_HOOK_DIR       钩子目录 guest 路径（/moxsh/hooks）
+--   MOX_CONTAINER_ID   容器 id
+--   MOX_HOOK_KIND      钩子类型（post-install）
+--   MOX_HOOK_DIR       钩子目录 guest 路径（/mox-proot/hooks）
 --
 -- 退出码：0 = 通过；1 = 未就绪（不阻断安装，仅报告）。
 
-local cid = os.getenv("MOXSH_CONTAINER_ID") or "?"
-local kind = os.getenv("MOXSH_HOOK_KIND") or "?"
+local cid = os.getenv("MOX_CONTAINER_ID") or "?"
+local kind = os.getenv("MOX_HOOK_KIND") or "?"
 
 io.write(string.format("[lua-hook] 容器 %s %s 钩子（Lua %s）\n", cid, kind, _VERSION))
 
@@ -37,13 +37,13 @@ end
 io.write(string.format("[lua-hook] ✓ nameserver: %s\n", table.concat(servers, ", ")))
 
 -- 供给检查 2：root 家目录可写（fake root 下供给脚本的常见落点）。
-local probe, err = io.open("/root/.moxsh-lua-probe", "w")
+local probe, err = io.open("/root/.mox-proot-lua-probe", "w")
 if not probe then
     io.write(string.format("[lua-hook] ✗ /root 不可写: %s\n", tostring(err)))
     os.exit(1)
 end
 probe:close()
-os.remove("/root/.moxsh-lua-probe")
+os.remove("/root/.mox-proot-lua-probe")
 io.write("[lua-hook] ✓ /root 可写\n")
 
 io.write("[lua-hook] 轻量供给就绪\n")

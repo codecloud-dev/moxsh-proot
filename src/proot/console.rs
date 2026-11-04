@@ -2,20 +2,20 @@
 //!
 //! 形态：容器内**固定命令 `mox`**（不开放自定义——与进/退命令的可定制
 //! 语义区分，roadmap §3 明确「进入控制台的不给自定义」），拉起宿主侧
-//! 管理程序（当前 = `moxsh-proot-distro`，0.4.0 起接 TUI 控制台）。
+//! 管理程序（当前 = `mox-proot-distro`，0.4.0 起接 TUI 控制台）。
 //!
 //! 反穿透机制（tmoe/社区范式 + 引擎适配）：
 //!
-//! 1. 启动时把宿主 bin 目录 bind 进容器固定挂载点 `/moxsh-host`，
-//!    `MOXSH_ROOT` bind 到 `/moxsh-root`；
-//! 2. env 注入 `MOXSH_ROOT=/moxsh-root`、PATH 前置 `/moxsh-host`，
-//!    并打标 `MOXSH_CONTAINER=1`（钩子/脚本可判断「已在容器内」）；
+//! 1. 启动时把宿主 bin 目录 bind 进容器固定挂载点 `/mox-proot-host`，
+//!    `MOX_ROOT` bind 到 `/mox-proot-root`；
+//! 2. env 注入 `MOX_ROOT=/mox-proot-root`、PATH 前置 `/mox-proot-host`，
+//!    并打标 `MOX_CONTAINER=1`（钩子/脚本可判断「已在容器内」）；
 //! 3. `mox` 脚本先 `unset LD_PRELOAD`（Termux-exec 与 proot 冲突），
-//!    再 exec 同目录的 `moxsh-proot-distro`——它看到的 `/moxsh-root`
+//!    再 exec 同目录的 `mox-proot-distro`——它看到的 `/mox-proot-root`
 //!    经 proot 自动翻译回宿主真实目录，管理操作天然穿透。这就是
 //!    「反穿透」：**不绕过翻译，让翻译为我们工作**。
 //!
-//! 嵌套保护：ptrace 不允许 proot 套 proot，脚本检测到 `MOXSH_CONTAINER=1`
+//! 嵌套保护：ptrace 不允许 proot 套 proot，脚本检测到 `MOX_CONTAINER=1`
 //! 时的 login/shell/launch 直接劝退（管理类子命令照常）。
 
 use std::fs;
@@ -28,27 +28,69 @@ use super::{DEFAULT_CONTAINER_PATH, ProotConfig, ProotResult};
 pub const CONSOLE_CMD: &str = "mox";
 
 /// 宿主 bin 目录在容器内的挂载点（容器内 `mox` 的所在目录）。
-pub const GUEST_HOST_MOUNT: &str = "/moxsh-host";
+pub const GUEST_HOST_MOUNT: &str = "/mox-proot-host";
 
-/// MOXSH_ROOT 在容器内的挂载点。
-pub const GUEST_ROOT_MOUNT: &str = "/moxsh-root";
+/// MOX_ROOT 在容器内的挂载点。
+pub const GUEST_ROOT_MOUNT: &str = "/mox-proot-root";
 
 /// 「当前进程在容器内」标记（bind_console 注入；mox 脚本据此劝退嵌套）。
-pub const CONTAINER_MARK: &str = "MOXSH_CONTAINER";
+pub const CONTAINER_MARK: &str = "MOX_CONTAINER";
 
-/// 控制台总开关：`MOXSH_PROOT_CONSOLE=0` 关闭全部注入（老用户回归）。
-pub const CONSOLE_DISABLE_ENV: &str = "MOXSH_PROOT_CONSOLE";
+/// 控制台总开关：`MOX_PROOT_CONSOLE=0` 关闭全部注入（老用户回归）。
+pub const CONSOLE_DISABLE_ENV: &str = "MOX_PROOT_CONSOLE";
 
 /// mox 脚本内容（写在宿主 bin 目录，随 bind-mount 进容器）。
 ///
 /// 宿主侧直接跑（PATH 里的 `mox`）= distro CLI 的别名；容器内跑 =
-/// 反穿透到宿主真实 MOXSH_ROOT 的管理控制台。
+/// 反穿透到宿主真实 MOX_ROOT 的管理控制台。
 pub const CONSOLE_SCRIPT: &str = r#"#!/bin/sh
-# moxsh 容器内控制台（固定命令 mox，不开放自定义——roadmap §3）。
+# mox-proot 容器内控制台（固定命令 mox，不开放自定义——roadmap §3）。
 # 由引擎/安装器自动生成；删除本文件不影响宿主侧其他命令。
 unset LD_PRELOAD
-if [ -n "${MOXSH_CONTAINER:-}" ]; then
-  # 容器内：反穿透到宿主真实 MOXSH_ROOT（bind-mount 挂载点）。
+
+# ── 惊喜体验三件套（时间上下文感知 / 古诗 / 彩蛋，#450）──
+# 零依赖 shell 自包含实现：即使 distro 二进制异常，控制台也能照常问候。
+__mox_phase() {
+  h=$(date +%H 2>/dev/null | sed 's/^0//')
+  case "$h" in
+    5|6|7|8|9|10) echo morning ;;
+    11|12|13|14|15|16) echo noon ;;
+    17|18|19|20|21|22) echo evening ;;
+    *) echo night ;;
+  esac
+}
+__mox_poem() {
+  case "$1" in
+    morning) echo "晨起开门雪满山，雪晴云淡日光寒。 ——郑燮《山中雪后》" ;;
+    noon) echo "锄禾日当午，汗滴禾下土。 ——李绅《悯农》" ;;
+    evening) echo "夕阳无限好，只是近黄昏。 ——李商隐《登乐游原》" ;;
+    night) echo "春眠不觉晓，处处闻啼鸟。 ——孟浩然《春晓》" ;;
+  esac
+}
+__mox_greet() {
+  case "$(__mox_phase)" in
+    morning) echo "早安，新的一天从容器里开始 ☀" ;;
+    noon) echo "午安，喝口水再战 ☕" ;;
+    evening) echo "晚安，夜色正好适合折腾 🌙" ;;
+    night) echo "夜深了，注意身体，别熬太晚 🌃" ;;
+  esac
+  echo "  $(__mox_poem "$(__mox_phase)")"
+}
+__mox_egg() {
+  echo "🥚 彩蛋：你找到了隐藏菜单！"
+  echo "   mox-proot 的每一行代码都是手写对齐上游 PRoot 行为——没有抄。"
+  echo "   试试无参 mox 进入，看时间送你的那句诗。"
+}
+# 彩蛋暗号（先于一切，命中即退出；不进入管理控制台）。
+case "${1:-}" in
+  egg|彩蛋|konami|蛋)
+    __mox_egg
+    exit 0
+    ;;
+esac
+
+if [ -n "${MOX_CONTAINER:-}" ]; then
+  # 容器内：反穿透到宿主真实 MOX_ROOT（bind-mount 挂载点）。
   case "${1:-}" in
     login|shell|launch)
       echo "mox: 已在容器内，不能嵌套进入其他容器（ptrace 不支持套娃）。" >&2
@@ -56,16 +98,22 @@ if [ -n "${MOXSH_CONTAINER:-}" ]; then
       exit 1
       ;;
   esac
-  ROOT=/moxsh-root
+  ROOT=/mox-proot-root
 else
   # 宿主侧直接跑：普通 distro CLI 包装。
-  ROOT="${MOXSH_ROOT:-$HOME/.moxsh}"
+  ROOT="${MOX_ROOT:-$HOME/.mox-proot}"
 fi
-# 进入即展示品牌标识（无参数交互入口时）。
+# 进入即画品牌字标 + 时间上下文问候 + 古诗（无参数交互入口时）。
 if [ "$#" -eq 0 ]; then
-  printf '%s\n' "moxsh · proot — 多架构容器引擎"
+cat <<'MOX_BANNER'
+_  _ ____ _  _
+|\/| |  |  \/
+|  | |__| _/\_
+  mox-proot
+MOX_BANNER
+  __mox_greet
 fi
-exec env MOXSH_ROOT="$ROOT" "$(dirname "$0")/moxsh-proot-distro" "$@"
+exec env MOX_ROOT="$ROOT" "$(dirname "$0")/mox-proot-distro" "$@"
 "#;
 
 /// 宿主 bin 目录（与落盘启动器同一落点：`$PREFIX/bin` > `~/.local/bin`）。
@@ -74,6 +122,10 @@ pub fn host_bin_dir() -> PathBuf {
 }
 
 /// 写 mox 脚本到 bin 目录（幂等；目录不存在则创建）。
+///
+/// 品牌字标直接内嵌在 [`CONSOLE_SCRIPT`] 里（与安装器 heredoc 逐字节一致，
+/// 由 CI 的 `test-console-sync.sh` 盯防漂移）；单一来源靠下方单测
+/// `console_script_embeds_brand_banner` 保证字标与 `brand::BANNER` 同步。
 pub fn write_console_script(bin_dir: &Path) -> ProotResult<PathBuf> {
     fs::create_dir_all(bin_dir)?;
     let path = bin_dir.join(CONSOLE_CMD);
@@ -82,7 +134,7 @@ pub fn write_console_script(bin_dir: &Path) -> ProotResult<PathBuf> {
     Ok(path)
 }
 
-/// 控制台是否启用（`MOXSH_PROOT_CONSOLE=0` 关闭；默认开）。
+/// 控制台是否启用（`MOX_PROOT_CONSOLE=0` 关闭；默认开）。
 pub fn console_enabled() -> bool {
     std::env::var(CONSOLE_DISABLE_ENV).as_deref() != Ok("0")
 }
@@ -91,11 +143,11 @@ pub fn console_enabled() -> bool {
 ///
 /// `bin_dir`：宿主 bin 目录（[`host_bin_dir`] 的返回值；显式传入便于测试）。
 ///
-/// - 绑定：`<bin_dir> → /moxsh-host`、`<root> → /moxsh-root`；
+/// - 绑定：`<bin_dir> → /mox-proot-host`、`<root> → /mox-proot-root`；
 ///   bin 目录缺失或没有 mox 脚本时跳过 host 绑定（老安装无伤），
-///   MOXSH_ROOT 绑定照常（排查/排障时容器内看得见其他 rootfs）；
-/// - env：`MOXSH_ROOT=/moxsh-root`、`MOXSH_CONTAINER=1`、PATH 前置
-///   `/moxsh-host`（用户显式 `-e` 给的 PATH 只前置不覆盖）。
+///   MOX_ROOT 绑定照常（排查/排障时容器内看得见其他 rootfs）；
+/// - env：`MOX_ROOT=/mox-proot-root`、`MOX_CONTAINER=1`、PATH 前置
+///   `/mox-proot-host`（用户显式 `-e` 给的 PATH 只前置不覆盖）。
 pub fn bind_console(cfg: &mut ProotConfig, root: &Path, bin_dir: &Path) {
     if !console_enabled() {
         return;
@@ -108,10 +160,10 @@ pub fn bind_console(cfg: &mut ProotConfig, root: &Path, bin_dir: &Path) {
         .push((GUEST_ROOT_MOUNT.to_string(), root.display().to_string()));
 
     // env 注入（后写覆盖先写 = 控制台语义优先；用户 -e 的 PATH 除外）。
-    cfg.env.push(("MOXSH_ROOT".to_string(), GUEST_ROOT_MOUNT.to_string()));
+    cfg.env.push(("MOX_ROOT".to_string(), GUEST_ROOT_MOUNT.to_string()));
     cfg.env
         .push((CONTAINER_MARK.to_string(), "1".to_string()));
-    // PATH 前置 /moxsh-host：有则前置，无则垫一份含挂载点的默认 PATH。
+    // PATH 前置 /mox-proot-host：有则前置，无则垫一份含挂载点的默认 PATH。
     if let Some(slot) = cfg.env.iter_mut().find(|(k, _)| k == "PATH") {
         if !slot.1.contains(GUEST_HOST_MOUNT) {
             slot.1 = format!("{}:{}", GUEST_HOST_MOUNT, slot.1);
@@ -137,7 +189,7 @@ mod tests {
     use super::*;
 
     fn tmpdir(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("moxsh-console-test-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!("mox-proot-console-test-{}-{}", tag, std::process::id()));
         let _ = fs::remove_dir_all(&d);
         d
     }
@@ -146,11 +198,26 @@ mod tests {
     fn console_script_content_contract() {
         // 脚本必须：unset LD_PRELOAD、嵌套劝退、exec distro、挂载点路径。
         assert!(CONSOLE_SCRIPT.contains("unset LD_PRELOAD"));
-        assert!(CONSOLE_SCRIPT.contains("MOXSH_CONTAINER"));
-        assert!(CONSOLE_SCRIPT.contains("/moxsh-root"));
-        assert!(CONSOLE_SCRIPT.contains("moxsh-proot-distro"));
+        assert!(CONSOLE_SCRIPT.contains("MOX_CONTAINER"));
+        assert!(CONSOLE_SCRIPT.contains("/mox-proot-root"));
+        assert!(CONSOLE_SCRIPT.contains("mox-proot-distro"));
         // 固定命令名，不开放自定义。
         assert_eq!(CONSOLE_CMD, "mox");
+    }
+
+    /// 品牌字标单一来源：CONSOLE_SCRIPT 必须内嵌 brand::BANNER 全文，
+    /// 且与安装器 heredoc 逐字节一致（CI test-console-sync.sh 另行盯防）。
+    #[test]
+    fn console_script_embeds_brand_banner() {
+        assert!(
+            CONSOLE_SCRIPT.contains(crate::proot::brand::BANNER),
+            "mox 脚本内嵌字标必须与 brand::BANNER 一致"
+        );
+        // 惊喜三件套（时间上下文 / 古诗 / 彩蛋）必须都在脚本里。
+        assert!(CONSOLE_SCRIPT.contains("__mox_phase"));
+        assert!(CONSOLE_SCRIPT.contains("《")); // 古诗出处
+        assert!(CONSOLE_SCRIPT.contains("彩蛋"));
+        assert!(CONSOLE_SCRIPT.contains("__mox_greet"));
     }
 
     #[test]
@@ -172,12 +239,12 @@ mod tests {
     fn bind_console_adds_bindings_and_env() {
         let dir = tmpdir("bind");
         let bin = dir.join("bin");
-        let root = dir.join("moxsh");
+        let root = dir.join("mox-proot");
         fs::create_dir_all(&bin).unwrap();
         fs::create_dir_all(&root).unwrap();
         write_console_script(&bin).unwrap();
 
-        // console_enabled 默认开（CI 上无 MOXSH_PROOT_CONSOLE=0）。
+        // console_enabled 默认开（CI 上无 MOX_PROOT_CONSOLE=0）。
         if !console_enabled() {
             return;
         }
@@ -194,15 +261,15 @@ mod tests {
             .iter()
             .any(|(g, h)| g == GUEST_ROOT_MOUNT && h == &root.display().to_string()));
 
-        // env：MOXSH_ROOT 指挂载点、MOXSH_CONTAINER=1、PATH 前置挂载点。
+        // env：MOX_ROOT 指挂载点、MOX_CONTAINER=1、PATH 前置挂载点。
         let get = |k: &str| {
             cfg.env
                 .iter()
                 .find(|(ek, _)| ek == k)
                 .map(|(_, v)| v.clone())
         };
-        assert_eq!(get("MOXSH_ROOT").as_deref(), Some(GUEST_ROOT_MOUNT));
-        assert_eq!(get("MOXSH_CONTAINER").as_deref(), Some("1"));
+        assert_eq!(get("MOX_ROOT").as_deref(), Some(GUEST_ROOT_MOUNT));
+        assert_eq!(get("MOX_CONTAINER").as_deref(), Some("1"));
         let path = get("PATH").expect("PATH 应被注入");
         assert!(
             path.starts_with(&format!("{}:", GUEST_HOST_MOUNT)),
@@ -217,7 +284,7 @@ mod tests {
         bind_console(&mut cfg2, &root, &bin);
         assert_eq!(
             cfg2.env.iter().find(|(k, _)| k == "PATH").map(|(_, v)| v.as_str()),
-            Some("/moxsh-host:/bin")
+            Some("/mox-proot-host:/bin")
         );
 
         let _ = fs::remove_dir_all(&dir);
@@ -226,7 +293,7 @@ mod tests {
     #[test]
     fn bind_console_skips_host_bind_without_script() {
         let dir = tmpdir("noscript");
-        let root = dir.join("moxsh");
+        let root = dir.join("mox-proot");
         let bin = dir.join("bin"); // 存在但空的 bin 目录（无 mox 脚本）
         fs::create_dir_all(&root).unwrap();
         fs::create_dir_all(&bin).unwrap();
@@ -235,7 +302,7 @@ mod tests {
         }
         let mut cfg = ProotConfig::new(&root);
         bind_console(&mut cfg, &root, &bin);
-        // 没有 mox 脚本：不绑 host 目录，但 MOXSH_ROOT 绑定照常。
+        // 没有 mox 脚本：不绑 host 目录，但 MOX_ROOT 绑定照常。
         assert!(!cfg.bindings.iter().any(|(g, _)| g == GUEST_HOST_MOUNT));
         assert!(cfg.bindings.iter().any(|(g, _)| g == GUEST_ROOT_MOUNT));
         let _ = fs::remove_dir_all(&dir);

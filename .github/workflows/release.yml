@@ -129,12 +129,12 @@ jobs:
         run: cargo build --release --target ${{ matrix.target }} --bins
 
       # 资产双命名（缺一即有一侧安装器死链）：
-      #   - <name>：Go 安装器 AssetName 约定 moxsh-proot-<goos>-<arch>[-musl]
-      #   - <legacy_name>：bash 一键脚本约定 moxsh-proot-<triple>（仅 android）
+      #   - <name>：Go 安装器 AssetName 约定 mox-proot-<goos>-<arch>[-musl]
+      #   - <legacy_name>：bash 一键脚本约定 mox-proot-<triple>（仅 android）
       - name: 收集产物
         run: |
           mkdir -p dist
-          for bin in moxsh-proot moxsh-proot-distro; do
+          for bin in mox-proot mox-proot-distro; do
             cp "target/${{ matrix.target }}/release/$bin" "dist/${bin}-${{ matrix.name }}"
             if [ -n "${{ matrix.legacy_name }}" ]; then
               cp "target/${{ matrix.target }}/release/$bin" "dist/${bin}-${{ matrix.legacy_name }}"
@@ -176,8 +176,8 @@ jobs:
           mkdir -p ../dist
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
             go build -ldflags "-s -w" \
-            -o "../dist/moxsh-installer-${{ matrix.goos }}-${{ matrix.goarch }}" \
-            ./cmd/moxsh-installer
+            -o "../dist/mox-proot-installer-${{ matrix.goos }}-${{ matrix.goarch }}" \
+            ./cmd/mox-proot-installer
       - name: 上传到 Release
         uses: softprops/action-gh-release@v2
         with:
@@ -228,7 +228,7 @@ jobs:
           fail_on_unmatched_files: true
 
   # 国内镜像：把全部 Release 资产（引擎 + distro + Go 安装器 + 校验文件）同步到
-  # Gitee（thousand-code-crafts/moxsh-proot release 1217672）。Gitee 是 GitHub 的
+  # Gitee（thousand-code-crafts/mox-proot release 1217672）。Gitee 是 GitHub 的
   # 源码镜像，但「不自动同步二进制资产」——所以国内用户此前选 Gitee 源会 404。
   # 本步用 GITEE_TOKEN 把二进制也推上去，Gitee 路径对国内用户真正可用。
   # 前置：仓库 Secrets 配置 GITEE_TOKEN（thousand-code-crafts 满权限写令牌）。
@@ -238,7 +238,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITEE_OWNER: thousand-code-crafts
-      GITEE_REPO: moxsh-proot
+      GITEE_REPO: mox-proot
       GITEE_RID: "1217672"
     steps:
       - uses: actions/checkout@v4

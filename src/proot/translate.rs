@@ -151,9 +151,9 @@ impl TranslateRules {
     }
 
     /// 隐藏路径重定向目标：rootfs 下保证不存在的哨兵路径（访问即 ENOENT）。
-    /// `.moxsh_hidden` 为引擎内部约定目录；`noent` 固定文件名确保不可命中。
+    /// `.mox_proot_hidden` 为引擎内部约定目录；`noent` 固定文件名确保不可命中。
     pub fn hidden_sentinel(&self) -> PathBuf {
-        self.rootfs.join(".moxsh_hidden").join("noent")
+        self.rootfs.join(".mox_proot_hidden").join("noent")
     }
 
     /// proot-distro 默认绑定集构造（对齐 proot-distro login 的 --bind 列表）。
@@ -300,7 +300,7 @@ impl TranslateRules {
     ///
     /// 上游 fake_id0 扩展机制说明（行为对齐，非代码对齐）：
     /// - getuid/getgid/geteuid/... 在 enter 阶段被替换为 getuid32 类，exit 阶段
-    ///   返回值强制 0（`-i uid:gid` 时为映射值，moxsh 固定 0:0）；
+    ///   返回值强制 0（`-i uid:gid` 时为映射值，mox-proot 固定 0:0）；
     /// - chown/fchown/chownat/setuid/setgid/setreuid/... 伪造成功（返回 0，不实际执行）；
     /// - /proc 下身份文件在读取出口做内容改写，即本函数标记的三类。
     pub fn apply_fake_root(&self, path: &str) -> FakeRootAction {
@@ -476,11 +476,11 @@ fn make_rel(rest: &[String]) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// 构造典型规则：rootfs=/data/data/com.moxsh/containers/ubuntu/rootfs，
+    /// 构造典型规则：rootfs=/data/data/com.mox-proot/containers/ubuntu/rootfs，
     /// proot-distro 默认绑定 + 手工 /dev/urandom 细绑定。
     fn rules() -> TranslateRules {
         let mut r = TranslateRules::with_distro_defaults(Path::new(
-            "/data/data/com.moxsh/containers/ubuntu/rootfs",
+            "/data/data/com.mox-proot/containers/ubuntu/rootfs",
         ));
         // 嵌套绑定测试素材：/dev/urandom 细绑定覆盖 /dev 粗绑定（最长前缀优先）。
         r.add_binding("/dev/urandom", "/data/local/tmp/urandom");
@@ -506,7 +506,7 @@ mod tests {
         let r = rules();
         assert_eq!(
             r.guest_to_host("/"),
-            PathBuf::from("/data/data/com.moxsh/containers/ubuntu/rootfs")
+            PathBuf::from("/data/data/com.mox-proot/containers/ubuntu/rootfs")
         );
     }
 
@@ -516,7 +516,7 @@ mod tests {
         let r = rules();
         assert_eq!(
             r.guest_to_host("/usr/bin/ls"),
-            PathBuf::from("/data/data/com.moxsh/containers/ubuntu/rootfs/usr/bin/ls")
+            PathBuf::from("/data/data/com.mox-proot/containers/ubuntu/rootfs/usr/bin/ls")
         );
     }
 
@@ -587,7 +587,7 @@ mod tests {
         // 绝对路径仍走完整翻译（回归保护：修复不能波及绝对路径语义）。
         assert_eq!(
             r.guest_to_host("/root/notes.txt"),
-            PathBuf::from("/data/data/com.moxsh/containers/ubuntu/rootfs/root/notes.txt")
+            PathBuf::from("/data/data/com.mox-proot/containers/ubuntu/rootfs/root/notes.txt")
         );
     }
 
@@ -617,12 +617,12 @@ mod tests {
         let r = rules();
         assert_eq!(
             r.host_to_guest(Path::new(
-                "/data/data/com.moxsh/containers/ubuntu/rootfs/etc/os-release"
+                "/data/data/com.mox-proot/containers/ubuntu/rootfs/etc/os-release"
             )),
             Some("/etc/os-release".to_string())
         );
         assert_eq!(
-            r.host_to_guest(Path::new("/data/data/com.moxsh/containers/ubuntu/rootfs")),
+            r.host_to_guest(Path::new("/data/data/com.mox-proot/containers/ubuntu/rootfs")),
             Some("/".to_string())
         );
     }
@@ -653,7 +653,7 @@ mod tests {
         let r = rules();
         assert_eq!(
             r.guest_to_host("/usr/../etc/hostname"),
-            PathBuf::from("/data/data/com.moxsh/containers/ubuntu/rootfs/etc/hostname")
+            PathBuf::from("/data/data/com.mox-proot/containers/ubuntu/rootfs/etc/hostname")
         );
     }
 
@@ -690,7 +690,7 @@ mod tests {
         let r = rules();
         assert_eq!(
             r.guest_to_host("/device"),
-            PathBuf::from("/data/data/com.moxsh/containers/ubuntu/rootfs/device")
+            PathBuf::from("/data/data/com.mox-proot/containers/ubuntu/rootfs/device")
         );
     }
 

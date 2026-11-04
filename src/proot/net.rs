@@ -235,7 +235,7 @@ pub fn render_resolv_conf(profile: &NetworkProfile) -> String {
         v4 = DEFAULT_DNS_V4.to_vec();
     }
     let mut out = String::new();
-    out.push_str("# 由 moxsh 引擎生成（网络栈重写 M7）——请勿手工编辑，重启容器会重生成\n");
+    out.push_str("# 由 mox-proot 引擎生成（网络栈重写 M7）——请勿手工编辑，重启容器会重生成\n");
     for a in v4.iter().chain(v6.iter()) {
         let _ = writeln!(out, "nameserver {}", a);
     }
@@ -310,13 +310,13 @@ pub fn merge_hosts_into_rootfs(host_hosts: &str, rootfs_etc_hosts: &Path) -> std
     Ok(added)
 }
 
-/// 生成容器网络边界报告（`moxsh-proot-distro net` 的 Rust 侧主体）。
+/// 生成容器网络边界报告（`mox-proot-distro net` 的 Rust 侧主体）。
 ///
 /// 口径：如实说明"共享宿主栈"的语义、当前 DNS/hosts/IPv6/出网状态，
 /// 不夸大成隔离。Android 与正常 Linux 通用。
 pub fn network_report(profile: &NetworkProfile, hosts_added: usize, egress_ok: bool) -> String {
     let mut out = String::new();
-    out.push_str("== moxsh 容器网络边界 ==\n");
+    out.push_str("== mox-proot 容器网络边界 ==\n");
     out.push_str("模式：共享宿主内核网络栈（PRoot 无 netns 隔离）\n");
     out.push_str("  - guest 内 ip link / /proc/net/dev 看到的是宿主网卡（含 lo），语义正确\n");
     out.push_str("  - 出网、路由、防火墙能力与宿主完全一致；容器无法绕过宿主网络策略\n");
@@ -430,7 +430,7 @@ mod tests {
     #[test]
     fn merge_hosts_into_rootfs_real_file() {
         // 真文件 I/O：rootfs 已有部分条目，宿主 hosts 含新条目 + 重复条目
-        let dir = std::env::temp_dir().join(format!("moxsh-net-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("mox-proot-net-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let hosts_path = dir.join("hosts");

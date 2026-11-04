@@ -58,8 +58,12 @@ pub struct DistroSpec {
     pub id: &'static str,
     /// 展示名。
     pub name: &'static str,
-    /// 版本描述。
+    /// 版本描述（默认版本）。
     pub version: &'static str,
+    /// 可选版本清单（含默认版本，供 `mox-proot-distro versions <id>` 列出
+    /// 与 `install --version` 校验；T3）。非默认版本需额外 URL 矩阵，
+    /// 当前仅默认版本接入下载链路，其余版本在此列出并校验。
+    pub versions: &'static [&'static str],
     /// (宿主 uname.machine, rootfs 架构名) 映射；查不到即不支持该设备。
     ///
     /// **必须与 URL 覆盖一致**：arch_map 声明支持 x86_64 就必须给
@@ -133,6 +137,7 @@ pub fn builtin_specs() -> Vec<DistroSpec> {
             id: "ubuntu",
             name: "Ubuntu",
             version: "24.04 LTS (base)",
+            versions: &["24.04 LTS (base)", "22.04 LTS", "20.04 LTS"],
             arch_map: vec![("aarch64", "arm64"), ("x86_64", "amd64")],
             url_official:
                 "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/ubuntu-base-24.04.2-base-arm64.tar.gz",
@@ -153,6 +158,7 @@ pub fn builtin_specs() -> Vec<DistroSpec> {
             id: "debian",
             name: "Debian",
             version: "12 (bookworm)",
+            versions: &["12 (bookworm)", "11 (bullseye)"],
             arch_map: vec![("aarch64", "arm64"), ("x86_64", "amd64")],
             url_official:
                 "https://us.lxd.images.canonical.com/images/debian/bookworm/arm64/default/rootfs.tar.xz",
@@ -176,6 +182,7 @@ pub fn builtin_specs() -> Vec<DistroSpec> {
             id: "kali",
             name: "Kali",
             version: "rolling (nethunter minimal)",
+            versions: &["rolling (nethunter minimal)"],
             // NetHunter minimal rootfs 官方仅出 arm64 构建（kalifs-amd64
             // 404 实证）；x86_64 设备装 Kali 请用 debian/ubuntu + kali 源，
             // 或自定义 rootfs（install_custom）。arch_map 不声明就不会有
@@ -196,6 +203,7 @@ pub fn builtin_specs() -> Vec<DistroSpec> {
             id: "alpine",
             name: "Alpine",
             version: "3.20 (minirootfs)",
+            versions: &["3.20 (minirootfs)", "3.19 (minirootfs)", "edge"],
             arch_map: vec![("aarch64", "aarch64"), ("x86_64", "x86_64")],
             url_official:
                 "https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz",
@@ -221,7 +229,7 @@ pub fn builtin_specs() -> Vec<DistroSpec> {
 pub struct InstalledDistro {
     pub id: String,
     pub rootfs: PathBuf,
-    /// 是否存在 `.moxsh-ok` 完成标记（解压成功且完成初始化）。
+    /// 是否存在 `.mox-proot-ok` 完成标记（解压成功且完成初始化）。
     pub initialized: bool,
 }
 
@@ -264,9 +272,9 @@ pub fn sanitize_dns_csv(csv: &str) -> Vec<String> {
     out
 }
 
-/// 发行版管理器：以 moxsh 数据根目录为基准管理 containers/。
+/// 发行版管理器：以 mox-proot 数据根目录为基准管理 containers/。
 pub struct DistroManager {
-    /// moxsh 数据根（Android: /data/data/com.moxsh/files）。
+    /// mox-proot 数据根（Android: /data/data/com.mox-proot/files）。
     root: PathBuf,
     /// 安装时写入 rootfs 的 DNS 列表；空则用 [`DEFAULT_DNS_SERVERS`]。
     dns_servers: Vec<String>,
@@ -308,7 +316,7 @@ impl DistroManager {
 
     /// 校验失败统一错误。
     /// `pub`：除本模块与 `cli::launch_spec` 复用外，二进制 crate
-    ///（`moxsh-proot-distro`）也调用它做 id 白名单校验（防路径穿越），
+    ///（`mox-proot-distro`）也调用它做 id 白名单校验（防路径穿越），
     /// 而二进制 crate 与 lib crate 相互独立，`pub(crate)` 无法跨过。
     pub fn check_id(&self, id: &str) -> ProotResult<()> {
         if Self::valid_id(id) {
@@ -325,7 +333,7 @@ impl DistroManager {
 
     /// 完成标记路径。
     fn ok_marker(&self, id: &str) -> PathBuf {
-        self.containers_dir().join(id).join(".moxsh-ok")
+        self.containers_dir().join(id).join(".mox-proot-ok")
     }
 
     /// 缓存目录：`$root/cache`。
@@ -494,10 +502,10 @@ impl DistroManager {
         // 4) 初始化：DNS + 换源提示 + 容器 env 文件（LANG 兜底，中文不乱码）
         cb("初始化 DNS 与源", 0, 1);
         self.init_dns_and_repos(&rootfs);
-        // 容器 env 文件（etc/moxsh/env）：装完即 C.UTF-8；用户可改它定制
+        // 容器 env 文件（etc/mox-proot/env）：装完即 C.UTF-8；用户可改它定制
         // （roadmap §2）。已存在则不覆盖（restore 回来的 rootfs 尊重原值）。
         if locale::write_default_env_file(&rootfs).unwrap_or(false) {
-            cb("写入容器环境文件（etc/moxsh/env）", 0, 1);
+            cb("写入容器环境文件（etc/mox-proot/env）", 0, 1);
         }
 
         // 4.5) post-install 钩子（Python/Lua，引擎内执行；无解释器则优雅跳过）
@@ -507,7 +515,7 @@ impl DistroManager {
         }
         if report.has_failure() {
             eprintln!(
-                "moxsh-proot: post-install 钩子存在失败项（{}），rootfs 保留可用",
+                "mox-proot: post-install 钩子存在失败项（{}），rootfs 保留可用",
                 report.summary()
             );
         }
@@ -515,7 +523,7 @@ impl DistroManager {
         // 5) 完成标记
         fs::write(self.ok_marker(spec.id), spec.version.as_bytes())?;
         // 容器内控制台入口 mox（roadmap §3；与安装器落盘同源）。
-        // 失败不阻断安装——容器内排障还有 moxsh-proot-distro 全路径可用。
+        // 失败不阻断安装——容器内排障还有 mox-proot-distro 全路径可用。
         let _ = console::write_console_script(&console::host_bin_dir());
         cb(&format!("安装完成：{}", spec.id), 1, 1);
         Ok(())
@@ -553,7 +561,7 @@ impl DistroManager {
         self.init_dns_and_repos(&rootfs);
         // 容器 env 文件（与预置发行版路径一致：LANG 兜底防中文乱码）
         if locale::write_default_env_file(&rootfs).unwrap_or(false) {
-            cb("写入容器环境文件（etc/moxsh/env）", 0, 1);
+            cb("写入容器环境文件（etc/mox-proot/env）", 0, 1);
         }
         // post-install 钩子（自定义 rootfs 同样生效）
         let report = script::run_hooks(&self.root, &rootfs, id, script::HookKind::PostInstall)?;
@@ -603,7 +611,7 @@ impl DistroManager {
         }
     }
 
-    /// 网络边界报告（`moxsh-proot-distro net` 的 Rust 侧主体）。
+    /// 网络边界报告（`mox-proot-distro net` 的 Rust 侧主体）。
     ///
     /// 对已安装发行版现场生成画像：探测 IPv6/出网、读取 rootfs 内
     /// resolv.conf 与 hosts 状态。**不改动任何配置**——纯报告语义，
@@ -705,12 +713,12 @@ impl DistroManager {
         let mut cmd: Vec<String> = Vec::new();
         // 输出**绝对路径**的引擎兄弟二进制：调用方（含 App 终端会话）无需依赖 PATH，
         // 也避免下载模型下引擎位于独立目录（$filesDir/proot/bin）时裸名 `proot` 解析不到。
-        // moxsh-proot-distro 与引擎 moxsh-proot 同目录部署（App 的 ensureEngine 即如此落盘）。
+        // mox-proot-distro 与引擎 mox-proot 同目录部署（App 的 ensureEngine 即如此落盘）。
         let engine_abs = std::env::current_exe()
             .ok()
-            .and_then(|p| p.parent().map(|d| d.join("moxsh-proot")))
+            .and_then(|p| p.parent().map(|d| d.join("mox-proot")))
             .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "moxsh-proot".into());
+            .unwrap_or_else(|| "mox-proot".into());
         // 对齐上游 proot-distro：kill-on-exit 防孤儿 tracee；link2symlink 兼容
         // 不支持硬链接的 sdcardfs/fuse 文件系统。
         cmd.push(engine_abs);
@@ -775,7 +783,7 @@ fn http_get(url: &str) -> Option<String> {
     };
     let mut stream = TcpStream::connect(addr).ok()?;
     let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: moxsh-checksum\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: mox-proot-checksum\r\nConnection: close\r\n\r\n",
         path, authority
     );
     stream.write_all(req.as_bytes()).ok()?;
@@ -1030,7 +1038,7 @@ mod tests {
     /// set_dns_servers_csv：合法值覆盖、全非法时保留默认（国内公共 DNS）。
     #[test]
     fn dns_setter_fallback() {
-        let mut mgr = DistroManager::new(std::path::Path::new("/tmp/moxsh-test"));
+        let mut mgr = DistroManager::new(std::path::Path::new("/tmp/mox-proot-test"));
         mgr.set_dns_servers_csv("8.8.8.8");
         assert_eq!(mgr.dns_servers, vec!["8.8.8.8".to_string()]);
         mgr.set_dns_servers_csv("bad\nvalue");
@@ -1104,7 +1112,7 @@ mod tests {
     #[test]
     fn login_cmd_shape() {
         // 无 rootfs 时报未安装。
-        let m = DistroManager::new(Path::new("/nonexistent-moxsh"));
+        let m = DistroManager::new(Path::new("/nonexistent-mox-proot"));
         assert!(matches!(
             m.login_cmd("ubuntu", None),
             Err(ProotError::DistroNotInstalled(_))

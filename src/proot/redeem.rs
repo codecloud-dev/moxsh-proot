@@ -2,8 +2,8 @@
 //! **设备绑定（回环）+ 授权校验（在线）**。
 //!
 //! 定位：付费商品（proot 引擎增值版等，后台可加）的设备级授权。fan 是**账号级**
-//! 粉丝福利（`mox fan`，`$MOXSH_ROOT/fan.toml`）；本模块是**设备级**商品授权
-//! （`mox redeem`，`$MOXSH_ROOT/device.toml` + `entitlements.toml`），两套文件、
+//! 粉丝福利（`mox fan`，`$MOX_ROOT/fan.toml`）；本模块是**设备级**商品授权
+//! （`mox redeem`，`$MOX_ROOT/device.toml` + `entitlements.toml`），两套文件、
 //! 两条命令、互不覆盖（项目主人拍板：粉丝系统不许被吃掉）。
 //!
 //! 流程（手机 / Termux）：
@@ -44,16 +44,16 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::proot::{ProotError, ProotResult};
 
-/// 设备身份文件相对 `$MOXSH_ROOT` 的位置（删容器不删它；删了=换设备，需重新绑定）。
+/// 设备身份文件相对 `$MOX_ROOT` 的位置（删容器不删它；删了=换设备，需重新绑定）。
 pub const DEVICE_FILE_REL: &str = "device.toml";
 /// 授权缓存文件（`mox redeem status` 拉取后落盘；门禁只读缓存，不联网）。
 pub const ENTS_FILE_REL: &str = "entitlements.toml";
-/// 绑定页 URL（`MOXSH_BIND_PAGE` 覆盖）。
-pub const BIND_PAGE_ENV: &str = "MOXSH_BIND_PAGE";
-/// 授权校验端点（`MOXSH_ENTITLEMENT_API` 覆盖）。
-pub const ENTITLEMENT_API_ENV: &str = "MOXSH_ENTITLEMENT_API";
-/// 设备显示名（`MOXSH_DEVICE_NAME` 覆盖；默认取 hostname）。
-pub const DEVICE_NAME_ENV: &str = "MOXSH_DEVICE_NAME";
+/// 绑定页 URL（`MOX_BIND_PAGE` 覆盖）。
+pub const BIND_PAGE_ENV: &str = "MOX_BIND_PAGE";
+/// 授权校验端点（`MOX_ENTITLEMENT_API` 覆盖）。
+pub const ENTITLEMENT_API_ENV: &str = "MOX_ENTITLEMENT_API";
+/// 设备显示名（`MOX_DEVICE_NAME` 覆盖；默认取 hostname）。
+pub const DEVICE_NAME_ENV: &str = "MOX_DEVICE_NAME";
 
 /// 回环等待浏览器「登录 + 点绑定」的超时（买家要登录，给宽点）。
 const LOOPBACK_TIMEOUT: Duration = Duration::from_secs(240);
@@ -152,7 +152,7 @@ pub fn load_device(root: &Path) -> Option<DeviceInfo> {
 pub fn save_device(root: &Path, dev: &DeviceInfo) -> ProotResult<()> {
     std::fs::create_dir_all(root).map_err(ProotError::Io)?;
     let text = format!(
-        "# moxsh 设备身份（由 `mox redeem` 写入，请勿手改）。删除本文件 = 放弃本设备，需重新绑定。\n\
+        "# mox-proot 设备身份（由 `mox redeem` 写入，请勿手改）。删除本文件 = 放弃本设备，需重新绑定。\n\
          [device]\n\
          token = \"{}\"\n\
          name = \"{}\"\n\
@@ -215,7 +215,7 @@ pub fn detect_platform() -> String {
     "linux".into()
 }
 
-/// 探测设备显示名（`MOXSH_DEVICE_NAME` > hostname > 通用名）。
+/// 探测设备显示名（`MOX_DEVICE_NAME` > hostname > 通用名）。
 pub fn detect_name() -> String {
     if let Ok(n) = std::env::var(DEVICE_NAME_ENV) {
         let n = n.trim();
@@ -231,7 +231,7 @@ pub fn detect_name() -> String {
             }
         }
     }
-    "moxsh 设备".into()
+    "mox-proot 设备".into()
 }
 
 /// 取本机设备身份：有文件直接用；没有则生成令牌并落盘（**未绑定**，仅 `login` 后会生效）。
@@ -250,7 +250,7 @@ pub fn ensure_device(root: &Path) -> ProotResult<DeviceInfo> {
 
 // ============================ 在线校验（curl 转发，零 Rust 加密） ============================
 
-/// 绑定页 URL（`MOXSH_BIND_PAGE` 覆盖）。
+/// 绑定页 URL（`MOX_BIND_PAGE` 覆盖）。
 /// 默认指向官网 pages.dev 的隐藏页 bind.html——导航里没有入口，
 /// 只能由本命令带 redirect/state/device_token 唤起（与 fan 页同思路）。
 pub fn bind_page_url() -> String {
@@ -262,7 +262,7 @@ pub fn bind_page_url() -> String {
         .to_string()
 }
 
-/// 授权校验端点（`MOXSH_ENTITLEMENT_API` 覆盖）。
+/// 授权校验端点（`MOX_ENTITLEMENT_API` 覆盖）。
 /// 默认走**官网同域反代**（pages.dev/entitlement/check）——Worker 标准域
 /// workers.dev 国内不可达（爱发电 webhook 443 同款坑），pages.dev 实测可达。
 fn entitlement_api() -> String {
@@ -334,7 +334,7 @@ pub fn ents_file_path(root: &Path) -> PathBuf {
 pub fn save_ents(root: &Path, ents: &[Entitlement]) -> ProotResult<()> {
     std::fs::create_dir_all(root).map_err(ProotError::Io)?;
     let mut text = format!(
-        "# moxsh 商品授权缓存（由 `mox redeem status` 拉取后写入，请勿手改）。\n\
+        "# mox-proot 商品授权缓存（由 `mox redeem status` 拉取后写入，请勿手改）。\n\
          [cache]\n\
          fetched_at = {}\n",
         now_unix()
@@ -538,7 +538,7 @@ pub fn parse_ok_callback(request: &str) -> Option<(String, String)> {
 
 /// 回给浏览器的成功页（提示可关闭）。
 fn success_html() -> String {
-    "<!DOCTYPE html><meta charset=utf-8><title>moxsh</title>\
+    "<!DOCTYPE html><meta charset=utf-8><title>mox-proot</title>\
      <body style=\"font-family:sans-serif;text-align:center;padding:60px\">\
      <h2>✅ 设备已绑定，返回终端查看</h2><p>可以关闭这个页面了。</p>"
         .to_string()
@@ -654,7 +654,7 @@ mod tests {
     use super::*;
 
     fn tmp(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("moxsh-redeem-test-{}-{}", tag, std::process::id()));
+        let d = std::env::temp_dir().join(format!("mox-proot-redeem-test-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }
@@ -749,12 +749,12 @@ mod tests {
         assert!(!has_entitlement(&root, "proot-pro"));
         let ents = vec![
             Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 },
-            Entitlement { product_id: "moxsh-plus".into(), tier: "plus".into(), exp: now_unix() + 3600 },
+            Entitlement { product_id: "mox-proot-plus".into(), tier: "plus".into(), exp: now_unix() + 3600 },
         ];
         save_ents(&root, &ents).unwrap();
         assert!(ents_fresh(&root));
         assert!(has_entitlement(&root, "proot-pro"));
-        assert!(has_entitlement(&root, "moxsh-plus"));
+        assert!(has_entitlement(&root, "mox-proot-plus"));
         assert!(!has_entitlement(&root, "no-such"));
         let c = load_ents(&root).unwrap();
         assert_eq!(c.ents.len(), 2);

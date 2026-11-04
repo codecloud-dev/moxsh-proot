@@ -9,12 +9,12 @@ func TestInstallPathMatrix(t *testing.T) {
 		home string
 		want string
 	}{
-		{"termux 用户级", Report{Env: EnvTermux, Prefix: "/data/data/com.termux/files/usr"}, "", "/data/data/com.termux/files/usr/opt/moxsh"},
-		{"linux root 系统级", Report{Env: EnvLinux, IsRoot: true}, "/home/u", "/opt/moxsh"},
-		{"linux 非 root 用户级", Report{Env: EnvLinux, IsRoot: false}, "/home/u", "/home/u/.moxsh"},
-		{"unknown 非 root 兜底", Report{Env: EnvUnknown}, "/home/u", "/home/u/.moxsh"},
-		{"空 home 兜底", Report{Env: EnvLinux, IsRoot: false}, "", "/tmp/.moxsh"},
-		{"macos 用户级", Report{Env: EnvMacOS}, "/Users/u", "/Users/u/.moxsh"},
+		{"termux 用户级", Report{Env: EnvTermux, Prefix: "/data/data/com.termux/files/usr"}, "", "/data/data/com.termux/files/usr/opt/mox-proot"},
+		{"linux root 系统级", Report{Env: EnvLinux, IsRoot: true}, "/home/u", "/opt/mox-proot"},
+		{"linux 非 root 用户级", Report{Env: EnvLinux, IsRoot: false}, "/home/u", "/home/u/.mox-proot"},
+		{"unknown 非 root 兜底", Report{Env: EnvUnknown}, "/home/u", "/home/u/.mox-proot"},
+		{"空 home 兜底", Report{Env: EnvLinux, IsRoot: false}, "", "/tmp/.mox-proot"},
+		{"macos 用户级", Report{Env: EnvMacOS}, "/Users/u", "/Users/u/.mox-proot"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -62,11 +62,11 @@ func TestAssetName(t *testing.T) {
 		r    Report
 		want string
 	}{
-		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc}, "moxsh-proot-linux-amd64"},
-		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc, GlibcVer: 2.39}, "moxsh-proot-linux-amd64"},
-		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc, GlibcVer: 2.31}, "moxsh-proot-linux-amd64-musl"},
-		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcMusl}, "moxsh-proot-linux-amd64-musl"},
-		{Report{GOOS: "linux", Arch: "arm64", Libc: LibcMusl}, "moxsh-proot-linux-arm64-musl"},
+		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc}, "mox-proot-linux-amd64"},
+		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc, GlibcVer: 2.39}, "mox-proot-linux-amd64"},
+		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcGlibc, GlibcVer: 2.31}, "mox-proot-linux-amd64-musl"},
+		{Report{GOOS: "linux", Arch: "amd64", Libc: LibcMusl}, "mox-proot-linux-amd64-musl"},
+		{Report{GOOS: "linux", Arch: "arm64", Libc: LibcMusl}, "mox-proot-linux-arm64-musl"},
 	}
 	for _, c := range cases {
 		if got := c.r.AssetName(); got != c.want {

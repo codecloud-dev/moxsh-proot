@@ -13,7 +13,7 @@
 //!   安装流程（架构适配 URL、sha256 动态获取、解压初始化全复用）；
 //! - 用户自定义名 → [`ResolvedLink::Url`]：走 `install_custom` 流程。
 //!
-//! 自定义短链定义（`links.toml`，用户级 `~/.config/moxsh-proot/links.toml`）：
+//! 自定义短链定义（`links.toml`，用户级 `~/.config/mox-proot/links.toml`）：
 //!
 //! ```toml
 //! [links]
@@ -209,7 +209,7 @@ pub fn resolve(spec: &str, user: &LinkTable) -> ProotResult<ResolvedLink> {
     }
     let avail = builtin_names().join(" / ");
     Err(ProotError::InvalidArg(format!(
-        "未知短链 mx:{}（可用：mx:{}；自定义见 ~/.config/moxsh-proot/links.toml）",
+        "未知短链 mx:{}（可用：mx:{}；自定义见 ~/.config/mox-proot/links.toml）",
         name, avail
     )))
 }
@@ -219,15 +219,15 @@ pub fn builtin_names() -> Vec<&'static str> {
     BUILTIN_LINKS.iter().map(|(n, _)| *n).collect()
 }
 
-/// 用户级 `links.toml` 路径：`$MOXSH_CONFIG_DIR/links.toml`，缺省
-/// `~/.config/moxsh-proot/links.toml`（XDG 风格，不占 $HOME 根目录）。
+/// 用户级 `links.toml` 路径：`$MOX_CONFIG_DIR/links.toml`，缺省
+/// `~/.config/mox-proot/links.toml`（XDG 风格，不占 $HOME 根目录）。
 pub fn user_links_path() -> std::path::PathBuf {
-    if let Some(dir) = std::env::var_os("MOXSH_CONFIG_DIR") {
+    if let Some(dir) = std::env::var_os("MOX_CONFIG_DIR") {
         return std::path::PathBuf::from(dir).join("links.toml");
     }
     let home = std::env::var_os("HOME").unwrap_or_default();
     std::path::Path::new(&home)
-        .join(".config/moxsh-proot")
+        .join(".config/mox-proot")
         .join("links.toml")
 }
 
@@ -283,7 +283,7 @@ mod tests {
         let t = parse_links_toml(
             r#"
             [settings]
-            root_dir = "~/moxsh"   # 不是 [links] 段，忽略
+            root_dir = "~/mox-proot"   # 不是 [links] 段，忽略
             [links]
             # 注释行
             dev = "https://a/x.tar.xz" # 行尾注释
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn load_missing_file_is_empty_table() {
-        let t = LinkTable::load(Path::new("/nonexistent/moxsh/links.toml")).unwrap();
+        let t = LinkTable::load(Path::new("/nonexistent/mox-proot/links.toml")).unwrap();
         assert_eq!(t.links.len(), 0);
     }
 }

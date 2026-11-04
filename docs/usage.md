@@ -1,21 +1,21 @@
-# moxsh-proot 用法手册
+# mox-proot 用法手册
 
 > 对齐上游 PRoot 常用选项面（`-r/-0/-b/-w/-R/-S/-e`、`--` 后接命令），
 > 由 Rust 自研 ptrace 引擎实现，非上游 C 版的封装。
 
-## 1. moxsh-proot（单命令容器）
+## 1. mox-proot（单命令容器）
 
 ### 1.1 最小示例
 
 ```bash
 # 推荐绑定集 + fake root，进 rootfs 里的 bash
-moxsh-proot -R ~/ubuntu -0 -- bash
+mox-proot -R ~/ubuntu -0 -- bash
 
 # 最小模式（装包场景用最小绑定集），指定初始目录
-moxsh-proot -S ~/alpine -w /root -- sh
+mox-proot -S ~/alpine -w /root -- sh
 
 # 裸 rootfs 模式：只翻路径，不加任何推荐绑定
-moxsh-proot -r ~/rootfs -0 -- /bin/sh
+mox-proot -r ~/rootfs -0 -- /bin/sh
 ```
 
 ### 1.2 选项面
@@ -43,22 +43,22 @@ moxsh-proot -r ~/rootfs -0 -- /bin/sh
   解包未规范化的 rootfs 也能跑。
 - **`-q/-k/-v` 等上游选项未实现**：不支持时明确报错，不假装支持。
 
-## 2. moxsh-proot-distro（发行版管理）
+## 2. mox-proot-distro（发行版管理）
 
 ```bash
-moxsh-proot-distro list                  # 已安装 / 可安装一览
-moxsh-proot-distro install alpine        # 安装（内部下载 + sha256 校验）
-moxsh-proot-distro install ubuntu --cache ~/ubuntu.tar.xz
-moxsh-proot-distro login alpine          # 登录 shell
-moxsh-proot-distro shell alpine          # 非登录 shell
-moxsh-proot-distro remove alpine
-moxsh-proot-distro backup alpine ~/a.tar.gz
-moxsh-proot-distro restore alpine ~/a.tar.gz
-moxsh-proot-distro net                   # 网络边界报告（DNS/IPv6/出网）
-moxsh-proot-distro env alpine            # 预览登录时注入的环境（中文排查）
-moxsh-proot-distro launch mx:alpine      # 短链启动（未装自动装，装完直接进）
-moxsh-proot-distro wizard                # 一次性初始化（数据根 + 发行版 + 启动器）
-moxsh-proot-distro wizard --root /sd/moxsh --distro ubuntu   # 自定义数据根/发行版
+mox-proot-distro list                  # 已安装 / 可安装一览
+mox-proot-distro install alpine        # 安装（内部下载 + sha256 校验）
+mox-proot-distro install ubuntu --cache ~/ubuntu.tar.xz
+mox-proot-distro login alpine          # 登录 shell
+mox-proot-distro shell alpine          # 非登录 shell
+mox-proot-distro remove alpine
+mox-proot-distro backup alpine ~/a.tar.gz
+mox-proot-distro restore alpine ~/a.tar.gz
+mox-proot-distro net                   # 网络边界报告（DNS/IPv6/出网）
+mox-proot-distro env alpine            # 预览登录时注入的环境（中文排查）
+mox-proot-distro launch mx:alpine      # 短链启动（未装自动装，装完直接进）
+mox-proot-distro wizard                # 一次性初始化（数据根 + 发行版 + 启动器）
+mox-proot-distro wizard --root /sd/mox-proot --distro ubuntu   # 自定义数据根/发行版
 ```
 
 内置四大发行版规格：Ubuntu 24.04 LTS / Debian 12 / Kali rolling /
@@ -70,16 +70,16 @@ Alpine 3.20（minirootfs）。
 没设才回落 `C.UTF-8` / `xterm-256color`，保证不乱码。合并优先级
 （低到高）：引擎默认 < 宿主透传 < 容器 env 文件 < 命令行 `-e`。
 
-容器 env 文件在 rootfs 内 `etc/moxsh/env`，每行 `KEY=VALUE`（`#` 注释），
+容器 env 文件在 rootfs 内 `etc/mox-proot/env`，每行 `KEY=VALUE`（`#` 注释），
 安装时自动创建，改完下次登录生效，随 backup/restore 一起走：
 
 ```bash
 # 完整中文：容器内先装 locales 并生成 locale
 apt install locales && locale-gen zh_CN.UTF-8
 # 然后编辑（宿主侧直接改 rootfs 内文件，或进容器改）：
-#   ~/.moxsh/containers/alpine/rootfs/etc/moxsh/env
+#   ~/.mox-proot/containers/alpine/rootfs/etc/mox-proot/env
 #   LANG=C.UTF-8  →  LANG=zh_CN.UTF-8
-moxsh-proot-distro env alpine   # 确认生效值
+mox-proot-distro env alpine   # 确认生效值
 ```
 
 ### 2.2 容器内控制台（固定命令 `mox`）
@@ -89,19 +89,19 @@ moxsh-proot-distro env alpine   # 确认生效值
 
 ```bash
 # 容器内：
-mox                    # = moxsh-proot-distro（反穿透到宿主 MOXSH_ROOT）
+mox                    # = mox-proot-distro（反穿透到宿主 MOX_ROOT）
 mox install kali       # 容器里再装一个发行版（落到宿主）
 mox net                # 网络边界报告
 ```
 
-实现：启动时引擎把宿主 bin 目录 bind 到容器内 `/moxsh-host`、
-`MOXSH_ROOT` bind 到 `/moxsh-root`，并注入 `MOXSH_ROOT=/moxsh-root`
-与 `MOXSH_CONTAINER=1`。`mox` 脚本先 `unset LD_PRELOAD`（Termux-exec
-与 proot 冲突）再 exec 同目录的 `moxsh-proot-distro`——它看到的
-`/moxsh-root` 经 proot 翻译回宿主真实目录，管理操作天然穿透。
+实现：启动时引擎把宿主 bin 目录 bind 到容器内 `/mox-proot-host`、
+`MOX_ROOT` bind 到 `/mox-proot-root`，并注入 `MOX_ROOT=/mox-proot-root`
+与 `MOX_CONTAINER=1`。`mox` 脚本先 `unset LD_PRELOAD`（Termux-exec
+与 proot 冲突）再 exec 同目录的 `mox-proot-distro`——它看到的
+`/mox-proot-root` 经 proot 翻译回宿主真实目录，管理操作天然穿透。
 
 - 容器内 `mox login/shell/launch` 会被劝退（ptrace 不支持 proot 套娃）；
-- `MOXSH_PROOT_CONSOLE=0` 关闭整套控制台注入；
+- `MOX_PROOT_CONSOLE=0` 关闭整套控制台注入；
 - 挂载点里能直接看到/编辑其他容器的 rootfs（排障神器）。
 
 ### 2.3 一次性初始化向导（wizard）
@@ -110,20 +110,20 @@ mox net                # 网络边界报告
 一次做完，默认值驱动、无交互阻塞（脚本/CI 友好），重复跑只补缺失步骤：
 
 ```bash
-moxsh-proot-distro wizard                          # 默认：~/.moxsh + alpine
-moxsh-proot-distro wizard --root /sd/moxsh-data    # 数据根自定义（写进 config.toml）
-moxsh-proot-distro wizard --distro ubuntu          # 换默认发行版
+mox-proot-distro wizard                          # 默认：~/.mox-proot + alpine
+mox-proot-distro wizard --root /sd/mox-proot-data    # 数据根自定义（写进 config.toml）
+mox-proot-distro wizard --distro ubuntu          # 换默认发行版
 ```
 
-- 数据根写 `~/.config/moxsh-proot/config.toml` 的 `[general] root_dir`
-  （保留配置其余内容）；`MOXSH_ROOT` 环境变量仍优先于它；
+- 数据根写 `~/.config/mox-proot/config.toml` 的 `[general] root_dir`
+  （保留配置其余内容）；`MOX_ROOT` 环境变量仍优先于它；
 - 目标 rootfs 已存在则跳过安装，不会重复下载；
 - `--distro` 过 id 白名单（`..`/隐藏目录等直接拒绝），防启动器路径穿越；
 - 交互式体检与清单选择是 0.4.0 TUI 的事，届时 wizard 升级为主程序形态。
 
 ## 3. 钩子（容器内脚本运行时）
 
-安装后钩子种子在 `$MOXSH_ROOT/hooks`（默认 `~/.moxsh/hooks`），
+安装后钩子种子在 `$MOX_ROOT/hooks`（默认 `~/.mox-proot/hooks`），
 安装与登录时由引擎自动执行：
 
 | 文件 | 时机 | 作用 |
@@ -149,5 +149,5 @@ e2e 验证会自动下载 Alpine minirootfs（约 4MB）到临时目录。
 
 ## 5. 支持与反馈
 
-- Issue: <https://github.com/codecloud-dev/moxsh-proot/issues>
+- Issue: <https://github.com/codecloud-dev/mox-proot/issues>
 - 许可证：GPL-3.0

@@ -34,7 +34,7 @@
 //!   从 app 数据目录与只读前缀执行——PRoot 自身的 loader 必须落在
 //!   `/data/data/<pkg>/` 下，且不可存放在外部存储（noexec）；
 //! - Phantom Process Killer：Android 12+ 的 lmkd 会杀孤儿 tracer 进程
-//!   （上限约 32 个）。moxsh 以 foreground service 运行会话（D7），
+//!   （上限约 32 个）。mox-proot 以 foreground service 运行会话（D7），
 //!   其子进程不在清理名单内；这是与上游最大的平台差异点。
 
 use std::path::Path;
@@ -44,20 +44,20 @@ use crate::proot::elf::{resolve_exec_chain, ExecPlan};
 use crate::proot::translate::{normalize, FakeRootAction, TranslateRules};
 use crate::proot::{ProotError, ProotResult};
 
-/// 引擎诊断日志级别（由 `-v` 累加设置；≥1 即开启，等同 `MOXSH_DBG=1`）。
+/// 引擎诊断日志级别（由 `-v` 累加设置；≥1 即开启，等同 `MOX_DBG=1`）。
 static VERBOSE: AtomicU8 = AtomicU8::new(0);
 
-/// 设置引擎诊断日志级别（`moxsh-proot` 的 `-v` 累加后在此落地）。
+/// 设置引擎诊断日志级别（`mox-proot` 的 `-v` 累加后在此落地）。
 pub fn set_verbose(level: u8) {
     VERBOSE.store(level, Ordering::Relaxed);
 }
 
-/// 诊断日志是否开启（env `MOXSH_DBG` 或 `-v` 任一满足）。
+/// 诊断日志是否开启（env `MOX_DBG` 或 `-v` 任一满足）。
 pub fn diag_enabled() -> bool {
-    VERBOSE.load(Ordering::Relaxed) > 0 || std::env::var("MOXSH_DBG").is_ok()
+    VERBOSE.load(Ordering::Relaxed) > 0 || std::env::var("MOX_DBG").is_ok()
 }
 
-/// 引擎内部诊断日志（`-v` 或 env `MOXSH_DBG=1` 开启，默认零开销）。
+/// 引擎内部诊断日志（`-v` 或 env `MOX_DBG=1` 开启，默认零开销）。
 ///
 /// 覆盖引擎最难自证的三个暗面——syscall 拦截的 enter/exit 改写结果、
 /// 新 tracee 事件、scratch 偷换——排查「翻译为何静默失效」类问题
@@ -790,7 +790,7 @@ pub enum RewriteOutcome {
 ///
 /// 正确性说明：guest 路径缓冲由子进程栈/堆分配，长度就是 `strlen+1`；
 /// 贸然写更长路径会踩坏相邻内存。上游 proot 借助自带 loader 在 execve 时
-/// 换入更长的内存区（loader-mem）；moxsh M4 采用保守策略：放不下就不改写、
+/// 换入更长的内存区（loader-mem）；mox-proot M4 采用保守策略：放不下就不改写、
 /// 让原路径直通内核（结果通常是 ENOENT，等价于未做绑定，绝不损坏子进程）。
 pub fn can_fit(original_len: usize, new_len: usize) -> bool {
     new_len < original_len + 1
@@ -1053,7 +1053,7 @@ pub struct Tracer {
     /// ——guest shell 里 exec 的程序读 self/exe 也能得到正确路径。
     /// RefCell：拦截方法全是 `&self`（单线程停循环内串行消费，无竞争）。
     initial_guest_prog: std::cell::RefCell<Option<String>>,
-    /// seccomp 加速器是否启用（env `MOXSH_SECCOMP=1` 时 `true`）。
+    /// seccomp 加速器是否启用（env `MOX_SECCOMP=1` 时 `true`）。
     ///
     /// 启用后：非拦截 syscall 经 `SECCOMP_RET_ALLOW` 零开销直通，仅拦截面
     /// 触发一次 `PTRACE_EVENT_SECCOMP` 入口停（见 [`crate::proot::seccomp`]）。
@@ -1122,7 +1122,7 @@ impl Tracer {
             scratch: std::cell::RefCell::new(std::collections::HashMap::new()),
             initial_guest_prog: std::cell::RefCell::new(None),
             // 仅在 env 门控开启时启用 seccomp 加速器；子进程侧同步安装过滤器。
-            seccomp: std::env::var_os("MOXSH_SECCOMP").is_some(),
+            seccomp: std::env::var_os("MOX_SECCOMP").is_some(),
         }
     }
 
@@ -1792,9 +1792,9 @@ impl Tracer {
 
     /// [`Self::spawn_traced`] 的环境变量变体：`env` 非空时子进程以该环境
     /// （`KEY=VALUE` 列表）execve；为空时沿用历史行为（envp=NULL，内核视为
-    /// 空环境）——moxsh App 内嵌路径与既有单测均依赖该语义，勿改。
+    /// 空环境）——mox-proot App 内嵌路径与既有单测均依赖该语义，勿改。
     ///
-    /// CLI 直跑（`moxsh-proot`）场景：未显式 `-e` 时继承 tracer 当前环境，
+    /// CLI 直跑（`mox-proot`）场景：未显式 `-e` 时继承 tracer 当前环境，
     /// 这是交互 shell 的预期行为；显式 `-e` 则清空并以所给为准（对齐
     /// proot-distro login 的 `env -i` 语义）。
     pub fn spawn_traced_with_env(
@@ -1857,7 +1857,7 @@ impl Tracer {
                 if libc::ptrace(libc::PTRACE_TRACEME, 0, std::ptr::null_mut::<libc::c_void>(), std::ptr::null_mut::<libc::c_void>()) < 0 {
                     libc::_exit(126);
                 }
-                // seccomp 加速器（可选，env `MOXSH_SECCOMP=1` 门控）。
+                // seccomp 加速器（可选，env `MOX_SECCOMP=1` 门控）。
                 // 引导顺序：TRACEME → **SIGSTOP 握手** → 装过滤器 → execve。
                 // 必须先 SIGSTOP 把控制权交还 tracer，让它在「装过滤器 +
                 // execve」之前设好 PTRACE_O_TRACESECCOMP——否则初始 execve
@@ -1868,7 +1868,7 @@ impl Tracer {
                 // 安装失败即 _exit(124)——fail-loud 而非静默跑成未翻译（tracer
                 // 端无法感知子进程 seccomp 是否真的装上，静默失败会让隔离悄悄
                 // 失效）。过滤器随 execve 持久化。
-                if std::env::var_os("MOXSH_SECCOMP").is_some() {
+                if std::env::var_os("MOX_SECCOMP").is_some() {
                     libc::kill(libc::getpid(), libc::SIGSTOP);
                     if !crate::proot::seccomp::install_in_child() {
                         libc::_exit(124);
@@ -2241,7 +2241,7 @@ impl Tracer {
                 let event = (status >> 16) & 0xff;
                 match event {
                     libc::PTRACE_EVENT_SECCOMP => {
-                        // seccomp 入口停（仅 MOXSH_SECCOMP 模式出现）。等价于一次
+                        // seccomp 入口停（仅 MOX_SECCOMP 模式出现）。等价于一次
                         // syscall enter 停，但只发生在**拦截号**上；非拦截号已被
                         // SECCOMP_RET_ALLOW 直通，不会到这里。处理流程与双停模型
                         // 的 enter 停一致：做 enter 改写；按是否需要出口处理决定

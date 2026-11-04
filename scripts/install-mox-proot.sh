@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# moxsh-proot 一键安装脚本（原版 Termux / Linux 用户专用）。
+# mox-proot 一键安装脚本（原版 Termux / Linux 用户专用）。
 #
 # 把 proot 容器引擎（Rust ptrace 路径翻译，非上游 C 版 proot 的封装）
-# 装成 `moxsh-proot` 命令，之后即可：
+# 装成 `mox-proot` 命令，之后即可：
 #
-#   moxsh-proot -R ~/ubuntu -0 -- bash
+#   mox-proot -R ~/ubuntu -0 -- bash
 #
 # 安装方式（原版 Termux，二选一，脚本自动探测国内外线路）：
-#   curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-moxsh-proot.sh | bash
-#   curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-moxsh-proot.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/codecloud-dev/mox-proot/main/scripts/install-mox-proot.sh | bash
+#   curl -fsSL https://gitee.com/thousand-code-crafts/mox-proot/raw/main/scripts/install-mox-proot.sh | bash
 #
 # 本脚本是安装体系的 **bash 探测层**（零依赖、可 curl|bash）；
 # richer 安装/更新体验走 Go 安装器（仓库 go/ 目录，Release 资产
-# `moxsh-installer-<goos>-<arch>`，子命令 install/update/probe）：
-#   moxsh-installer install
+# `mox-proot-installer-<goos>-<arch>`，子命令 install/update/probe）：
+#   mox-proot-installer install
 # 两层默认下载源一致，均为本仓库 Release。
 #
 # 设计约束（Termux 现实）：
@@ -22,25 +22,44 @@
 #   - 非交互：`curl | bash` 下 stdin 是脚本本身，全程无需任何输入；
 #   - PREFIX 未设置时按 Termux 常见路径探测，探测不到则明确报错（不猜 system 路径，
 #     Android 10+ 的 W^X 会让 system 分区上的可执行文件根本跑不起来）；
-#   - 钩子种子（py/runtime + lua/）随仓库 tarball 一并落盘到 $MOXSH_ROOT/hooks，
+#   - 钩子种子（py/runtime + lua/）随仓库 tarball 一并落盘到 $MOX_ROOT/hooks，
 #     下载失败不阻断主安装（引擎无钩子照常工作）。
 
 set -euo pipefail
 
-GITHUB_REPO="${MOXSH_PROOT_REPO:-codecloud-dev/moxsh-proot}"
-GITEE_REPO="${MOXSH_GITEE_REPO:-thousand-code-crafts/moxsh-proot}"
-RELEASE="${MOXSH_PROOT_RELEASE:-proot-latest}"
+GITHUB_REPO="${MOX_PROOT_REPO:-codecloud-dev/mox-proot}"
+GITEE_REPO="${MOX_GITEE_REPO:-thousand-code-crafts/mox-proot}"
+RELEASE="${MOX_PROOT_RELEASE:-proot-latest}"
 
-log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
-warn() { printf '\033[1;33m警告:\033[0m %s\n' "$*" >&2; }
-die()  { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
+# NO_COLOR 约定（no-color.org）：设了任意值即关色；非 TTY（curl|bash 重定向）也关色。
+if [ -n "${NO_COLOR:-}" ] || [ ! -t 2 ]; then
+  C_CYAN=''; C_YELLOW=''; C_RED=''; C_BOLD=''; C_RST=''
+else
+  C_CYAN='\033[1;36m'; C_YELLOW='\033[1;33m'; C_RED='\033[1;31m'; C_BOLD='\033[1m'; C_RST='\033[0m'
+fi
+log()  { printf "${C_CYAN}==>${C_RST} %s\n" "$*"; }
+warn() { printf "${C_YELLOW}警告:${C_RST} %s\n" "$*" >&2; }
+die()  { printf "${C_RED}错误:${C_RST} %s\n" "$*" >&2; exit 1; }
+ok()   { printf "${C_CYAN}✔${C_RST} %s\n" "$*"; }
+
+# 紧凑品牌字标（与 src/proot/brand.rs 的 BANNER 一致，4 行 / 手机端不折行）。
+printf '\n'
+printf "${C_BOLD}"
+cat <<'BANNER'
+_  _ ____ _  _
+|\/| |  |  \/
+|  | |__| _/\_
+  mox-proot
+BANNER
+printf "${C_RST}"
+printf '  %s\n\n' "多架构容器引擎 · 一键安装"
 
 # ---------------------------------------------------------------- 国内外分流
 # 自动选源（0.2.0）：探测 GitHub 与 Gitee 的可达性 + 握手延迟，国内走
 # Gitee、国外走 GitHub。覆盖方式（优先级从高到低）：
-#   1. MOXSH_PROOT_BASE_URL 显式指定（镜像自建场景，需保持
+#   1. MOX_PROOT_BASE_URL 显式指定（镜像自建场景，需保持
 #      <BASE_URL>/<ASSET> 与 <BASE_URL>/<ASSET>.sha256 布局）；
-#   2. MOXSH_PROOT_SOURCE=github|gitee 强制选端（不猜 URL）；
+#   2. MOX_PROOT_SOURCE=github|gitee 强制选端（不猜 URL）；
 #   3. 自动探测（默认）。
 #
 # 探测端点选轻量资产文件：本架构主二进制的 .sha256 校验文件（Release 资产，
@@ -55,22 +74,22 @@ probe_seconds() {
 }
 
 pick_source() {
-  if [ -n "${MOXSH_PROOT_BASE_URL:-}" ]; then
+  if [ -n "${MOX_PROOT_BASE_URL:-}" ]; then
     SOURCE="custom"
-    BASE_URL="$MOXSH_PROOT_BASE_URL"
+    BASE_URL="$MOX_PROOT_BASE_URL"
     ARCHIVE_URL=""
     log "下载源：自定义镜像 ${BASE_URL}"
     return
   fi
-  if [ "${MOXSH_PROOT_SOURCE:-auto}" = "github" ]; then
+  if [ "${MOX_PROOT_SOURCE:-auto}" = "github" ]; then
     set_source_github; return
   fi
-  if [ "${MOXSH_PROOT_SOURCE:-auto}" = "gitee" ]; then
+  if [ "${MOX_PROOT_SOURCE:-auto}" = "gitee" ]; then
     set_source_gitee; return
   fi
   local gh_s gitee_s
-  gh_s="$(probe_seconds "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}/moxsh-proot-${ASSET_SUFFIX}.sha256")"
-  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/releases/download/${RELEASE}/moxsh-proot-${ASSET_SUFFIX}.sha256")"
+  gh_s="$(probe_seconds "https://github.com/${GITHUB_REPO}/releases/download/${RELEASE}/mox-proot-${ASSET_SUFFIX}.sha256")"
+  gitee_s="$(probe_seconds "https://gitee.com/${GITEE_REPO}/releases/download/${RELEASE}/mox-proot-${ASSET_SUFFIX}.sha256")"
   if [ -n "$gitee_s" ] && { [ -z "$gh_s" ] || awk -v g="$gitee_s" -v h="$gh_s" 'BEGIN{exit !(g<h)}'; }; then
     set_source_gitee
   else
@@ -115,14 +134,14 @@ fi
 if [ -z "${PREFIX:-}" ]; then
   if [ "$IS_ANDROID" = 1 ]; then
     die "未检测到 Termux 环境（PREFIX 未设置）。请显式指定安装目录：
-  PREFIX=/your/prefix bash install-moxsh-proot.sh"
+  PREFIX=/your/prefix bash install-mox-proot.sh"
   else
     # 桌面 Linux：默认装到 ~/.local（无需 root，符合 FHS 用户目录惯例）。
     PREFIX="${HOME:-$HOME}/.local"
   fi
 fi
 
-# 架构：moxsh-proot 提供 aarch64 与 x86_64 两版（Android + 桌面 Linux 均覆盖）。
+# 架构：mox-proot 提供 aarch64 与 x86_64 两版（Android + 桌面 Linux 均覆盖）。
 case "$(uname -m)" in
   aarch64|arm64)  TRIPLE_ARCH="aarch64"; ARCH_ALIAS="arm64" ;;
   x86_64|amd64)   TRIPLE_ARCH="x86_64";  ARCH_ALIAS="amd64" ;;
@@ -168,17 +187,17 @@ command -v sha256sum >/dev/null 2>&1 || die "未找到 sha256sum（pkg install c
 # 选源（探测 GitHub/Gitee 延迟；需 curl 就位后执行）。
 pick_source
 
-# MOXSH_ROOT：钩子与容器数据根目录（对齐引擎 DistroManager 约定：
-# $MOXSH_ROOT > $HOME/.moxsh）。
-MOXSH_ROOT="${MOXSH_ROOT:-}"
-if [ -z "$MOXSH_ROOT" ]; then
+# MOX_ROOT：钩子与容器数据根目录（对齐引擎 DistroManager 约定：
+# $MOX_ROOT > $HOME/.mox-proot）。
+MOX_ROOT="${MOX_ROOT:-}"
+if [ -z "$MOX_ROOT" ]; then
   HOME_DIR="${HOME:-}"
-  [ -n "$HOME_DIR" ] || die "HOME 未设置，无法推断 MOXSH_ROOT（请显式设置）"
-  MOXSH_ROOT="${HOME_DIR}/.moxsh"
+  [ -n "$HOME_DIR" ] || die "HOME 未设置，无法推断 MOX_ROOT（请显式设置）"
+  MOX_ROOT="${HOME_DIR}/.mox-proot"
 fi
 
 # ---------------------------------------------------------------- 下载 + 校验
-TMP="$(mktemp -d "${TMPDIR:-/tmp}/moxsh-proot.XXXXXX")"
+TMP="$(mktemp -d "${TMPDIR:-/tmp}/mox-proot.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
 # 多级镜像兜底通道（国内外分流，2026-11 起）：
@@ -190,7 +209,7 @@ trap 'rm -rf "$TMP"' EXIT
 # 注：jsDelivr 仅服务仓库内文件、不服务 Release 二进制资产（实测 404），
 # 故二进制兜底统一走 ghproxy；脚本 raw 的 jsDelivr 备援见 README。
 MIRROR_PROXIES="https://ghproxy.net/https://"
-WEBSITE_DL="${MOXSH_PROOT_WEBSITE_DL:-https://mox-site.pages.dev/dl}"
+WEBSITE_DL="${MOX_PROOT_WEBSITE_DL:-https://mox-site.pages.dev/dl}"
 
 # 由 GitHub Release 基址派生 ghproxy 镜像候选 URL 列表。
 mirror_urls() {
@@ -235,7 +254,7 @@ fetch_asset() {
   fetch_asset_file "$asset" "${TMP}/${asset}" \
     || die "下载失败：${asset}（已尝试 ${SOURCE} 及回退源）
 可能原因：网络不通 / Release 尚未发布（滚动发布 proot-latest 由 CI 在 main 更新时自动重建）。
-可尝试：MOXSH_PROOT_SOURCE=github|gitee 强制选端，或 MOXSH_PROOT_BASE_URL 指向自建镜像。"
+可尝试：MOX_PROOT_SOURCE=github|gitee 强制选端，或 MOX_PROOT_BASE_URL 指向自建镜像。"
 
   fetch_asset_file "${asset}.sha256" "${TMP}/${asset}.sha256" \
     || die "下载校验文件失败：${asset}.sha256"
@@ -258,30 +277,72 @@ install_bin() {
   #   本脚本 set -o pipefail，且不同版本 --help 的退出码约定可能变化）。
   local help_out
   help_out="$("${BINDIR}/${name}" --help 2>&1 || true)"
-  printf '%s\n' "$help_out" | grep -q "moxsh-proot" \
+  printf '%s\n' "$help_out" | grep -q "mox-proot" \
     || die "自检失败：${name} --help 未输出预期用法文本。"
 }
 
 # ---------------------------------------------------------------- 主体安装
-fetch_asset "moxsh-proot-${ASSET_SUFFIX}"
-install_bin "moxsh-proot-${ASSET_SUFFIX}" "moxsh-proot"
-log "安装完成：${BINDIR}/moxsh-proot"
+fetch_asset "mox-proot-${ASSET_SUFFIX}"
+install_bin "mox-proot-${ASSET_SUFFIX}" "mox-proot"
+log "安装完成：${BINDIR}/mox-proot"
 
 # distro 管理二进制（rootfs 安装/登录/备份；与引擎同一套 ptrace 核心）。
-fetch_asset "moxsh-proot-distro-${ASSET_SUFFIX}"
-install_bin "moxsh-proot-distro-${ASSET_SUFFIX}" "moxsh-proot-distro"
-log "安装完成：${BINDIR}/moxsh-proot-distro"
+fetch_asset "mox-proot-distro-${ASSET_SUFFIX}"
+install_bin "mox-proot-distro-${ASSET_SUFFIX}" "mox-proot-distro"
+log "安装完成：${BINDIR}/mox-proot-distro"
 
 # ---------------------------------------------------------------- 控制台入口
 # 容器内固定命令 mox（roadmap §3：不开放自定义；与引擎 console::CONSOLE_SCRIPT
-# 同源——bind-mount 反穿透到宿主 MOXSH_ROOT 执行管理子命令）。
+# 同源——bind-mount 反穿透到宿主 MOX_ROOT 执行管理子命令）。
 if cat > "${BINDIR}/mox" <<'MOXEOF'
 #!/bin/sh
-# moxsh 容器内控制台（固定命令 mox，不开放自定义——roadmap §3）。
+# mox-proot 容器内控制台（固定命令 mox，不开放自定义——roadmap §3）。
 # 由引擎/安装器自动生成；删除本文件不影响宿主侧其他命令。
 unset LD_PRELOAD
-if [ -n "${MOXSH_CONTAINER:-}" ]; then
-  # 容器内：反穿透到宿主真实 MOXSH_ROOT（bind-mount 挂载点）。
+
+# ── 惊喜体验三件套（时间上下文感知 / 古诗 / 彩蛋，#450）──
+# 零依赖 shell 自包含实现：即使 distro 二进制异常，控制台也能照常问候。
+__mox_phase() {
+  h=$(date +%H 2>/dev/null | sed 's/^0//')
+  case "$h" in
+    5|6|7|8|9|10) echo morning ;;
+    11|12|13|14|15|16) echo noon ;;
+    17|18|19|20|21|22) echo evening ;;
+    *) echo night ;;
+  esac
+}
+__mox_poem() {
+  case "$1" in
+    morning) echo "晨起开门雪满山，雪晴云淡日光寒。 ——郑燮《山中雪后》" ;;
+    noon) echo "锄禾日当午，汗滴禾下土。 ——李绅《悯农》" ;;
+    evening) echo "夕阳无限好，只是近黄昏。 ——李商隐《登乐游原》" ;;
+    night) echo "春眠不觉晓，处处闻啼鸟。 ——孟浩然《春晓》" ;;
+  esac
+}
+__mox_greet() {
+  case "$(__mox_phase)" in
+    morning) echo "早安，新的一天从容器里开始 ☀" ;;
+    noon) echo "午安，喝口水再战 ☕" ;;
+    evening) echo "晚安，夜色正好适合折腾 🌙" ;;
+    night) echo "夜深了，注意身体，别熬太晚 🌃" ;;
+  esac
+  echo "  $(__mox_poem "$(__mox_phase)")"
+}
+__mox_egg() {
+  echo "🥚 彩蛋：你找到了隐藏菜单！"
+  echo "   mox-proot 的每一行代码都是手写对齐上游 PRoot 行为——没有抄。"
+  echo "   试试无参 mox 进入，看时间送你的那句诗。"
+}
+# 彩蛋暗号（先于一切，命中即退出；不进入管理控制台）。
+case "${1:-}" in
+  egg|彩蛋|konami|蛋)
+    __mox_egg
+    exit 0
+    ;;
+esac
+
+if [ -n "${MOX_CONTAINER:-}" ]; then
+  # 容器内：反穿透到宿主真实 MOX_ROOT（bind-mount 挂载点）。
   case "${1:-}" in
     login|shell|launch)
       echo "mox: 已在容器内，不能嵌套进入其他容器（ptrace 不支持套娃）。" >&2
@@ -289,12 +350,22 @@ if [ -n "${MOXSH_CONTAINER:-}" ]; then
       exit 1
       ;;
   esac
-  ROOT=/moxsh-root
+  ROOT=/mox-proot-root
 else
   # 宿主侧直接跑：普通 distro CLI 包装。
-  ROOT="${MOXSH_ROOT:-$HOME/.moxsh}"
+  ROOT="${MOX_ROOT:-$HOME/.mox-proot}"
 fi
-exec env MOXSH_ROOT="$ROOT" "$(dirname "$0")/moxsh-proot-distro" "$@"
+# 进入即画品牌字标 + 时间上下文问候 + 古诗（无参数交互入口时）。
+if [ "$#" -eq 0 ]; then
+cat <<'MOX_BANNER'
+_  _ ____ _  _
+|\/| |  |  \/
+|  | |__| _/\_
+  mox-proot
+MOX_BANNER
+  __mox_greet
+fi
+exec env MOX_ROOT="$ROOT" "$(dirname "$0")/mox-proot-distro" "$@"
 MOXEOF
 then
   chmod 0755 "${BINDIR}/mox"
@@ -304,13 +375,13 @@ else
 fi
 
 # ---------------------------------------------------------------- 钩子种子
-# 从仓库 tarball 提取 py/runtime + lua/ 到 $MOXSH_ROOT/hooks（引擎
+# 从仓库 tarball 提取 py/runtime + lua/ 到 $MOX_ROOT/hooks（引擎
 # post-install / pre-login 钩子的默认内容）。失败仅警告——钩子是增强项。
 # custom 源无 ARCHIVE_URL（用户镜像通常只放二进制），跳过种子。
 if [ -n "$ARCHIVE_URL" ]; then
-  log "种子钩子目录 ${MOXSH_ROOT}/hooks …"
+  log "种子钩子目录 ${MOX_ROOT}/hooks …"
   if curl -fSL --retry 2 --connect-timeout 15 -o "${TMP}/repo.tar.gz" "${ARCHIVE_URL}" 2>/dev/null; then
-    mkdir -p "${MOXSH_ROOT}/hooks"
+    mkdir -p "${MOX_ROOT}/hooks"
     # 顶层目录名两端不同（GitHub: <repo>-<release>/；Gitee: <repo>/），
     # 用 --wildcards '*/...' 通配兼容；--strip-components=1 去掉顶层。
     if tar -xzf "${TMP}/repo.tar.gz" -C "${TMP}" --strip-components=1 --wildcards \
@@ -320,13 +391,13 @@ if [ -n "$ARCHIVE_URL" ]; then
         '*/lua/hooks/post-install.lua' \
         '*/lua/hooks/pre-login.lua' 2>/dev/null; then
     cp "${TMP}/py/runtime/provision.py" "${TMP}/py/runtime/login_hook.py" \
-       "${MOXSH_ROOT}/hooks/" 2>/dev/null || true
-    mkdir -p "${MOXSH_ROOT}/hooks/lua"
-    cp "${TMP}/lua/proot.lua" "${MOXSH_ROOT}/hooks/" 2>/dev/null || true
+       "${MOX_ROOT}/hooks/" 2>/dev/null || true
+    mkdir -p "${MOX_ROOT}/hooks/lua"
+    cp "${TMP}/lua/proot.lua" "${MOX_ROOT}/hooks/" 2>/dev/null || true
     cp "${TMP}/lua/hooks/post-install.lua" "${TMP}/lua/hooks/pre-login.lua" \
-       "${MOXSH_ROOT}/hooks/" 2>/dev/null || true
-    rmdir "${MOXSH_ROOT}/hooks/lua" 2>/dev/null || true
-    log "钩子种子完成：${MOXSH_ROOT}/hooks（post-install / pre-login 生命周期）"
+       "${MOX_ROOT}/hooks/" 2>/dev/null || true
+    rmdir "${MOX_ROOT}/hooks/lua" 2>/dev/null || true
+    log "钩子种子完成：${MOX_ROOT}/hooks（post-install / pre-login 生命周期）"
   else
     warn "tarball 内未找到钩子文件，跳过种子——引擎无钩子照常工作。"
   fi
@@ -344,29 +415,60 @@ else
   ISSUES_URL="https://github.com/${GITHUB_REPO}/issues"
 fi
 
+# ---------------------------------------------------------------- 收尾自检
+# 逐项确认三个命令都在且可执行 + 打印版本，装完当场自证（T5 精修）。
+log "收尾自检：核对已安装命令…"
+SELF_OK=1
+for chk in mox-proot mox-proot-distro mox; do
+  if [ -x "${BINDIR}/${chk}" ]; then
+    ok "${BINDIR}/${chk} 就绪"
+  else
+    warn "${BINDIR}/${chk} 缺失或不可执行"
+    SELF_OK=0
+  fi
+done
+if [ "$SELF_OK" = 1 ]; then
+  # 版本自检：--version 应回报版本串（不同版本退出码约定不一，捕获文本即可）。
+  VER_OUT="$("${BINDIR}/mox-proot" --version 2>&1 || true)"
+  if [ -n "$VER_OUT" ]; then
+    ok "引擎自检通过：${VER_OUT}"
+  else
+    warn "引擎 --version 无输出（不阻断，可手动执行 mox-proot --help 排查）"
+  fi
+else
+  warn "自检发现缺项，其余功能可能不受影响；建议重跑安装脚本"
+fi
+
 cat <<EOF
 
 用法速查（对齐上游 proot 常用选项）：
-  moxsh-proot -R ~/ubuntu -0 -- bash          # 推荐绑定集 + fake root 进发行版
-  moxsh-proot -r ~/ubuntu -w /root -- sh      # 最小模式，指定初始目录
-  moxsh-proot -S ~/ubuntu -0 -- apt update    # 装包场景（最小绑定集）
-  moxsh-proot --help                          # 完整用法
+  mox-proot -R ~/ubuntu -0 -- bash          # 推荐绑定集 + fake root 进发行版
+  mox-proot -r ~/ubuntu -w /root -- sh      # 最小模式，指定初始目录
+  mox-proot -S ~/ubuntu -0 -- apt update    # 装包场景（最小绑定集）
+  mox-proot --help                          # 完整用法
 
 rootfs 未安装？用 distro 管理器装一个（引擎同一套）：
-  moxsh-proot-distro install ubuntu
-  moxsh-proot-distro login ubuntu
+  mox-proot-distro install ubuntu
+  mox-proot-distro login ubuntu
 
 容器内控制台（固定命令，进任意容器后直接输入）：
   mox                     # 拉起管理控制台（list/install/remove/net/env）
   mox install kali        # 在容器里再装一个发行版（反穿透到宿主）
 
+惊喜三件套（时间上下文感知 / 古诗 / 彩蛋）：
+  mox                     # 无参进入：按当前时相送应景问候 + 古诗
+  mox egg                 # 隐藏彩蛋（暗号：egg / 彩蛋 / konami / 蛋）
+  mox-proot-distro time   # 单独打印时相问候 + 古诗
+  mox-proot-distro versions ubuntu          # 列出可选版本
+  mox-proot-distro install ubuntu --version "22.04 LTS"   # 选版本号安装
+
 钩子（安装/登录时自动执行，可编辑）：
-  ${MOXSH_ROOT}/hooks/post-install.py     # 装完后供给检查（DNS/hosts）
-  ${MOXSH_ROOT}/hooks/pre-login.py        # 登录时环境快照
-  ${MOXSH_ROOT}/hooks/proot.lua           # 声明式配置（motd / DNS 偏好）
+  ${MOX_ROOT}/hooks/post-install.py     # 装完后供给检查（DNS/hosts）
+  ${MOX_ROOT}/hooks/pre-login.py        # 登录时环境快照
+  ${MOX_ROOT}/hooks/proot.lua           # 声明式配置（motd / DNS 偏好）
 
  richer 更新体验（Go 安装器，支持 update/probe）：
-  moxsh-installer update
+  mox-proot-installer update
 
 有问题反馈：${ISSUES_URL}
 EOF

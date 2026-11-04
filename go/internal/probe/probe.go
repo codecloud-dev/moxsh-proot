@@ -1,7 +1,7 @@
 // Package probe 实现一键安装的环境勘察层（Termux/Android vs 正常 Linux、
 // glibc/musl、CPU 架构、root/非 root），据此自动选择安装路径与下载源。
 //
-// 定位：bash 管道桩（scripts/install-moxsh-proot.sh）负责最小自举
+// 定位：bash 管道桩（scripts/install-mox-proot.sh）负责最小自举
 // （探测 curl/tar、拉下本安装器），之后一切勘察决策都在本包内完成——
 // 纯函数化设计，全部逻辑可 go test 覆盖，不依赖真实文件系统。
 package probe
@@ -109,27 +109,27 @@ type Report struct {
 // InstallPath 返回引擎安装根目录。
 //
 // 规则（用户口径：root/非 root 依赖安装路径差异）：
-//   - Termux：$PREFIX/opt/moxsh（不碰 HOME，Termux 的 $PREFIX 即用户数据区）；
-//   - 正常 Linux + root：/opt/moxsh（系统级，多用户共享）；
-//   - 正常 Linux + 非 root：~/.moxsh（用户级，免 sudo）。
+//   - Termux：$PREFIX/opt/mox-proot（不碰 HOME，Termux 的 $PREFIX 即用户数据区）；
+//   - 正常 Linux + root：/opt/mox-proot（系统级，多用户共享）；
+//   - 正常 Linux + 非 root：~/.mox-proot（用户级，免 sudo）。
 func (r Report) InstallPath(home string) string {
 	switch {
 	case r.Env == EnvTermux && r.Prefix != "":
-		return r.Prefix + "/opt/moxsh"
+		return r.Prefix + "/opt/mox-proot"
 	case r.Env == EnvLinux && r.IsRoot:
-		return "/opt/moxsh"
+		return "/opt/mox-proot"
 	default:
 		// 非 root 的 Linux/macOS/unknown：用户级
 		if home == "" {
 			home = "/tmp"
 		}
-		return strings.TrimRight(home, "/") + "/.moxsh"
+		return strings.TrimRight(home, "/") + "/.mox-proot"
 	}
 }
 
 // NeedsSudo 报告是否需要 sudo 提示。
 //
-// 语义：正常 Linux 的非 root 用户若想装系统级路径（/opt/moxsh）需要
+// 语义：正常 Linux 的非 root 用户若想装系统级路径（/opt/mox-proot）需要
 // sudo（也可以改用用户级路径绕过）。不依赖 home——避免 home 兜底值
 // 把系统级意图误判成用户级。
 func (r Report) NeedsSudo() bool {
@@ -268,15 +268,15 @@ func parseOsRelease(s string) map[string]string {
 
 // AssetName 引擎二进制的发布资产名（与 Rust CI/发布命名约定一致）。
 //
-// 约定：moxsh-proot-<goos>-<arch>[-musl]
-//   - glibc 动态版：moxsh-proot-linux-amd64（依赖 glibc，体积小）
-//   - musl 静态版：moxsh-proot-linux-amd64-musl（零依赖，Termux 首选）
+// 约定：mox-proot-<goos>-<arch>[-musl]
+//   - glibc 动态版：mox-proot-linux-amd64（依赖 glibc，体积小）
+//   - musl 静态版：mox-proot-linux-amd64-musl（零依赖，Termux 首选）
 //
 // glibc 版本过低（低于发布构建地板 2.35）时改选 musl 静态版：musl 静态
 // 二进制零 glibc 依赖，可在任意（含老）glibc 系统运行，从而让「大部分
 // Linux 都能装」（doc §A#1）。未知版本（GlibcVer==0）保守沿用原 gnu 行为。
 func (r Report) AssetName() string {
-	base := "moxsh-proot-" + r.GOOS + "-" + r.Arch
+	base := "mox-proot-" + r.GOOS + "-" + r.Arch
 	if r.Libc == LibcMusl || (r.Libc == LibcGlibc && r.GlibcVer > 0 && r.GlibcVer < 2.35) {
 		base += "-musl"
 	}

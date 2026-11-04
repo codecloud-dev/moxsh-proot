@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """pre-login 体检钩子（proot 引擎内嵌 Python 运行时，M8）。
 
-引擎在登录 shell 启动前于容器内执行（`moxsh-proot-distro login <id>`；
-`moxsh-proot-distro shell <id>`）。失败仅警告、不阻断登录。
+引擎在登录 shell 启动前于容器内执行（`mox-proot-distro login <id>`；
+`mox-proot-distro shell <id>`）。失败仅警告、不阻断登录。
 
 与 post-install/provision.py 的分工：那边管「装完时供给是否就绪」，
 这边管「每次登录时的环境快照」——网络边界报告（IPv6 可达性/DNS 状态）
@@ -32,7 +32,7 @@ def ipv6_reachable(host: str = "2400:3200::1", port: int = 53) -> bool:
 
 
 def main() -> int:
-    cid = os.environ.get("MOXSH_CONTAINER_ID", "?")
+    cid = os.environ.get("MOX_CONTAINER_ID", "?")
     print(f"[login-hook] 容器 {cid} 环境快照")
     print(f"[login-hook] hostname={socket.gethostname()} python={sys.version.split()[0]}")
     v6 = ipv6_reachable()

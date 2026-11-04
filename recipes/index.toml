@@ -1,4 +1,4 @@
-# moxsh-proot 配方索引（0.3.0，docs/roadmap.md §4）
+# mox-proot 配方索引（0.3.0，docs/roadmap.md §4）
 #
 # 每个 [[recipe]] = 元数据 + 逃生舱脚本（recipes/<script>）。
 # 新增配方：在这里加一段 + 在 recipes/ 放一个同名 .sh 即可，无需改 Rust。

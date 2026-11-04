@@ -28,6 +28,9 @@ pub mod cli;
 pub mod access;
 pub mod brand;
 pub mod console;
+/// 终端「惊喜体验」三件套：时间上下文感知 / 古诗 / 彩蛋（#450）。
+/// 供 TUI 欢迎屏与 `mox-proot-distro time` 子命令复用，单一来源。
+pub mod delight;
 pub mod distro;
 pub mod elf;
 pub mod fan;
@@ -43,8 +46,8 @@ pub mod script;
 pub mod settings;
 pub mod symlink_fix;
 pub mod translate;
-/// TUI 控制台（0.4.0，roadmap §6）：ratatui 第三二进制 `moxsh-proot-tui` 与
-/// `moxsh-proot tui` / `moxsh-proot-distro tui` 子命令共用。复用本模块全部
+/// TUI 控制台（0.4.0，roadmap §6）：ratatui 第三二进制 `mox-proot-tui` 与
+/// `mox-proot tui` / `mox-proot-distro tui` 子命令共用。复用本模块全部
 /// 管理能力（DistroManager / RecipeIndex / links / Settings / net / cli）。
 /// 仅 `tui` feature 启用，不污染 Android NDK 构建。
 #[cfg(feature = "tui")]
@@ -135,7 +138,7 @@ impl From<std::io::Error> for ProotError {
 pub type ProotResult<T> = Result<T, ProotError>;
 
 impl ProotError {
-    /// 映射为 C-ABI 负数错误码（moxsh_proot_* 统一约定，见 lib.rs 注释表）。
+    /// 映射为 C-ABI 负数错误码（mox_proot_* 统一约定，见 lib.rs 注释表）。
     pub fn to_code(&self) -> i32 {
         match self {
             ProotError::InvalidArg(_) => -1,
@@ -154,7 +157,7 @@ impl ProotError {
     }
 }
 
-/// 运行时翻译自检（C-ABI `moxsh_proot_translate_selftest` 的实现）。
+/// 运行时翻译自检（C-ABI `mox_proot_translate_selftest` 的实现）。
 ///
 /// 与 translate.rs 的 `#[cfg(test)]` 单测互相独立：后者仅在 `cargo test` 可用，
 /// 本函数随 so 打包，供 Kotlin 首次启动自检（返回通过用例数，等于
@@ -163,7 +166,7 @@ pub const TRANSLATE_SELFTEST_TOTAL: usize = 14;
 
 pub fn translate_selftest() -> usize {
     use translate::{FakeRootAction, TranslateRules};
-    let rf = Path::new("/data/local/tmp/moxsh-selftest/rootfs");
+    let rf = Path::new("/data/local/tmp/mox-proot-selftest/rootfs");
     let mut pass = 0usize;
 
     // 1) 根路径 → rootfs 本身。
@@ -256,7 +259,7 @@ pub struct ProotConfig {
     pub fake_uid: u32,
     /// fake root 伪装的身份 gid（`-i uid:gid` 的 gid；省略则等于 uid）。
     pub fake_gid: u32,
-    /// 诊断日志级别（`-v` 累加；≥1 即开启引擎内部诊断输出，等同 `MOXSH_DBG=1`）。
+    /// 诊断日志级别（`-v` 累加；≥1 即开启引擎内部诊断输出，等同 `MOX_DBG=1`）。
     pub verbose: u8,
     /// 需隐藏的 guest 路径列表（`--hide` 可重复）。命中路径在路径类 syscall 被
     /// 重定向到不存在的哨兵路径，使访问读为 ENOENT——各解决一个真实痛点。
@@ -376,7 +379,7 @@ impl ProotConfig {
     ///
     /// 环境优先级（低 → 高，同 key 后者覆盖前者，见 [`locale::upsert`]）：
     /// 引擎默认（HOME/PATH/LANG/TERM） < 宿主透传（LANG/LC_ALL/LC_CTYPE/TERM）
-    /// < 容器 env 文件（`<rootfs>/etc/moxsh/env`，见 [`locale`]） < 用户显式 `-e`。
+    /// < 容器 env 文件（`<rootfs>/etc/mox-proot/env`，见 [`locale`]） < 用户显式 `-e`。
     ///
     /// 0.2.0 起补 LANG/TERM：`env -i` 清空继承后早年只给 HOME/PATH，
     /// 容器内中文必乱码、TUI 必降级——roadmap §2 的根治点。
@@ -440,7 +443,7 @@ mod env_command_tests {
     }
 
     fn tmp_rootfs(tag: &str) -> std::path::PathBuf {
-        let p = std::env::temp_dir().join(format!("moxsh-envtest-{}", tag));
+        let p = std::env::temp_dir().join(format!("mox-proot-envtest-{}", tag));
         let _ = std::fs::remove_dir_all(&p);
         std::fs::create_dir_all(&p).unwrap();
         p
@@ -500,8 +503,8 @@ mod env_command_tests {
         assert_eq!(get(&env, "TERM"), Some("screen-256color"));
 
         // 容器 env 文件覆盖宿主透传（rootfs 内定制点说话）。
-        std::fs::create_dir_all(rf.join("etc/moxsh")).unwrap();
-        std::fs::write(rf.join("etc/moxsh/env"), "LANG=ja_JP.UTF-8\n").unwrap();
+        std::fs::create_dir_all(rf.join("etc/mox-proot")).unwrap();
+        std::fs::write(rf.join("etc/mox-proot/env"), "LANG=ja_JP.UTF-8\n").unwrap();
         let env = kv(&ProotConfig::with_distro_defaults(&rf));
         assert_eq!(get(&env, "LANG"), Some("ja_JP.UTF-8"));
         // 文件没提 TERM，宿主透传值仍在。

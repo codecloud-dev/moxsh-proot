@@ -228,7 +228,7 @@ jobs:
           fail_on_unmatched_files: true
 
   # 国内镜像：把全部 Release 资产（引擎 + distro + Go 安装器 + 校验文件）同步到
-  # Gitee（thousand-code-crafts/mox-proot release 1217672）。Gitee 是 GitHub 的
+  # Gitee（thousand-code-crafts/moxsh-proot release 1217672）。Gitee 是 GitHub 的
   # 源码镜像，但「不自动同步二进制资产」——所以国内用户此前选 Gitee 源会 404。
   # 本步用 GITEE_TOKEN 把二进制也推上去，Gitee 路径对国内用户真正可用。
   # 前置：仓库 Secrets 配置 GITEE_TOKEN（thousand-code-crafts 满权限写令牌）。

@@ -26,6 +26,9 @@
 
 pub mod cli;
 pub mod access;
+/// 后端基址单一来源（mox-id Workers / mox-site Pages）。设备码、粉丝、商品授权
+/// 三个客户端共用，避免各自硬编码占位域名造成「后端没接上」。
+pub mod backend;
 pub mod brand;
 pub mod console;
 /// 终端「惊喜体验」三件套：时间上下文感知 / 古诗 / 彩蛋（#450）。
@@ -52,9 +55,13 @@ pub mod translate;
 /// 仅 `tui` feature 启用，不污染 Android NDK 构建。
 #[cfg(feature = "tui")]
 pub mod tui;
+/// 终端半块二维码：依赖 `qrcode` crate，仍由 `tui` feature 门控，不污染 NDK 构建。
 #[cfg(feature = "tui")]
 pub mod qrcode_term;
-#[cfg(feature = "tui")]
+/// 设备码授权（RFC 8628）：**无 feature 门禁**。
+/// 只依赖系统 curl + 手写 JSON 提取，默认发布的 `mox-proot` / `mox-proot-distro`
+/// 因此也带 `login` 子命令；此前被 `tui` 门禁挡住，等于后端从未对正式产物开放。
+/// 二维码渲染在无 tui 时降级为「URL + 验证码」纯文本，功能不受影响。
 pub mod device_code;
 
 use std::fmt;

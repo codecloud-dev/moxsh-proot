@@ -36,7 +36,9 @@ use ratatui::{
     Terminal,
 };
 
+use crate::proot::backend;
 use crate::proot::delight;
+use crate::proot::device_code::{self, DeviceCodeResp};
 use crate::proot::distro::{builtin_specs, DistroManager, DistroSpec, InstalledDistro};
 use crate::proot::links;
 use crate::proot::qrcode_term;
@@ -127,6 +129,8 @@ struct App {
     welcome: bool,
     /// 后台安装任务（Some = 正在跑，TUI 画 Gauge + Spinner）。
     install: Option<InstallTask>,
+    /// 真实设备码（按 l 向 mox-id 后端申请；Some 时账号页渲染带 user_code 的真二维码）。
+    login: Option<DeviceCodeResp>,
 }
 
 impl App {
@@ -154,6 +158,7 @@ impl App {
             account_mask: String::new(),
             welcome: true,
             install: None,
+            login: None,
         };
         app.refresh_account();
         app.rebuild_rows(&installed, &specs);
@@ -306,6 +311,55 @@ impl App {
     ///
     /// 复用 [`crate::proot::device_code::run_login_flow`]，该函数自管二维码渲染与轮询落盘；
     /// 绑定成功后 [`refresh_account`] 会从落盘 token 读到新状态。失败（如超时/网络）不留痕。
+    /// 向真实后端申请一次性设备码（RFC 8628）。此前账号页只有一枚固定
+    /// `/activate` 的「示意」二维码，扫了也没有 user_code，等于没接后端。
+    fn start_login(&mut self) {
+        self.status = "正在向 mox-id 申请设备码…".into();
+        match device_code::request_code(&device_code::base_url()) {
+            Ok(r) => {
+                self.status = format!(
+                    "设备码 {} 已就绪：手机确认后按 r 检查授权（Enter 可切原生终端扫码）",
+                    r.user_code
+                );
+                self.login = Some(r);
+            }
+            Err(e) => {
+                self.status = format!(
+                    "申请设备码失败：{e}（检查网络，或设 MOX_ID_BASE 指向自托管后端）"
+                );
+                self.login = None;
+            }
+        }
+    }
+
+    /// 轮询后端，手机确认后换取 device_token 并落盘。
+    fn poll_login(&mut self) {
+        let Some(code) = self.login.as_ref().map(|c| c.device_code.clone()) else {
+            self.status = "请先按 l 申请设备码".into();
+            return;
+        };
+        match device_code::poll_token(&device_code::base_url(), &code) {
+            Ok(device_code::PollOutcome::Ready(t)) => {
+                match device_code::store_device_token(&t.device_token) {
+                    Ok(()) => {
+                        self.login = None;
+                        self.refresh_account();
+                        self.status = "✅ 设备已绑定（device_token 已保存）".into();
+                    }
+                    Err(e) => self.status = format!("保存令牌失败：{e}"),
+                }
+            }
+            Ok(device_code::PollOutcome::Pending) => {
+                self.status = "⏳ 仍在等待手机确认，稍后再按 r 检查".into();
+            }
+            Ok(device_code::PollOutcome::Error(e)) => {
+                self.status = format!("绑定失败：{e}（按 l 重新申请）");
+                self.login = None;
+            }
+            Err(e) => self.status = format!("轮询失败：{e}"),
+        }
+    }
+
     fn run_login_binding(&mut self) {
         let rc = leave_tui_for(|| crate::proot::device_code::run_login_flow());
         self.refresh_account();
@@ -501,9 +555,16 @@ fn run_app(
                         _ => {}
                     },
                     KeyCode::Enter => app.primary(),
+                    KeyCode::Char('l') => {
+                        if app.tab == TAB_ACCOUNT {
+                            app.start_login();
+                        }
+                    }
                     KeyCode::Char('r') => {
                         if app.tab == TAB_DISTROS {
                             app.remove();
+                        } else if app.tab == TAB_ACCOUNT {
+                            app.poll_login();
                         }
                     }
                     KeyCode::Char('b') => {
@@ -570,7 +631,7 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         _ => {}
     }
 
-    let help = "↑↓ 选择 · Enter 登录/安装 · r 删除 · b 备份 · Tab 切换 · q 退出";
+    let help = "↑↓ 选择 · Enter 登录/安装 · l 设备码 · r 删除/检查 · b 备份 · Tab 切换 · q 退出";
     let status_line = if app.status.is_empty() {
         Line::from(Span::styled(help, Style::default().fg(Color::DarkGray)))
     } else {
@@ -835,11 +896,11 @@ fn render_wizard(f: &mut ratatui::Frame, area: Rect, _app: &App) {
     f.render_widget(p, area);
 }
 
-/// 账号页（0.4.0 路线图「账号」tab）：展示设备绑定状态，按 Enter 触发扫码绑定。
+/// 账号页：展示设备绑定状态，并可直接连真实后端完成 RFC 8628 绑定。
 ///
-/// 安全说明：本页只展示绑定*状态*与 token 掩码，**不在此渲染二维码**（扫码由终端
-/// 原生 `run_login_flow` 处理，能获得完整半块字符图、不被 TUI 盒子裁切）。设备码
-/// 授权走 RFC 8628，后端 `/activate` 复用既有 GitHub / Gitee 双 OAuth。
+/// `l` 向 mox-id 申请一次性设备码 → 右侧二维码换成带 `user_code` 的真码；
+/// `r` 轮询换 token 落盘；`Enter` 仍可切到原生终端画全尺寸二维码（不被盒子裁切）。
+/// 后端 `/activate` 复用既有 GitHub / Gitee 双 OAuth。
 fn render_account(f: &mut ratatui::Frame, area: Rect, app: &App) {
     let (state_label, state_color) = if app.account_bound {
         (
@@ -868,18 +929,32 @@ fn render_account(f: &mut ratatui::Frame, area: Rect, app: &App) {
     } else {
         lines.push(Line::from(""));
         lines.push(Line::from(Span::styled(
-            "按 Enter 开始设备码扫码绑定：",
+            "按 l 申请设备码（真实请求后端）/ Enter 切原生终端扫码",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
         )));
-        lines.push(Line::from("  1. 终端临时退出 TUI，打印半块字符二维码 + 验证码"));
-        lines.push(Line::from("  2. 手机扫码（或访问提示链接），用 GitHub / Gitee 登录并确认"));
-        lines.push(Line::from("  3. 确认后终端自动轮询拿到 device_token 并落盘，回到本页即显示「已绑定」"));
+        if let Some(c) = &app.login {
+            lines.push(Line::from(format!("验证码：{}", c.user_code)));
+            lines.push(Line::from(format!(
+                "有效期 {}s · 手机确认后按 r 检查授权", c.expires_in
+            )));
+            lines.push(Line::from(Span::styled(
+                "后端已签发一次性码，右侧是真二维码，可直接扫。",
+                Style::default().fg(Color::Green),
+            )));
+        } else {
+            lines.push(Line::from("  1. 按 l → 后端签发 user_code，右侧换成真二维码"));
+            lines.push(Line::from("  2. 手机扫码，用 GitHub / Gitee 登录并确认绑定"));
+            lines.push(Line::from("  3. 按 r 轮询 → 拿到 device_token 落盘即显示「已绑定」"));
+        }
     }
 
-    // 宽屏时右侧内嵌一枚「登录入口」二维码（qrcode_term 半块字符，T4）。
-    // 说明：这是固定入口示意图；真正带 user_code 的一次性二维码在按 Enter
-    // 后由 run_login_flow 在原生终端渲染（不被 TUI 盒子裁切、可直接扫）。
-    let qr_uri = format!("{}/activate", crate::proot::device_code::DEFAULT_BASE);
+    // 宽屏内嵌二维码（qrcode_term 半块字符）。按 l 拿到真实设备码后，这里换成
+    // 带一次性 user_code 的 verification_uri_complete，扫了直接进 /activate 确认页；
+    // 未申请时退化为官网固定入口码，仅作引导（不再是「示意」冒充可扫）。
+    let (qr_uri, qr_title) = match &app.login {
+        Some(c) => (c.verification_uri_complete.clone(), "扫码绑定（真码）"),
+        None => (backend::site_page("/activate"), "登录入口"),
+    };
     let qr_text = qrcode_term::render_uri(&qr_uri).unwrap_or_default();
     let (text_area, qr_area) = if area.width >= 72 {
         let cols = Layout::default()
@@ -907,7 +982,7 @@ fn render_account(f: &mut ratatui::Frame, area: Rect, app: &App) {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("登录入口（示意）")
+                    .title(qr_title)
                     .border_style(Style::default().fg(Color::Blue)),
             )
             .alignment(Alignment::Center);
@@ -1012,7 +1087,7 @@ mod tests {
 
     #[test]
     fn account_qr_renders_halfblocks() {
-        let uri = format!("{}/activate", crate::proot::device_code::DEFAULT_BASE);
+        let uri = backend::site_page("/activate");
         let qr = qrcode_term::render_uri(&uri).unwrap();
         let lines: Vec<&str> = qr.lines().collect();
         assert!(lines.len() > 4, "二维码应有足够行数");
@@ -1020,5 +1095,16 @@ mod tests {
             qr.contains('█') || qr.contains('▀') || qr.contains('▄'),
             "应含半块字符"
         );
+    }
+
+    #[test]
+    fn real_device_code_uri_carries_one_time_user_code() {
+        // 接上后端后，账号页二维码内容必须是后端签发的、带 code 的一次性链接，
+        // 且与官网同域（Pages Functions 反代到 mox-id）。固定 /activate 不再算数。
+        let uri = format!("{}/activate?code=A7K2-9FQ1", backend::PUBLIC_BASE);
+        assert!(uri.starts_with(backend::PUBLIC_BASE));
+        assert!(uri.contains("code="));
+        let qr = qrcode_term::render_uri(&uri).unwrap();
+        assert!(qr.contains('█') || qr.contains('▀') || qr.contains('▄'));
     }
 }

@@ -1,22 +1,28 @@
-//! 设备码授权客户端（RFC 8628），仅 `tui` feature 启用。
+//! 设备码授权客户端（RFC 8628）。
 //!
 //! 流程（与 mox-id 后端 `/device/code` `/device/token` `/activate` 对齐）：
 //!   ① [`request_code`] → device_code + user_code + verification_uri_complete
-//!   ② 把 verification_uri_complete 交给 [`crate::proot::qrcode_term`] 渲染成终端二维码
+//!   ② 把 verification_uri_complete 渲染成终端二维码（或降级为纯文本 URL）
 //!   ③ 手机扫码打开 /activate，用 GitHub / Gitee 登录并确认绑定
 //!   ④ [`poll_token`] 轮询：pending 返回 `None`，authorized 返回 device_token 并落盘
 //!
-//! HTTP 走系统 `curl`（CLI 工具本就依赖 curl，零 TLS 依赖；引擎 cdylib 不编入本模块）。
+//! HTTP 走系统 `curl`（CLI 工具本就依赖 curl，零 TLS 依赖）。
 //! JSON 解析为手写最小提取器（响应为扁平字段，无需 serde），且**与网络调用分离**便于单测。
-
-#![cfg(feature = "tui")]
+//!
+//! **接线说明**：本模块不依赖任何可选 crate，因此**不对 `tui` feature 设门禁**——
+//! 默认发布的 `mox-proot` / `mox-proot-distro` 同样具备 `login` 子命令。此前整个模块
+//! 被 `#[cfg(feature = "tui")]` 挡在发布产物之外，后端虽已部署却等于没接上。
+//! 二维码只是可选增强：无 tui 时降级为「链接 + 验证码」文本，绑定流程照样走得通。
 
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// 后端基址默认常量（部署后替换为真实 mox-id 域名）。可用环境变量 `MOX_ID_BASE` 覆盖。
-pub const DEFAULT_BASE: &str = "https://mox-id.mox-proot.app";
+use crate::proot::backend;
+
+/// 后端基址默认常量：取 [`backend::ID_BASE`] 的真实部署地址。
+/// 可用环境变量 `MOX_ID_BASE` 覆盖（自托管 / 联调）。
+pub const DEFAULT_BASE: &str = backend::ID_BASE;
 
 #[derive(Debug, Clone)]
 pub struct DeviceCodeResp {
@@ -41,11 +47,10 @@ pub enum PollOutcome {
     Error(String),
 }
 
-fn base_url() -> String {
-    std::env::var("MOX_ID_BASE")
-        .ok()
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| DEFAULT_BASE.to_string())
+/// 当前生效的后端根地址（`MOX_ID_BASE` 可覆盖）。公开给 TUI 账号页复用，
+/// 避免界面层再硬编码一遍域名。
+pub fn base_url() -> String {
+    backend::id_base()
 }
 
 /// 取 device_token 落盘路径：`$MOX_ROOT/device_token`（MOX_ROOT 缺省 ~/.mox）。
@@ -71,7 +76,7 @@ pub fn store_device_token(token: &str) -> Result<(), String> {
     f.write_all(token.trim().as_bytes())
         .and_then(|_| f.write_all(b"\n"))
         .map_err(|e| format!("写 device_token 失败: {e}"))?;
-    let _ = set_readonly(&p);
+    set_readonly(&p);
     Ok(())
 }
 
@@ -105,14 +110,14 @@ fn curl_post_json(url: &str, body: &str) -> Result<String, String> {
 
 /// 请求设备码（联网）。
 pub fn request_code(base: &str) -> Result<DeviceCodeResp, String> {
-    let url = format!("{}/device/code", base.trim_end_matches('/'));
+    let url = backend::join(base, "/device/code");
     let text = curl_post_json(&url, "{}")?;
     parse_device_code(&text)
 }
 
 /// 轮询换取 device_token（联网）。
 pub fn poll_token(base: &str, device_code: &str) -> Result<PollOutcome, String> {
-    let url = format!("{}/device/token", base.trim_end_matches('/'));
+    let url = backend::join(base, "/device/token");
     let body = format!("{{\"device_code\":\"{}\"}}", escape_json(device_code));
     let text = curl_post_json(&url, &body)?;
     Ok(parse_token(&text))
@@ -203,6 +208,31 @@ pub fn parse_token(json: &str) -> PollOutcome {
     PollOutcome::Error(format!("未知的设备码响应: {json}"))
 }
 
+/// 打印「扫码 / 手输」引导（tui 构建画半块二维码，默认构建纯文本降级）。
+#[cfg(feature = "tui")]
+fn print_binding_hint(uri: &str, user_code: &str) {
+    // verification_uri_complete 编码进图，手机扫码即跳到 /activate 确认页。
+    match crate::proot::qrcode_term::render_uri(uri) {
+        Ok(qr) => println!("{qr}"),
+        Err(e) => eprintln!("⚠ 二维码渲染失败（{e}），请手动打开下方链接完成绑定"),
+    }
+    println!();
+    println!("请用手机浏览器/相机扫描上方二维码，或在手机打开：");
+    println!("  {uri}");
+    println!("验证码（若需手动输入）：{user_code}");
+    println!("（若扫不出，请把终端行距设为 1.0）");
+    println!();
+}
+
+/// 无 tui 时的等价降级：链接 + 验证码，后端 `/activate?code=` 同样能完成绑定。
+#[cfg(not(feature = "tui"))]
+fn print_binding_hint(uri: &str, user_code: &str) {
+    println!("本构建未启用二维码渲染，请用手机浏览器打开：");
+    println!("  {uri}");
+    println!("验证码（若需手动输入）：{user_code}");
+    println!();
+}
+
 /// 完整登录流程（供 `mox-proot login` 子命令调用）：发码 → 终端二维码 → 轮询 → 落盘。
 ///
 /// 不依赖 TUI；纯 stdout 输出（二维码 + 提示），可被脚本/管道安全使用（二维码走 stderr 之外的
@@ -217,21 +247,7 @@ pub fn run_login_flow() -> i32 {
             return 2;
         }
     };
-    // 渲染二维码（verification_uri_complete 编码进图，手机扫码即跳到 /activate 确认页）
-    match crate::proot::qrcode_term::render_uri(&resp.verification_uri_complete) {
-        Ok(qr) => {
-            println!("{qr}");
-        }
-        Err(e) => {
-            eprintln!("⚠ 二维码渲染失败（{e}），可手动打开下方链接完成绑定");
-        }
-    }
-    println!();
-    println!("请用手机浏览器/相机扫描上方二维码，或在手机打开：");
-    println!("  {}", resp.verification_uri_complete);
-    println!("验证码（若需手动输入）：{}", resp.user_code);
-    println!("（若扫不出，请把终端行距设为 1.0）");
-    println!();
+    print_binding_hint(&resp.verification_uri_complete, &resp.user_code);
 
     // 轮询（尊重 interval，超时按 expires_in 截止）
     eprintln!("⠸ 等待手机确认…（按 R 重新生成 / Ctrl-C 取消）");

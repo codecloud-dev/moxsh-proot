@@ -149,5 +149,5 @@ e2e 验证会自动下载 Alpine minirootfs（约 4MB）到临时目录。
 
 ## 5. 支持与反馈
 
-- Issue: <https://github.com/codecloud-dev/mox-proot/issues>
+- Issue: <https://github.com/codecloud-dev/moxsh-proot/issues>
 - 许可证：GPL-3.0

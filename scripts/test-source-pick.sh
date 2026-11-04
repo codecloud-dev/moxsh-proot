@@ -30,8 +30,8 @@ fi
 mock_pick() {
   local gh="$1" gt="$2"; shift 2
   env "$@" GH_PROBE="$gh" GITEE_PROBE="$gt" \
-    GITHUB_REPO="codecloud-dev/mox-proot" \
-    GITEE_REPO="thousand-code-crafts/mox-proot" \
+    GITHUB_REPO="codecloud-dev/moxsh-proot" \
+    GITEE_REPO="thousand-code-crafts/moxsh-proot" \
     RELEASE="proot-latest" \
     bash -c '
       curl() {
@@ -59,8 +59,8 @@ fail=0
 mock_switch() {
   local gh="$1" gt="$2" src="$3" post="$4"; shift 4
   env "$@" MOX_PROOT_SOURCE="$src" GH_PROBE="$gh" GITEE_PROBE="$gt" \
-    GITHUB_REPO="codecloud-dev/mox-proot" \
-    GITEE_REPO="thousand-code-crafts/mox-proot" \
+    GITHUB_REPO="codecloud-dev/moxsh-proot" \
+    GITEE_REPO="thousand-code-crafts/moxsh-proot" \
     RELEASE="proot-latest" \
     bash -c '
       curl() {
@@ -105,27 +105,27 @@ check() {
 
 # 1) 国内：GitHub 不可达，Gitee 快 → gitee
 check "国内（gh 不可达 / gitee 0.30s）" \
-  "$(mock_pick "" 0.30)" gitee "gitee.com/thousand-code-crafts/mox-proot/releases/download" "/repository/archive/"
+  "$(mock_pick "" 0.30)" gitee "gitee.com/thousand-code-crafts/moxsh-proot/releases/download" "/repository/archive/"
 
 # 2) 国外：GitHub 快，Gitee 不可达 → github
 check "国外（gh 0.20s / gitee 不可达）" \
-  "$(mock_pick 0.20 "")" github "github.com/codecloud-dev/mox-proot/releases/download" "/archive/refs/tags/"
+  "$(mock_pick 0.20 "")" github "github.com/codecloud-dev/moxsh-proot/releases/download" "/archive/refs/tags/"
 
 # 3) 双端都通但 Gitee 慢 → github（浮点比较走 awk）
 check "双通但 gitee 慢（gh 0.20s / gitee 2.50s）" \
-  "$(mock_pick 0.20 2.50)" github "github.com/codecloud-dev/mox-proot/releases/download"
+  "$(mock_pick 0.20 2.50)" github "github.com/codecloud-dev/moxsh-proot/releases/download"
 
 # 4) 双端都不可达 → 兜底 github（错误信息指向标准源）
 check "双不可达兜底" \
-  "$(mock_pick "" "")" github "github.com/codecloud-dev/mox-proot/releases/download"
+  "$(mock_pick "" "")" github "github.com/codecloud-dev/moxsh-proot/releases/download"
 
 # 5) 强制 gitee（即使 GitHub 更快也不探测）
 check "强制 gitee" \
-  "$(mock_pick 0.10 5.00 MOX_PROOT_SOURCE=gitee)" gitee "gitee.com/thousand-code-crafts/mox-proot/releases/download"
+  "$(mock_pick 0.10 5.00 MOX_PROOT_SOURCE=gitee)" gitee "gitee.com/thousand-code-crafts/moxsh-proot/releases/download"
 
 # 6) 强制 github
 check "强制 github" \
-  "$(mock_pick "" 0.10 MOX_PROOT_SOURCE=github)" github "github.com/codecloud-dev/mox-proot/releases/download"
+  "$(mock_pick "" 0.10 MOX_PROOT_SOURCE=github)" github "github.com/codecloud-dev/moxsh-proot/releases/download"
 
 # 7) 自定义镜像（BASE_URL 透传，ARCHIVE_URL 留空）
 check "自定义镜像" \
@@ -133,22 +133,22 @@ check "自定义镜像" \
 
 # 8) 未知 MOX_PROOT_SOURCE 值按自动处理（不炸，走探测）
 check "未知 source 值按自动" \
-  "$(mock_pick "" 0.30 MOX_PROOT_SOURCE=bogus)" gitee "gitee.com/thousand-code-crafts/mox-proot/releases/download"
+  "$(mock_pick "" 0.30 MOX_PROOT_SOURCE=bogus)" gitee "gitee.com/thousand-code-crafts/moxsh-proot/releases/download"
 
 # 9) 回退切换：github ↔ gitee 互换（下载受阻时的自救）
 check "回退切换 github→gitee" \
   "$(mock_switch 0.10 0.10 github 'switch_source')" \
-  gitee "gitee.com/thousand-code-crafts/mox-proot/releases/download" "/repository/archive/"
+  gitee "gitee.com/thousand-code-crafts/moxsh-proot/releases/download" "/repository/archive/"
 check "回退切换 gitee→github" \
   "$(mock_switch 0.10 0.10 gitee 'switch_source')" \
-  github "github.com/codecloud-dev/mox-proot/releases/download" "/archive/refs/tags/"
+  github "github.com/codecloud-dev/moxsh-proot/releases/download" "/archive/refs/tags/"
 
 # 11) Gitee 仓库可达但 Release 无二进制资产（2026-10-25 生产实况复刻）：
 #     raw README 探测会误判「gitee 可达」→ 用户被选中后 404 才切源；
 #     资产探测下 gitee 自动落选，直接选 github。
 mock_asset_only_gh() {
-  env GITHUB_REPO="codecloud-dev/mox-proot" \
-    GITEE_REPO="thousand-code-crafts/mox-proot" \
+  env GITHUB_REPO="codecloud-dev/moxsh-proot" \
+    GITEE_REPO="thousand-code-crafts/moxsh-proot" \
     RELEASE="proot-latest" \
     bash -c '
       curl() {
@@ -168,7 +168,7 @@ mock_asset_only_gh() {
     '
 }
 check "Gitee 有仓库无资产 → 选 github（不白等 404）" \
-  "$(mock_asset_only_gh)" github "github.com/codecloud-dev/mox-proot/releases/download"
+  "$(mock_asset_only_gh)" github "github.com/codecloud-dev/moxsh-proot/releases/download"
 
 # 10) custom 源不可切换（用户显式镜像，不擅自换端）：SOURCE/BASE_URL 原样不动
 check "custom 源拒绝切换" \

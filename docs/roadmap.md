@@ -118,5 +118,5 @@
 
 - **mox-proot-terminal 删 proot 代码前，必须在工作目录留完整副本**（主人明确要求：
   「不能丢了，以后要交上去」）。副本路径：`/root/ws/backup/`。
-- Gitee（thousand-code-crafts/mox-proot）：GitHub 主 + Gitee 镜像，**先手动同步**。
+- Gitee（thousand-code-crafts/moxsh-proot）：GitHub 主 + Gitee 镜像，**先手动同步**。
 - 仓库必须公开（主人会亲自查）。

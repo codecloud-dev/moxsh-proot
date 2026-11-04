@@ -42,6 +42,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::proot::backend;
 use crate::proot::{ProotError, ProotResult};
 
 /// 设备身份文件相对 `$MOX_ROOT` 的位置（删容器不删它；删了=换设备，需重新绑定）。
@@ -257,7 +258,7 @@ pub fn bind_page_url() -> String {
     std::env::var(BIND_PAGE_ENV)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://mox-site.pages.dev/bind.html".to_string())
+        .unwrap_or_else(|| backend::site_page("/bind.html"))
         .trim_end_matches('/')
         .to_string()
 }
@@ -265,11 +266,12 @@ pub fn bind_page_url() -> String {
 /// 授权校验端点（`MOX_ENTITLEMENT_API` 覆盖）。
 /// 默认走**官网同域反代**（pages.dev/entitlement/check）——Worker 标准域
 /// workers.dev 国内不可达（爱发电 webhook 443 同款坑），pages.dev 实测可达。
+/// 域名由 [`backend`] 单一来源派生，避免与设备码 / 粉丝客户端各自漂移。
 fn entitlement_api() -> String {
     std::env::var(ENTITLEMENT_API_ENV)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://mox-site.pages.dev/entitlement/check".to_string())
+        .unwrap_or_else(|| backend::endpoint("/entitlement/check"))
 }
 
 /// 联网拉取本机全部授权：`GET <api>?device_token=<hex>` → 逐行解析 `ok <pid> <tier> <exp>`。

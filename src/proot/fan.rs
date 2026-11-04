@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::proot::backend;
 use crate::proot::{ProotError, ProotResult};
 
 /// 令牌文件相对 `$MOX_ROOT` 的位置（账号级，删容器不删它；删了需重新领取）。
@@ -74,23 +75,26 @@ pub fn verify_mode() -> &'static str {
 }
 
 /// 专属页面 URL（`MOX_FAN_PAGE` 覆盖）。
-/// 默认指向官网（GitHub Pages）的隐藏页 fan.html——导航里没有入口，
+/// 默认指向官网 `mox-site.pages.dev` 的隐藏页 fan.html——导航里没有入口，
 /// 只能由本命令带 redirect/state 唤起（项目主人拍板：不给密钥 URL）。
+/// 基址由 [`backend`] 统一提供，旧的 github.io 地址已废弃。
 pub fn fan_page_url() -> String {
     std::env::var(FAN_PAGE_ENV)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://codecloud-dev.github.io/mox-site/fan.html".to_string())
+        .unwrap_or_else(|| backend::site_page("/fan.html"))
         .trim_end_matches('/')
         .to_string()
 }
 
 /// 后端验签端点（`MOX_REDEEM_API` 覆盖）。
+/// 默认走**官网同域反代**（pages.dev/fan/verify），不再直连 workers.dev：
+/// 后者国内不可达，且同域能保住 SSO 会话。
 fn redeem_api() -> String {
     std::env::var(REDEEM_API_ENV)
         .ok()
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "https://mox-id.codecloud.workers.dev/fan/verify".to_string())
+        .unwrap_or_else(|| backend::endpoint("/fan/verify"))
 }
 
 /// 当前 unix 秒（时钟异常回落 0）。

@@ -7,7 +7,7 @@
 //   - probe：只打印勘察报告（调试/验证用）。
 //
 // 与 bash 引导桩（scripts/install-mox-proot.sh）的环境变量约定一致：
-//   - MOX_PROOT_REPO（默认 codecloud-dev/mox-proot）
+//   - MOX_PROOT_REPO（默认 codecloud-dev/moxsh-proot）
 //   - MOX_PROOT_RELEASE（默认 proot-latest）
 //   - MOX_PROOT_BASE_URL（覆盖主通道，指向国内镜像）
 //   - MOX_PROOT_VERSION（update 检查用的版本号，默认同 RELEASE）
@@ -20,13 +20,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/codecloud-dev/mox-proot/go/internal/fetch"
-	"github.com/codecloud-dev/mox-proot/go/internal/install"
-	"github.com/codecloud-dev/mox-proot/go/internal/probe"
+	"github.com/codecloud-dev/moxsh-proot/go/internal/fetch"
+	"github.com/codecloud-dev/moxsh-proot/go/internal/install"
+	"github.com/codecloud-dev/moxsh-proot/go/internal/probe"
 )
 
 const (
-	defaultRepo    = "codecloud-dev/mox-proot"
+	defaultRepo    = "codecloud-dev/moxsh-proot"
 	defaultRelease = "proot-latest"
 )
 
@@ -67,7 +67,7 @@ func usage() {
   mox-proot-installer probe     只打印环境勘察报告
 
 环境变量：
-  MOX_PROOT_REPO        GitHub 仓库（默认 codecloud-dev/mox-proot）
+  MOX_PROOT_REPO        GitHub 仓库（默认 codecloud-dev/moxsh-proot）
   MOX_PROOT_RELEASE     发布 tag（默认 proot-latest）
   MOX_PROOT_BASE_URL    覆盖下载主通道（国内镜像，布局需与 GitHub 一致）
   MOX_PROOT_VERSION     update 检查的版本号（默认同 RELEASE）

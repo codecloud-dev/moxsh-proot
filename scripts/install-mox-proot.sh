@@ -7,8 +7,8 @@
 #   mox-proot -R ~/ubuntu -0 -- bash
 #
 # 安装方式（原版 Termux，二选一，脚本自动探测国内外线路）：
-#   curl -fsSL https://raw.githubusercontent.com/codecloud-dev/mox-proot/main/scripts/install-mox-proot.sh | bash
-#   curl -fsSL https://gitee.com/thousand-code-crafts/mox-proot/raw/main/scripts/install-mox-proot.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-mox-proot.sh | bash
+#   curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
 #
 # 本脚本是安装体系的 **bash 探测层**（零依赖、可 curl|bash）；
 # richer 安装/更新体验走 Go 安装器（仓库 go/ 目录，Release 资产
@@ -27,8 +27,8 @@
 
 set -euo pipefail
 
-GITHUB_REPO="${MOX_PROOT_REPO:-codecloud-dev/mox-proot}"
-GITEE_REPO="${MOX_GITEE_REPO:-thousand-code-crafts/mox-proot}"
+GITHUB_REPO="${MOX_PROOT_REPO:-codecloud-dev/moxsh-proot}"
+GITEE_REPO="${MOX_GITEE_REPO:-thousand-code-crafts/moxsh-proot}"
 RELEASE="${MOX_PROOT_RELEASE:-proot-latest}"
 
 # NO_COLOR 约定（no-color.org）：设了任意值即关色；非 TTY（curl|bash 重定向）也关色。
@@ -209,7 +209,10 @@ trap 'rm -rf "$TMP"' EXIT
 # 注：jsDelivr 仅服务仓库内文件、不服务 Release 二进制资产（实测 404），
 # 故二进制兜底统一走 ghproxy；脚本 raw 的 jsDelivr 备援见 README。
 MIRROR_PROXIES="https://ghproxy.net/https://"
-WEBSITE_DL="${MOX_PROOT_WEBSITE_DL:-https://mox-site.pages.dev/dl}"
+# 官网静态通道默认**关闭**：在线安装实测 https://mox-site.pages.dev/dl 为 404，
+# 旧版把它当第四级兜底，等于每个资产都要白等一次 12s 超时的死链。
+# 只有显式设置 MOX_PROOT_WEBSITE_DL（真正部署了 /dl）时才启用。
+WEBSITE_DL="${MOX_PROOT_WEBSITE_DL:-}"
 
 # 由 GitHub Release 基址派生 ghproxy 镜像候选 URL 列表。
 mirror_urls() {
@@ -240,8 +243,9 @@ fetch_asset_file() {
       return 0
     fi
   done
-  # 4) 官网静态通道（兜底中的兜底；需官网部署 /dl）
-  if curl -fSL --retry 2 --connect-timeout 12 -o "$out" "${WEBSITE_DL}/${asset}"; then
+  # 4) 官网静态通道（可选；默认未部署，仅显式配置 MOX_PROOT_WEBSITE_DL 才尝试）
+  if [ -n "${WEBSITE_DL}" ] \
+     && curl -fSL --retry 2 --connect-timeout 12 -o "$out" "${WEBSITE_DL}/${asset}"; then
     return 0
   fi
   return 1
@@ -273,12 +277,35 @@ install_bin() {
   # 自检 1：是 ELF 可执行（防下载到 HTML 错误页之类）。
   head -c 4 "${BINDIR}/${name}" | grep -q $'\x7fELF' \
     || die "装好的 ${name} 不是 ELF 可执行文件，安装异常。"
-  # 自检 2：--help 真实输出用法文本。先捕获再判（不能靠退出码管道——
-  #   本脚本 set -o pipefail，且不同版本 --help 的退出码约定可能变化）。
-  local help_out
-  help_out="$("${BINDIR}/${name}" --help 2>&1 || true)"
-  printf '%s\n' "$help_out" | grep -q "mox-proot" \
-    || die "自检失败：${name} --help 未输出预期用法文本。"
+  # 自检 2：--help 必须**真的执行成功**，且输出像一份用法文本。
+  #
+  # 这段历史上有两个方向的 bug，都被真实安装测试撞到过：
+  #   · 假阴性：旧版用 `grep -q "moxsh-proot"`，而 distro 的帮助首行是
+  #     「proot-distro（moxsh 兼容实现）」——压根不含品牌全名，0 命中 → die，
+  #     二进制其实是好的，却报安装失败。拿品牌名做内容断言本来就靠不住。
+  #   · 假阳性：旧版 `$(... --help 2>&1 || true)` 把退出码吞了；二进制因
+  #     GLIBC 版本跑不起来时，加载器报错行恰好以 "mox-proot:" 开头，grep
+  #     又把报错当成 help 输出认，于是「装成功」但一跑就崩。
+  #
+  # 现在：① 先判退出码（非 0 直接失败，能抓住动态链接失败）；
+  #       ② 内容只断言「非空 + 含用法/Usage/proot 这类稳定词」，与品牌名解耦；
+  #       ③ 失败时把真实输出回显，方便一眼定位。
+  local help_out help_rc
+  if help_out="$("${BINDIR}/${name}" --help 2>&1)"; then
+    help_rc=0
+  else
+    help_rc=$?
+  fi
+  if [ "$help_rc" -ne 0 ] || [ -z "$help_out" ]; then
+    die "自检失败：${name} --help 执行失败（退出码 ${help_rc}）。
+  实际输出：${help_out:-（空）}
+  常见原因：系统 glibc 低于该二进制的构建基线，或下载到损坏/错架构文件。
+  可尝试：MOX_PROOT_FORCE_MUSL=1 强制走零依赖 musl 静态版。"
+  fi
+  if ! printf '%s\n' "$help_out" | grep -Eq '用法[:：]|Usage|proot-distro|proot '; then
+    die "自检失败：${name} --help 输出不像用法文本（前 3 行）：
+$(printf '%s\n' "$help_out" | head -3)"
+  fi
 }
 
 # ---------------------------------------------------------------- 主体安装
@@ -390,13 +417,15 @@ if [ -n "$ARCHIVE_URL" ]; then
         '*/lua/proot.lua' \
         '*/lua/hooks/post-install.lua' \
         '*/lua/hooks/pre-login.lua' 2>/dev/null; then
+    # 钩子必须直接落在 hooks/ 根下：引擎 script.rs::discover_hooks 用
+    # fs::read_dir 只扫一层、不递归，放进 hooks/lua/ 反而永远加载不到。
+    # 旧版这里 `mkdir -p hooks/lua` 又立刻 `rmdir`（建了空目录再删），
+    # 属于无意义操作且注释与行为不符，已移除。
     cp "${TMP}/py/runtime/provision.py" "${TMP}/py/runtime/login_hook.py" \
        "${MOX_ROOT}/hooks/" 2>/dev/null || true
-    mkdir -p "${MOX_ROOT}/hooks/lua"
     cp "${TMP}/lua/proot.lua" "${MOX_ROOT}/hooks/" 2>/dev/null || true
     cp "${TMP}/lua/hooks/post-install.lua" "${TMP}/lua/hooks/pre-login.lua" \
        "${MOX_ROOT}/hooks/" 2>/dev/null || true
-    rmdir "${MOX_ROOT}/hooks/lua" 2>/dev/null || true
     log "钩子种子完成：${MOX_ROOT}/hooks（post-install / pre-login 生命周期）"
   else
     warn "tarball 内未找到钩子文件，跳过种子——引擎无钩子照常工作。"

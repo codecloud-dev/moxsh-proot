@@ -1,4 +1,4 @@
-> **🌐 主仓库在 GitHub** — [`codecloud-dev/mox-proot`](https://mox-site.pages.dev/go?r=mox-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/mox-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
+> **🌐 主仓库在 GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go?r=moxsh-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/moxsh-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
 
 <p align="center">
   <img src="assets/logo.svg" width="128" alt="mox-proot 液态玻璃标志">
@@ -7,9 +7,9 @@
 <h1 align="center">mox-proot</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/mox-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
-  <img src="https://img.shields.io/github/v/release/codecloud-dev/mox-proot?label=Latest&color=37d5d3" alt="Latest">
-  <img src="https://img.shields.io/github/stars/codecloud-dev/mox-proot?style=social" alt="GitHub Stars">
+  <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/moxsh-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
+  <img src="https://img.shields.io/github/v/release/codecloud-dev/moxsh-proot?label=Latest&color=37d5d3" alt="Latest">
+  <img src="https://img.shields.io/github/stars/codecloud-dev/moxsh-proot?style=social" alt="GitHub Stars">
   <img src="https://img.shields.io/badge/version-0.9.0-8a7bff" alt="version">
   <img src="https://img.shields.io/badge/license-GPL--3.0-37d5d3" alt="license">
   <img src="https://img.shields.io/badge/Core-Rust-000?logo=rust&logoColor=white" alt="Rust 内核">
@@ -24,7 +24,7 @@
 
 <p align="center"><a href="README.md">中文</a> · <a href="README.en.md">English</a></p>
 
-<p align="center"><b>⭐ 如果 mox-proot 对你有用，欢迎点个 <a href="https://mox-site.pages.dev/go?r=mox-proot">Star</a> —— 它能让更多人在手机上、在容器里用上顺滑的 Linux!</b></p>
+<p align="center"><b>⭐ 如果 mox-proot 对你有用，欢迎点个 <a href="https://mox-site.pages.dev/go?r=moxsh-proot">Star</a> —— 它能让更多人在手机上、在容器里用上顺滑的 Linux!</b></p>
 
 ## 品牌字标
 
@@ -75,8 +75,8 @@ TUI 六个标签：**发行版 / 短链 / 配方 / 日志 / 向导 / 账号**。
 > 这是个刚起步的项目，**bug 肯定有，而且不少**。我不装完美——
 > 你踩到的每一个坑、每一个槽点，都是帮我把它养好的机会。
 
-- 💥 遇到崩溃 / 跑不起来 / 结果不对？→ [提个 Bug 报告](https://mox-site.pages.dev/go?r=mox-proot&p=issues)
-- 💡 有想要的功能？→ [开个需求](https://mox-site.pages.dev/go?r=mox-proot&p=issues)
+- 💥 遇到崩溃 / 跑不起来 / 结果不对？→ [提个 Bug 报告](https://mox-site.pages.dev/go?r=moxsh-proot&p=issues)
+- 💡 有想要的功能？→ [开个需求](https://mox-site.pages.dev/go?r=moxsh-proot&p=issues)
 - 🗯️ 单纯想吐槽、挑刺？→ 也欢迎开 issue，标签随便打 😄
 
 每个 issue 我都会看，能修的尽快修。一起把它从“能跑”养到“好用” 💪
@@ -175,7 +175,7 @@ mox-proot 不是虚拟机，也不是模拟器——和上游 PRoot 一样，它
 <summary>展开短命令（约 1.5 KB，点开复制整段粘贴执行）</summary>
 
 ```bash
-echo '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' | base64 -d | gzip -d | sh
+echo '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' | base64 -d | gzip -d | sh
 ```
 
 </details>
@@ -183,13 +183,13 @@ echo 'H4sICCAm62oCA2Jvb3RzdHJhcC5zaAC1Vm1PG1cW/j6/4uzEgZjVMAG61SoRaFebiLRqq1XCSp
 **方式二：标准命令**：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/codecloud-dev/mox-proot/main/scripts/install-mox-proot.sh | bash
+curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-mox-proot.sh | bash
 ```
 
 **国内备援**（Gitee raw，直连）：
 
 ```bash
-curl -fsSL https://gitee.com/thousand-code-crafts/mox-proot/raw/main/scripts/install-mox-proot.sh | bash
+curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
 ```
 
 零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux
@@ -273,7 +273,7 @@ mox net             # 网络边界报告
 ### 🔹 从源码构建
 
 ```bash
-git clone https://github.com/codecloud-dev/mox-proot.git
+git clone https://github.com/codecloud-dev/moxsh-proot.git
 cd mox-proot
 cargo build --release
 ```

@@ -57,8 +57,8 @@ pub fn run_native(args: &[String]) -> i32 {
     if args.first().map(|s| s.as_str() == "tui").unwrap_or(false) {
         return crate::proot::tui::run_tui();
     }
-    // login（设备码授权扫码绑定，路线图 0.4.0「账号」页）：仅 tui feature 构建提供
-    #[cfg(feature = "tui")]
+    // login（设备码授权扫码绑定，后端 mox-id Workers）：**默认构建即提供**。
+    // 设备码模块只依赖 curl，不再被 tui feature 门禁挡在发布产物之外。
     if args.first().map(|s| s.as_str() == "login").unwrap_or(false) {
         return crate::proot::device_code::run_login_flow();
     }

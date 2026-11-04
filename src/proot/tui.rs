@@ -31,13 +31,14 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{
         Block, Borders, Clear, Gauge, List, ListItem, ListState, Paragraph, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Tabs, Wrap,
+        ScrollbarOrientation, ScrollbarState, Sparkline, Tabs, Wrap,
     },
     Terminal,
 };
 
 use crate::proot::backend;
-use crate::proot::delight;
+use crate::proot::delight::{self, ContentScene};
+use crate::proot::palette;
 use crate::proot::device_code::{self, DeviceCodeResp};
 use crate::proot::distro::{builtin_specs, DistroManager, DistroSpec, InstalledDistro};
 use crate::proot::links;
@@ -101,6 +102,18 @@ const TAB_LOGS: usize = 3;
 const TAB_WIZARD: usize = 4;
 const TAB_ACCOUNT: usize = 5;
 
+/// 命令面板条目（Ctrl+P）：(动作标识, 说明)。不引额外 crate，纯静态表。
+const PALETTE_COMMANDS: &[(&str, &str)] = &[
+    ("list", "刷新发行版列表"),
+    ("install", "安装 / 进入选中的发行版"),
+    ("remove", "删除选中的发行版（二次确认）"),
+    ("backup", "备份选中的发行版"),
+    ("account", "切到账号页（设备码绑定）"),
+    ("time", "显示当前时间问候与古诗"),
+    ("egg", "揭晓隐藏彩蛋"),
+    ("help", "打开快捷键帮助"),
+];
+
 /// 单个发行版行（已装 / 可装）。
 #[derive(Clone)]
 struct DistroRow {
@@ -131,6 +144,18 @@ struct App {
     install: Option<InstallTask>,
     /// 真实设备码（按 l 向 mox-id 后端申请；Some 时账号页渲染带 user_code 的真二维码）。
     login: Option<DeviceCodeResp>,
+    /// `/` 搜索输入（Some = 正在输入；过滤后的 rows 由 rows_backup 恢复）。
+    search: Option<String>,
+    /// 搜索前的完整列表快照，用于清空搜索时还原。
+    rows_backup: Option<Vec<DistroRow>>,
+    /// Ctrl+P 命令面板（Some(选中索引) = 打开）。
+    palette: Option<usize>,
+    /// 删除二次确认弹层。
+    confirm_remove: bool,
+    /// `?` 帮助面板。
+    show_help: bool,
+    /// 安装进度历史（Sparkline 数据源，每帧采样一次）。
+    rates: Vec<u64>,
 }
 
 impl App {
@@ -159,6 +184,12 @@ impl App {
             welcome: true,
             install: None,
             login: None,
+            search: None,
+            rows_backup: None,
+            palette: None,
+            confirm_remove: false,
+            show_help: false,
+            rates: Vec::new(),
         };
         app.refresh_account();
         app.rebuild_rows(&installed, &specs);
@@ -172,6 +203,53 @@ impl App {
             app.recipe_state.select(Some(0));
         }
         Ok(app)
+    }
+
+    /// 按当前搜索词过滤发行版列表。
+    /// 直接重建 `rows` 而非只改渲染——这样 `distro_state` 的选中索引始终
+    /// 对应真实行，Enter / r / b 拿到的都是正确的那一项。
+    fn apply_search(&mut self) {
+        let Some(q) = self.search.clone() else { return; };
+        if self.rows_backup.is_none() {
+            self.rows_backup = Some(self.rows.clone());
+        }
+        let base = self.rows_backup.clone().unwrap_or_default();
+        let ql = q.to_lowercase();
+        self.rows = if ql.is_empty() {
+            base
+        } else {
+            base.into_iter()
+                .filter(|r| r.id.to_lowercase().contains(&ql) || r.name.to_lowercase().contains(&ql))
+                .collect()
+        };
+        self.distro_state.select(if self.rows.is_empty() { None } else { Some(0) });
+    }
+
+    fn clear_search(&mut self) {
+        if let Some(base) = self.rows_backup.take() {
+            self.rows = base;
+        }
+        self.search = None;
+        self.status = "已清除搜索".into();
+        if !self.rows.is_empty() {
+            self.distro_state.select(Some(0));
+        }
+    }
+
+    /// 命令面板选中项执行（复用既有方法，不重写业务逻辑）。
+    fn run_command(&mut self, idx: usize) {
+        let Some((cmd, _)) = PALETTE_COMMANDS.get(idx) else { return; };
+        match *cmd {
+            "list" => { self.refresh(); self.status = "列表已刷新".into(); }
+            "install" => self.primary(),
+            "remove" => self.confirm_remove = true,
+            "backup" => self.backup(),
+            "account" => { self.tab = TAB_ACCOUNT; self.status = "已切到账号页".into(); }
+            "time" => self.status = delight::time_banner().replace('\n', " · "),
+            "egg" => self.status = delight::easter_egg("egg").unwrap_or("").replace('\n', " · "),
+            "help" => self.show_help = true,
+            _ => {}
+        }
     }
 
     /// 合并「已装 + 可装」为单一列表（已装的排在前，标记已装）。
@@ -509,6 +587,13 @@ fn run_app(
         if let Some(t) = &mut app.install {
             t.spinner_tick = t.spinner_tick.wrapping_add(1);
         }
+        // Sparkline 数据源：每帧采样一次已完成量，保留最近 48 帧。
+        if let Some(t) = &app.install {
+            app.rates.push(t.done.min(t.total.max(1)));
+            if app.rates.len() > 48 { app.rates.remove(0); }
+        } else if !app.rates.is_empty() {
+            app.rates.clear();
+        }
         terminal.draw(|f| {
             if app.welcome {
                 render_welcome(f, &app);
@@ -533,6 +618,48 @@ fn run_app(
                 if app.install.is_some()
                     && matches!(key.code, KeyCode::Enter | KeyCode::Char('r') | KeyCode::Char('b'))
                 {
+                    continue;
+                }
+                // ── 浮层优先：命令面板 / 搜索 / 删除确认 / 帮助 依次接管按键 ──
+                if let Some(sel) = app.palette {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => app.palette = None,
+                        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.palette = None,
+                        KeyCode::Up => app.palette = Some(sel.saturating_sub(1)),
+                        KeyCode::Down => app.palette = Some((sel + 1).min(PALETTE_COMMANDS.len() - 1)),
+                        KeyCode::Enter => { app.palette = None; app.run_command(sel); }
+                        KeyCode::Char(c) if c.is_ascii_digit() => {
+                            let i = (c as usize) - ('0' as usize);
+                            if i < PALETTE_COMMANDS.len() { app.palette = None; app.run_command(i); }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                if app.show_help {
+                    if matches!(key.code, KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('?')) {
+                        app.show_help = false;
+                    }
+                    continue;
+                }
+                if app.confirm_remove {
+                    match key.code {
+                        KeyCode::Char('y') | KeyCode::Char('Y') => { app.confirm_remove = false; app.remove(); }
+                        _ => { app.confirm_remove = false; app.status = "已取消删除".into(); }
+                    }
+                    continue;
+                }
+                if app.search.is_some() {
+                    let mut close = false;
+                    let mut restore = false;
+                    match key.code {
+                        KeyCode::Esc => { close = true; restore = true; }
+                        KeyCode::Enter => close = true,
+                        KeyCode::Backspace => { if let Some(q) = app.search.as_mut() { q.pop(); } app.apply_search(); }
+                        KeyCode::Char(c) => { if let Some(q) = app.search.as_mut() { q.push(c); } app.apply_search(); }
+                        _ => {}
+                    }
+                    if close { if restore { app.clear_search(); } else { app.search = None; app.status = "搜索已应用（按 / 重搜，Esc 无浮层时清除）".into(); } }
                     continue;
                 }
                 match key.code {
@@ -562,11 +689,15 @@ fn run_app(
                     }
                     KeyCode::Char('r') => {
                         if app.tab == TAB_DISTROS {
-                            app.remove();
+                            app.confirm_remove = true;
                         } else if app.tab == TAB_ACCOUNT {
                             app.poll_login();
                         }
                     }
+                    KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => app.palette = Some(0),
+                    KeyCode::Char('/') => { app.search = Some(String::new()); app.apply_search(); }
+                    KeyCode::Char('?') => app.show_help = true,
+                    KeyCode::Esc => { if app.rows_backup.is_some() { app.clear_search(); } }
                     KeyCode::Char('b') => {
                         if app.tab == TAB_DISTROS {
                             app.backup();
@@ -610,14 +741,14 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     let title = Line::from(vec![
         Span::styled(
             "mox-proot ",
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            palette::style(palette::Slot::Accent).add_modifier(Modifier::BOLD),
         ),
         Span::styled("TUI 控制台", Style::default().fg(Color::Cyan)),
     ]);
     let tabs = Tabs::new(TAB_TITLES.iter().map(|t| Line::from(*t)).collect::<Vec<_>>())
-        .block(Block::default().borders(Borders::ALL).title(title))
+        .block(Block::default().borders(Borders::ALL).border_style(palette::style(palette::Slot::Info)).title(title))
         .select(app.tab)
-        .highlight_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))
+        .highlight_style(palette::style(palette::Slot::Active).add_modifier(Modifier::BOLD))
         .divider("|");
     f.render_widget(tabs, chunks[0]);
 
@@ -631,7 +762,11 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
         _ => {}
     }
 
-    let help = "↑↓ 选择 · Enter 登录/安装 · l 设备码 · r 删除/检查 · b 备份 · Tab 切换 · q 退出";
+    let help = match app.tab {
+        TAB_DISTROS => "↑↓ 选择 · Enter 登录/安装 · / 搜索 · r 删除 · b 备份 · ? 帮助 · Ctrl+P 命令 · q 退出",
+        TAB_ACCOUNT => "l 申请设备码 · r 检查授权 · Enter 原生扫码 · ? 帮助 · Ctrl+P 命令 · q 退出",
+        _ => "↑↓ 选择 · Enter 执行 · Tab 切换 · ? 帮助 · Ctrl+P 命令 · q 退出",
+    };
     let status_line = if app.status.is_empty() {
         Line::from(Span::styled(help, Style::default().fg(Color::DarkGray)))
     } else {
@@ -643,9 +778,13 @@ fn ui(f: &mut ratatui::Frame, app: &App) {
     let status = Paragraph::new(status_line).block(Block::default().borders(Borders::ALL));
     f.render_widget(status, chunks[2]);
 
-    // 安装浮层盖在最上层（Gauge + Spinner），不受当前 tab 影响。
+    // 浮层自上而下叠加：删除确认 → 命令面板 → 帮助 → 搜索框 → 安装进度。
+    if app.confirm_remove { render_confirm(f, size, app); }
+    if let Some(sel) = app.palette { render_palette(f, size, sel); }
+    if app.show_help { render_help(f, size); }
+    if let Some(q) = &app.search { render_search(f, size, q); }
     if let Some(task) = &app.install {
-        render_install_overlay(f, size, task);
+        render_install_overlay(f, size, task, &app.rates);
     }
 }
 
@@ -704,6 +843,12 @@ fn render_welcome(f: &mut ratatui::Frame, app: &App) {
             Style::default().fg(Color::DarkGray),
         )));
     }
+    if let Some(line) = delight::pick_line(ContentScene::Welcome) {
+        lines.push(Line::from(Span::styled(
+            format!("  {}", line),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "  按任意键进入控制台   ·   q 退出",
@@ -735,8 +880,8 @@ fn centered_rect(percent_x: u16, height: u16, r: Rect) -> Rect {
 }
 
 /// 后台安装浮层：Spinner 标题 + Gauge 实时进度 + 阶段说明 + 耗时。
-fn render_install_overlay(f: &mut ratatui::Frame, area: Rect, task: &InstallTask) {
-    let popup = centered_rect(64, 9, area);
+fn render_install_overlay(f: &mut ratatui::Frame, area: Rect, task: &InstallTask, rates: &[u64]) {
+    let popup = centered_rect(64, 10, area);
     f.render_widget(Clear, popup);
     let secs = task.started.elapsed().as_secs();
     let block = Block::default()
@@ -750,6 +895,7 @@ fn render_install_overlay(f: &mut ratatui::Frame, area: Rect, task: &InstallTask
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(2),
+            Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Length(1),
             Constraint::Min(1),
@@ -773,14 +919,133 @@ fn render_install_overlay(f: &mut ratatui::Frame, area: Rect, task: &InstallTask
         .label(label);
     f.render_widget(gauge, chunks[1]);
 
+    // Sparkline：最近 48 帧的已完成量曲线，卡顿时一眼看出「还活着但没涨」。
+    let spark = Sparkline::default()
+        .data(rates)
+        .style(palette::style(palette::Slot::Success))
+        .max(task.total.max(1));
+    f.render_widget(spark, chunks[2]);
+
     let hint = Paragraph::new(Line::from(Span::styled(
         format!("已用时 {}s   ·   q 退出 / 进度在后台继续", secs),
         Style::default().fg(Color::DarkGray),
     )));
-    f.render_widget(hint, chunks[2]);
+    f.render_widget(hint, chunks[3]);
+}
+
+/// 删除二次确认（手册 §3.4：危险操作必须 y/N，不能一按 r 就删）。
+fn render_confirm(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    let r = centered_rect(52, 8, area);
+    f.render_widget(Clear, r);
+    let id = app.selected_row().map(|x| x.id.as_str()).unwrap_or("?");
+    let body = vec![
+        Line::from(""),
+        Line::from(Span::styled(format!("  ⚠ 确认删除 {} ？", id), Style::default().fg(Color::Yellow))),
+        Line::from(""),
+        Line::from(format!("  将删除该发行版的 rootfs 与完成标记，不可恢复。")),
+        Line::from(""),
+        Line::from(Span::styled("  [y] 删除        [n / Esc] 取消", Style::default().fg(Color::Green))),
+    ];
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 确认 ")
+                .border_style(palette::style(palette::Slot::Warning)),
+        ),
+        r,
+    );
+}
+
+/// Ctrl+P 命令面板：不用记命令，数字键直达。
+fn render_palette(f: &mut ratatui::Frame, area: Rect, sel: usize) {
+    let r = centered_rect(56, (PALETTE_COMMANDS.len() as u16) + 4, area);
+    f.render_widget(Clear, r);
+    let mut lines = vec![Line::from(Span::styled(
+        "  > 输入数字或 ↑↓ 选择，Enter 执行，Esc 关闭",
+        Style::default().fg(Color::DarkGray),
+    ))];
+    for (i, (cmd, desc)) in PALETTE_COMMANDS.iter().enumerate() {
+        let style = if i == sel {
+            Style::default().fg(Color::Black).bg(Color::Yellow)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {}  {:<10} {}", i, cmd, desc),
+            style,
+        )));
+    }
+    f.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 命令面板 ")
+                .border_style(palette::style(palette::Slot::Accent)),
+        ),
+        r,
+    );
+}
+
+/// `?` 帮助面板：快捷键随上下文变化，这里给全集。
+fn render_help(f: &mut ratatui::Frame, area: Rect) {
+    let r = centered_rect(62, 16, area);
+    f.render_widget(Clear, r);
+    let body = vec![
+        Line::from(Span::styled("  键盘全可达（不依赖鼠标）", Style::default().fg(Color::Cyan))),
+        Line::from(""),
+        Line::from("  ↑↓ / Tab     选择、切换标签页"),
+        Line::from("  Enter        安装未装 / 进入已装 / 执行"),
+        Line::from("  /            搜索发行版（Esc 清除过滤）"),
+        Line::from("  Ctrl+P       命令面板（数字键直达）"),
+        Line::from("  l / r        账号页：申请设备码 / 检查授权"),
+        Line::from("  r / b        发行版页：删除（二次确认）/ 备份"),
+        Line::from("  ?            本帮助    ·    q / Esc  退出"),
+        Line::from(""),
+        Line::from(Span::styled("  无障碍：颜色从不单独承载状态，✓ / ⚠ / ✗ 与文字同在。", Style::default().fg(Color::DarkGray))),
+        Line::from(Span::styled("  NO_COLOR=1 可关闭全部着色；管道/非 TTY 自动降级。", Style::default().fg(Color::DarkGray))),
+        Line::from(""),
+        Line::from("  按 ? / Esc / q 关闭"),
+    ];
+    f.render_widget(
+        Paragraph::new(body).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 帮助 ")
+                .border_style(palette::style(palette::Slot::Info)),
+        ),
+        r,
+    );
+}
+
+/// `/` 搜索输入框：贴在标题栏下方，实时过滤发行版。
+fn render_search(f: &mut ratatui::Frame, area: Rect, q: &str) {
+    let r = Rect { x: area.x + 2, y: area.y + 1, width: area.width.saturating_sub(4).min(52), height: 3 };
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(format!("  / {}_", q)).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" 搜索发行版 ")
+                .border_style(palette::style(palette::Slot::Active)),
+        ),
+        r,
+    );
 }
 
 fn render_distros(f: &mut ratatui::Frame, area: Rect, app: &App) {
+    if app.rows.is_empty() {
+        let empty = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled("  还没有匹配的发行版", Style::default().fg(Color::Yellow))),
+            Line::from(""),
+            Line::from("  按 / 搜索、Esc 清除过滤，或 Ctrl+P 打开命令面板。"),
+            Line::from("  最小的是 alpine（约 4MB），几秒钟就能装好。"),
+        ])
+        .block(Block::default().borders(Borders::ALL).title("发行版"));
+        f.render_widget(empty, area);
+        return;
+    }
     let items: Vec<ListItem> = app
         .rows
         .iter()
@@ -1056,6 +1321,43 @@ mod tests {
         assert_eq!(TAB_TITLES.len(), 6);
         assert_eq!(TAB_WIZARD, 4);
         assert_eq!(TAB_ACCOUNT, 5);
+    }
+
+    #[test]
+    fn palette_commands_are_indexable_and_unique() {
+        assert!(!PALETTE_COMMANDS.is_empty());
+        assert!(PALETTE_COMMANDS.len() <= 10, "数字键 0-9 要能直达");
+        let mut ids: Vec<&str> = PALETTE_COMMANDS.iter().map(|(c, _)| *c).collect();
+        ids.sort_unstable();
+        ids.dedup();
+        assert_eq!(ids.len(), PALETTE_COMMANDS.len());
+    }
+
+    #[test]
+    fn search_filters_and_restores_rows() {
+        let root = std::env::temp_dir().join(format!("mox-tui-search-{}", std::process::id()));
+        let mut app = App::new(&root).expect("App::new 应可用（空数据根）");
+        let full = app.rows.len();
+        assert!(full >= 4, "内置发行版应至少 4 个");
+        app.search = Some("alp".into());
+        app.apply_search();
+        assert!(!app.rows.is_empty(), "alp 应命中 alpine");
+        assert!(app.rows.iter().all(|r| r.id.contains("alp") || r.name.contains("alp")));
+        app.clear_search();
+        assert_eq!(app.rows.len(), full, "清除搜索应还原完整列表");
+        assert!(app.rows_backup.is_none());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn sparkline_samples_are_bounded() {
+        // 每帧采样上限 48，防止长时间安装无限增长
+        let mut rates: Vec<u64> = Vec::new();
+        for i in 0..200u64 {
+            rates.push(i);
+            if rates.len() > 48 { rates.remove(0); }
+        }
+        assert_eq!(rates.len(), 48);
     }
 
     #[test]

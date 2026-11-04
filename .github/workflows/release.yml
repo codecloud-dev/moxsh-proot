@@ -150,6 +150,50 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
 
+  # TUI 控制台二进制：依赖 ratatui 0.29 / qrcode 0.14，依赖链要求 rustc 1.88+，
+  # 而引擎 CI 锁 1.86.0（glibc 2.35 基线）——故单独用 stable 构建，不塞进
+  # build-engine 矩阵。此前 `--bins` 不带 tui，release 里根本没有 TUI 资产。
+  build-tui:
+    name: TUI 控制台（${{ matrix.name }}）
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            name: linux-amd64
+            cc: ""
+          - target: x86_64-unknown-linux-musl
+            name: linux-amd64-musl
+            cc: musl-gcc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-tui-${{ matrix.target }}
+      - name: 安装 musl 工具链
+        if: matrix.cc == 'musl-gcc'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: cargo build --release --features tui
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.cc }}
+        run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
+      - name: 收集 TUI 产物
+        run: |
+          mkdir -p dist
+          cp "target/${{ matrix.target }}/release/mox-proot-tui" "dist/mox-proot-tui-${{ matrix.name }}"
+          ls -la dist/
+      - name: 上传到 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
+          files: dist/*
+          fail_on_unmatched_files: true
+
   build-installer:
     name: Go 安装器（${{ matrix.goos }}-${{ matrix.goarch }}）
     runs-on: ubuntu-latest
@@ -191,7 +235,7 @@ jobs:
   # 供安装器自动拉取，两者都要。
   checksums:
     name: 生成 SHA256SUMS 与逐资产校验文件
-    needs: [build-engine, build-installer]
+    needs: [build-engine, build-installer, build-tui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -238,7 +282,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       GITEE_OWNER: thousand-code-crafts
-      GITEE_REPO: mox-proot
+      GITEE_REPO: moxsh-proot
       GITEE_RID: "1217672"
     steps:
       - uses: actions/checkout@v4

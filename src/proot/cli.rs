@@ -565,21 +565,41 @@ fn usage_to_stderr() {
 }
 
 // ==================== 颜色 / 进度条（T2：NO_COLOR 感知） ====================
-use std::io::IsTerminal;
 //
 // 遵循 no-color.org 约定：`NO_COLOR` 设了任意值即关闭全部 ANSI 着色；
 // 另外只在 stderr 是终端时才上色（管道/CI 下保持纯文本，不污染重定向输出）。
 
-const C_CYAN: &str = "\x1b[36m";
-const C_GREEN: &str = "\x1b[32m";
-const C_YELLOW: &str = "\x1b[33m";
-const C_RED: &str = "\x1b[31m";
-const C_BOLD: &str = "\x1b[1m";
-const C_RESET: &str = "\x1b[0m";
+use crate::proot::palette;
+const C_CYAN: &str = palette::ANSI_INFO;
+const C_GREEN: &str = palette::ANSI_SUCCESS;
+const C_YELLOW: &str = palette::ANSI_WARNING;
+const C_RED: &str = palette::ANSI_ERROR;
+const C_BOLD: &str = palette::ANSI_BOLD;
+const C_RESET: &str = palette::ANSI_RESET;
 
-/// 是否允许着色：无 `NO_COLOR` 且 stderr 为终端。
+/// `--plain` 开关（仅影响本次 `proot_distro` 调用，不改环境变量）。
+static PLAIN_MODE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `--plain` / `--json` 只作用于单次命令：用 RAII 在返回时恢复旧值，
+/// 避免进程内多次调用（TUI 内嵌路由、单测、REPL）互相串色。
+struct PlainModeGuard(bool);
+
+impl PlainModeGuard {
+    fn apply(enable: bool) -> Self {
+        let prev = PLAIN_MODE.swap(enable, std::sync::atomic::Ordering::Relaxed);
+        PlainModeGuard(prev)
+    }
+}
+
+impl Drop for PlainModeGuard {
+    fn drop(&mut self) {
+        PLAIN_MODE.store(self.0, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// 是否允许着色：遵循 no-color.org，且 `--plain` 可强制关闭。
 fn use_color() -> bool {
-    std::env::var_os("NO_COLOR").is_none() && std::io::stderr().is_terminal()
+    !PLAIN_MODE.load(std::sync::atomic::Ordering::Relaxed) && palette::enabled()
 }
 
 /// 给字符串包一层 ANSI 颜色（不开放则原样返回）。
@@ -633,10 +653,27 @@ fn install_progress(msg: &str, done: u64, total: u64) {
 /// `proot-distro` 主路由（对齐上游子命令集）。
 pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
     let mgr = DistroManager::new(mox_proot_root);
-    let (sub, rest) = args.split_first().map_or(("", &[][..]), |(s, r)| (*s, r));
+    // 机器可读输出层：`--json` / `--plain` 可出现在任意位置，剥离后不改变子命令路由。
+    // --json 走纯 stdout 数据（无颜色、无装饰、可被 jq 解析）；
+    // --plain 只关装饰，保留人读格式。二者同时出现时 --json 优先。
+    let mut json_mode = false;
+    let mut plain_mode = false;
+    let filtered: Vec<&str> = args
+        .iter()
+        .copied()
+        .filter(|a| match *a {
+            "--json" => { json_mode = true; false }
+            "--plain" => { plain_mode = true; false }
+            _ => true,
+        })
+        .collect();
+    // --json 天然不能有 ANSI，--plain 显式关装饰；二者任一命中都关色。
+    // guard 只覆盖本次调用，返回时恢复旧值，不会污染后续命令。
+    let _plain_guard = (plain_mode || json_mode).then(|| PlainModeGuard::apply(true));
+    let (sub, rest) = filtered.split_first().map_or(("", &[][..]), |(s, r)| (*s, r));
     match sub {
-        "list" => cmd_list(&mgr),
-        "versions" => cmd_versions(rest),
+        "list" => if json_mode { cmd_list_json(&mgr) } else { cmd_list(&mgr) },
+        "versions" => if json_mode { cmd_versions_json(rest) } else { cmd_versions(rest) },
         "install" => cmd_install(&mgr, rest),
         "login" => cmd_login(&mgr, rest),
         "shell" => cmd_shell(&mgr, rest),
@@ -659,7 +696,19 @@ pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
              （mx:alpine / mx:ubuntu / mx:debian / mx:kali；自定义见 ~/.config/mox-proot/links.toml）"
             .to_string(),
         "help" | "--help" | "-h" | "" => HELP.to_string(),
-        other => format!("proot-distro: 未知子命令 {}\n{}", other, HELP),
+        other => {
+            let known = ["list", "install", "login", "shell", "remove", "backup", "restore", "net", "env", "recipe", "time", "egg", "wizard", "versions", "access", "launch"];
+            let lower = other.to_lowercase();
+            let guess = known.iter().find(|k| !lower.is_empty() && (k.starts_with(&lower) || lower.starts_with(**k)));
+            let mut out = format!(
+                "✗ 未知子命令「{}」，没找到这条命令。\n  怎么办：先跑 `proot-distro list` 看可用发行版，或 `help` 看全部命令。",
+                other
+            );
+            if let Some(g) = guess {
+                out.push_str(&format!("\n  你是不是想输入：{} ？", g));
+            }
+            out
+        }
     }
 }
 
@@ -1122,6 +1171,13 @@ fn cmd_install(mgr: &DistroManager, args: &[&str]) -> String {
             );
         }
     }
+    // 等待区内容池：低频出现、非 TTY/CI 自动禁用、当日不重复（手册 §9）。
+    // 只写 stderr，绝不混入 --json 的 stdout 数据流。
+    if let Some(line) = crate::proot::delight::pick_line(
+        crate::proot::delight::ContentScene::DownloadWait,
+    ) {
+        eprintln!("  {}", line);
+    }
     let mut progress: crate::ProgressCallback = Box::new(|msg, done, total| {
         install_progress(msg, done, total);
     });
@@ -1158,6 +1214,66 @@ fn cmd_versions(args: &[&str]) -> String {
             out
         }
         Err(e) => format!("proot-distro: {}", e),
+    }
+}
+
+/// 最小 JSON 字符串转义（零依赖；只处理脚本会解析到的控制字符）。
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// `--json list`：机器可读，stdout 纯净（绝不上色、绝不放诗句）。
+fn cmd_list_json(mgr: &DistroManager) -> String {
+    let installed = mgr.list_installed().unwrap_or_default();
+    let mut out = String::from("{\"installed\":[");
+    for (i, d) in installed.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        out.push_str(&format!(
+            "{{\"id\":\"{}\",\"rootfs\":\"{}\",\"ready\":{}}}",
+            json_escape(&d.id),
+            json_escape(&d.rootfs.display().to_string()),
+            d.initialized
+        ));
+    }
+    out.push_str("],\"available\":[");
+    for (i, s) in crate::proot::distro::builtin_specs().iter().enumerate() {
+        if i > 0 { out.push(','); }
+        let ready = installed.iter().any(|d| d.id == s.id && d.initialized);
+        out.push_str(&format!(
+            "{{\"id\":\"{}\",\"name\":\"{}\",\"version\":\"{}\",\"size_mb\":{},\"installed\":{}}}",
+            json_escape(s.id), json_escape(s.name), json_escape(s.version), s.size_mb, ready
+        ));
+    }
+    out.push_str("]}");
+    out
+}
+
+/// `--json versions <id>`：版本清单 + 默认标记，无 ANSI。
+fn cmd_versions_json(args: &[&str]) -> String {
+    let Some(id) = args.first() else {
+        return "{\"error\":\"missing_id\"}".to_string();
+    };
+    match DistroManager::find_spec(id) {
+        Ok(spec) => {
+            let vs: Vec<String> = spec.versions.iter().map(|v| format!("\"{}\"", json_escape(v))).collect();
+            format!(
+                "{{\"id\":\"{}\",\"default\":\"{}\",\"versions\":[{}]}}",
+                json_escape(spec.id), json_escape(spec.version), vs.join(",")
+            )
+        }
+        Err(e) => format!("{{\"error\":\"{}\"}}", json_escape(&e.to_string())),
     }
 }
 
@@ -1499,14 +1615,14 @@ fn download_first_available(mgr: &DistroManager, urls: &[String]) -> ProotResult
             return Ok(out);
         }
         eprintln!("[下载] {}", url);
-        let st = std::process::Command::new("curl")
-            .args(["-fL", "--retry", "2", "-o"])
-            .arg(&out)
-            .arg(url)
-            .status();
-        if matches!(st, Ok(s) if s.success()) {
+        // 与 rootfs 下载共用续传实现：.part 保留、Range 续传、停滞检测。
+        let part = mgr.cache_dir().join(format!("{}.part", fname));
+        let mut nop = |_m: &str, _d: u64, _t: u64| {};
+        if crate::proot::distro::curl_fetch(url, &part, &mut nop, "短链", 0).unwrap_or(false) {
+            std::fs::rename(&part, &out)?;
             return Ok(out);
         }
+        // 失败保留 .part 供下次续传，但清掉可能被误判为完整的正式文件
         let _ = std::fs::remove_file(&out);
     }
     Err(ProotError::DownloadRequired(urls.first().cloned().unwrap_or_default()))
@@ -1665,15 +1781,76 @@ const HELP: &str = "proot-distro（mox-proot 兼容实现）
   proot-distro access status|sync             统一访问面（粉丝+授权融合；粉丝默认隐藏）
   proot-distro time                         时间上下文问候 + 古诗（惊喜三件套）
   proot-distro egg                          隐藏彩蛋（惊喜三件套）
-  proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）";
+  proot-distro wizard [--root <目录>] [--distro <id>]  一次性初始化（数据根+发行版）
+  --json                                    机器可读输出（list/versions，纯 stdout）
+  --plain                                   关闭全部颜色与装饰
+
+常用示例（先看这三个）：
+  proot-distro list                         看看装了什么、还能装什么
+  proot-distro install ubuntu               装一个 Ubuntu
+  ubuntu                                    直接进容器
+  proot-distro list --json | jq .available 给脚本用的结构化数据
+
+说明：脚本里请加 --json；管道/重定向会自动关色，也可设 NO_COLOR=1。";
 
 /// proot 原生参数帮助。
-const PROOT_HELP: &str = "proot（mox-proot 引擎内嵌版，支持参数：-r/--rootfs -0/--root-id -b/--bind -w/--cwd）";
+const PROOT_HELP: &str = "mox-proot — 在非 root 环境下运行 Linux 容器
+
+常用命令（先看这几个）：
+  mox-proot-distro list              列出可用/已装发行版
+  mox-proot-distro install ubuntu    装一个发行版
+  ubuntu                             直接进容器
+
+proot 底层参数：
+  -r <path>        指定 rootfs 路径
+  -b <src>:<dst>   自定义绑定挂载（可多次）
+  -w <path>        容器内工作目录（默认 /root）
+  -R               ★推荐绑定集：自动挂 /dev /proc /sys /tmp + HOME，
+                    几乎所有场景都用这个，新手默认选它
+  -S               最小绑定集：只挂最必要的，用于调试
+  -0 / --root-id   在容器内以 uid 0 运行
+  -e / --env       追加环境变量
+  -- <命令...>     把后续参数原样交给容器内执行";
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::{Read as _, Write as _}; // redeem status stub 收发 HTTP 用
+
+    #[test]
+    fn json_list_is_machine_readable() {
+        let out = proot_distro(&["--json", "list"], Path::new("/nonexistent"));
+        assert!(out.starts_with("{\"installed\":["), "{}", out);
+        assert!(out.contains("\"available\""));
+        assert!(out.contains("\"id\":\"ubuntu\""));
+        assert!(!out.contains("\x1b["), "--json 绝不能含 ANSI");
+        assert!(!out.contains("——"), "--json 绝不能混入诗句");
+        // 括号平衡（最小结构校验，不引 serde）
+        assert_eq!(out.matches('{').count(), out.matches('}').count());
+        assert_eq!(out.matches('[').count(), out.matches(']').count());
+    }
+
+    #[test]
+    fn json_versions_has_default_marker() {
+        let out = proot_distro(&["versions", "alpine", "--json"], Path::new("/tmp"));
+        assert!(out.contains("\"default\":"));
+        assert!(out.contains("3.20 (minirootfs)"));
+        assert!(!out.contains("\x1b["));
+    }
+
+    #[test]
+    fn plain_flag_does_not_break_human_output() {
+        let out = proot_distro(&["--plain", "list"], Path::new("/nonexistent"));
+        assert!(out.contains("（无）"));
+        assert!(out.contains("ubuntu"));
+    }
+
+    #[test]
+    fn unknown_subcommand_gives_next_step() {
+        let out = proot_distro(&["instal"], Path::new("/tmp"));
+        assert!(out.contains("怎么办"), "{}", out);
+        assert!(out.contains("是不是想输入"), "应给相似建议：{}", out);
+    }
 
     /// list 子命令：空目录输出"（无）"并列出可装清单。
     #[test]

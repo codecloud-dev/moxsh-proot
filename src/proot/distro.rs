@@ -236,6 +236,68 @@ pub struct InstalledDistro {
 /// 下载/解压进度回调：`(阶段说明, 已完成字节或条目, 总量预估)`。
 pub type ProgressCb<'a> = &'a mut dyn FnMut(&str, u64, u64);
 
+/// 一次 curl 下载，带**断点续传**与**实时进度回调**。
+///
+/// 实测事故（用户真机）：官方源 403 → 回退国内镜像只有 ~12KB/s → 260s 硬超时
+/// 掐在 88% → 残留文件被当成完整缓存、空 rootfs 目录被判「已安装」。本实现针对四点：
+/// - 归档只写到 `<name>.<source>.part`，成功后才 `rename` 成正式缓存名，
+///   **半截文件永远不会被当成完整归档**；
+/// - 已有 `.part` 时先发 `Range` 请求续传（HTTP 206），服务器不支持则丢弃重下；
+/// - 不设总时长上限，改用「45 秒内低于 1KB/s 视为停滞」——慢但持续有流量的
+///   国内镜像不会被固定超时误杀；
+/// - `spawn` 后每 400ms 读一次文件大小喂给进度回调，CLI 进度条 / TUI Gauge
+///   拿到的是真实字节进度，不再是 0 → 100 的跳变。
+pub fn curl_fetch(
+    url: &str,
+    out: &Path,
+    cb: &mut dyn FnMut(&str, u64, u64),
+    label: &str,
+    total: u64,
+) -> std::io::Result<bool> {
+    const COMMON: &[&str] = &[
+        "-fLsS", "--retry", "3", "--retry-delay", "2",
+        "--connect-timeout", "15", "--speed-time", "45", "--speed-limit", "1024",
+    ];
+    let have_part = out.exists() && out.metadata().map(|m| m.len() > 0).unwrap_or(false);
+    if have_part {
+        let start = out.metadata().map(|m| m.len()).unwrap_or(0);
+        cb(&format!("从{}续传（已有 {:.1} MB）", label, start as f64 / 1048576.0), start.min(total), total);
+        if run_curl(url, out, COMMON, true, cb, label, total)? {
+            return Ok(true);
+        }
+        // 416 / 服务器不支持 Range：清掉半成品，从头完整下载
+        let _ = fs::remove_file(out);
+        cb(&format!("{}不支持断点续传，改为完整下载", label), 0, total);
+    }
+    run_curl(url, out, COMMON, false, cb, label, total)
+}
+
+fn run_curl(
+    url: &str,
+    out: &Path,
+    common: &[&str],
+    resume: bool,
+    cb: &mut dyn FnMut(&str, u64, u64),
+    label: &str,
+    total: u64,
+) -> std::io::Result<bool> {
+    let mut cmd = Command::new("curl");
+    cmd.args(common);
+    if resume {
+        cmd.args(["-C", "-"]);
+    }
+    cmd.arg("-o").arg(out).arg(url);
+    let mut child = cmd.spawn()?;
+    loop {
+        let n = fs::metadata(out).map(|m| m.len()).unwrap_or(0);
+        cb(&format!("从{}下载", label), n.min(total), total);
+        if let Some(st) = child.try_wait()? {
+            return Ok(st.success());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(400));
+    }
+}
+
 /// 默认 DNS（国内公共 DNS 双备）：宿主系统 DNS 不可用时的回退值。
 ///
 /// 与 Kotlin 侧 `BootstrapInstaller.DEFAULT_DNS_CSV` 保持一致；
@@ -354,13 +416,11 @@ impl DistroManager {
             let entry = entry.map_err(ProotError::Io)?;
             let id = entry.file_name().to_string_lossy().into_owned();
             let rootfs = dir.join(&id).join("rootfs");
-            if rootfs.is_dir() {
-                let initialized = self.ok_marker(&id).exists();
-                out.push(InstalledDistro {
-                    id,
-                    rootfs,
-                    initialized,
-                });
+            let initialized = self.ok_marker(&id).exists();
+            // 半成品 rootfs（无完成标记）也列出，但标 initialized=false，
+            // 上层据此提示「重装」而不是让用户以为能直接进容器。
+            if rootfs.is_dir() && (initialized || fs::read_dir(&rootfs).map(|mut e| e.next().is_some()).unwrap_or(false)) {
+                out.push(InstalledDistro { id, rootfs, initialized });
             }
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
@@ -415,30 +475,70 @@ impl DistroManager {
             })?;
         let fname = official.rsplit('/').next().unwrap_or("rootfs.tar");
         let out_path = self.cache_dir().join(fname);
-        if out_path.exists() {
-            cb("使用已缓存归档", 1, 1);
-            return Ok(out_path);
-        }
-        // 多源探测：按可达性重排下载顺序（不可达源后置；下载阶段仍会兜底重试）。
-        let sources = [("国内镜像", mirror), ("官方源", official)];
-        let ordered = Self::probe_sources(&sources);
-        for (label, url) in ordered {
-            cb(&format!("从{}下载：{}", label, url), 0, spec.size_mb as u64);
-            // curl 子进程：Android NDK 不带 curl，命令行/开发者模式场景才可用；
-            // 应用内安装由 Kotlin 层先下载好再调 install()。
-            let st = Command::new("curl")
-                .args(["-fL", "--retry", "2", "-o"])
-                .arg(&out_path)
-                .arg(url)
-                .status();
-            match st {
-                Ok(s) if s.success() => return Ok(out_path),
-                _ => {
-                    cb(&format!("{}下载失败，尝试下一来源", label), 0, 0);
-                    let _ = fs::remove_file(&out_path);
+        let total = (spec.size_mb as u64) * 1024 * 1024;
+
+        // 完整缓存命中：非空 + 有内置校验值时必须校验通过，才复用。
+        // 旧实现只要文件存在就复用，中断留下的截断归档会被解压器当成坏包。
+        if let Ok(md) = fs::metadata(&out_path) {
+            if md.len() > 0 {
+                match spec.sha256 {
+                    Some(exp) if verify_file_sha256(&out_path, exp).is_ok() => {
+                        cb("使用已校验的缓存归档", total, total);
+                        return Ok(out_path);
+                    }
+                    Some(_) => {
+                        let _ = fs::remove_file(&out_path);
+                        cb("缓存归档校验失败，已丢弃并重新下载", 0, total);
+                    }
+                    None => {
+                        cb("使用已缓存归档", total, total);
+                        return Ok(out_path);
+                    }
                 }
+            } else {
+                let _ = fs::remove_file(&out_path);
             }
         }
+
+        // 多源探测：按可达性重排（不可达源后置；下载阶段仍会兜底重试）。
+        let sources = [("国内镜像", mirror), ("官方源", official)];
+        let ordered = Self::probe_sources(&sources);
+        let mut last_err = String::new();
+        for (label, url) in ordered {
+            // 每个来源独立的 .part：跨源 -C - 会把不同内容拼成损坏归档。
+            let tag = if label == "国内镜像" { "cn" } else { "official" };
+            let part = self.cache_dir().join(format!("{}.{}.part", fname, tag));
+            cb(&format!("从{}下载：{}", label, url), 0, total);
+            let ok = curl_fetch(url, &part, cb, label, total).unwrap_or(false);
+            if !ok {
+                // 关键：保留 .part，下次同一来源自动续传（用户可 curl -C - 补全）。
+                last_err = format!("{} 下载失败（{}）", label, url);
+                cb(&format!("{}中断：.part 已保留，下次自动续传", label), 0, total);
+                continue;
+            }
+            // 下载完成 → 校验 → 原子落地
+            if let Some(exp) = spec.sha256 {
+                if let Err(e) = verify_file_sha256(&part, exp) {
+                    let _ = fs::remove_file(&part);
+                    last_err = e.to_string();
+                    cb("下载内容校验失败，已丢弃不完整归档", 0, total);
+                    continue;
+                }
+            } else if fs::metadata(&part).map(|m| m.len() == 0).unwrap_or(true) {
+                let _ = fs::remove_file(&part);
+                continue;
+            }
+            fs::rename(&part, &out_path)?;
+            for t in ["cn", "official"] {
+                let other = self.cache_dir().join(format!("{}.{}.part", fname, t));
+                if other != part {
+                    let _ = fs::remove_file(other);
+                }
+            }
+            cb("归档下载并校验完成", total, total);
+            return Ok(out_path);
+        }
+        let _ = last_err;
         Err(ProotError::DownloadRequired(spec.url_official.to_string()))
     }
 
@@ -455,7 +555,14 @@ impl DistroManager {
         self.check_id(spec.id)?; // P1：id 路径白名单
         let rootfs = self.distro_rootfs(spec.id);
         if rootfs.is_dir() {
-            return Err(ProotError::DistroAlreadyInstalled(spec.id.to_string()));
+            if self.ok_marker(spec.id).exists() {
+                return Err(ProotError::DistroAlreadyInstalled(spec.id.to_string()));
+            }
+            // 上次安装被超时/中断掐断留下的空目录或不完整 rootfs：
+            // 旧实现只看 is_dir() 就报「已安装」，用户只能手动 remove 再装。
+            // 完成标记只在全部步骤成功后写，因此这里可以安全清理后重装。
+            cb("发现上次中断留下的半成品 rootfs，自动清理后重装", 0, 1);
+            fs::remove_dir_all(&rootfs)?;
         }
         fs::create_dir_all(&rootfs)?;
 

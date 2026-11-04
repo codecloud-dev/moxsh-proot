@@ -34,6 +34,8 @@ pub mod console;
 /// 终端「惊喜体验」三件套：时间上下文感知 / 古诗 / 彩蛋（#450）。
 /// 供 TUI 欢迎屏与 `mox-proot-distro time` 子命令复用，单一来源。
 pub mod delight;
+/// 语义色板 / Design Tokens：CLI ANSI 与 TUI ratatui 共用一份色值定义。
+pub mod palette;
 pub mod distro;
 pub mod elf;
 pub mod fan;

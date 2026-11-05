@@ -90,11 +90,27 @@ pub fn fan_page_url() -> String {
 /// 后端验签端点（`MOX_REDEEM_API` 覆盖）。
 /// 默认走**官网同域反代**（pages.dev/fan/verify），不再直连 workers.dev：
 /// 后者国内不可达，且同域能保住 SSO 会话。
+///
+/// 安全：环境覆盖值仅接受 `https://` 或**本机** `http://`（测试 / 本地自托管，
+/// 无网络 MITM）；拒绝 `http://` 公网主机，防中间人把激活码验签劫持到攻击者
+/// 服务器（渗透测试报告·MOXSH_REDEEM_API 劫持）。不合法覆盖值回退官方反代。
 fn redeem_api() -> String {
-    std::env::var(REDEEM_API_ENV)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| backend::endpoint("/fan/verify"))
+    let env_val = std::env::var(REDEEM_API_ENV).unwrap_or_default();
+    if env_val.is_empty() {
+        return backend::endpoint("/fan/verify");
+    }
+    if env_val.starts_with("https://") {
+        return env_val;
+    }
+    if let Some(rest) = env_val.strip_prefix("http://") {
+        let host = rest.split('/').next().unwrap_or("");
+        let is_local =
+            host == "localhost" || host == "127.0.0.1" || host.starts_with("127.0.0.1:");
+        if is_local {
+            return env_val;
+        }
+    }
+    backend::endpoint("/fan/verify")
 }
 
 /// 当前 unix 秒（时钟异常回落 0）。

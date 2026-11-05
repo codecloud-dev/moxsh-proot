@@ -45,6 +45,71 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::proot::backend;
 use crate::proot::{ProotError, ProotResult};
 
+/// 授权缓存签名验证公钥（Ed25519，32 字节）。
+///
+/// 对应服务端私钥仅在 mox-id 后端持有（环境变量 `ED25519_ENTITLEMENT_SECRET`），
+/// 客户端只嵌公钥、只验签——私钥永不落客户端，攻击者无法伪造授权缓存
+/// （渗透测试报告·路径①彻底关闭）。公钥公开，无保密需求。
+const ENTITLEMENT_VERIFY_KEY: [u8; 32] = [
+    0x6c, 0x82, 0xf5, 0xd1, 0x75, 0x3c, 0x2c, 0x7e, 0x12, 0x06, 0x89, 0x60, 0x67, 0x9e, 0xcc, 0xe9,
+    0x50, 0xbf, 0x60, 0xd0, 0x4d, 0x71, 0xf9, 0xb8, 0x9a, 0x50, 0x38, 0xd9, 0x06, 0xfe, 0x72, 0x29,
+];
+
+/// 极简 base64 标准字母解码（内联，避免新增依赖；仅签名校验用）。
+fn b64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            b'=' => continue,
+            _ => return None,
+        };
+        buf = (buf << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buf >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// 重建服务端签名所用的规范消息：每条授权一行 `ok <pid> <tier> <exp>\n`。
+/// 必须与 mox-id `/entitlement/check` 的签名输入逐字节一致。
+fn canonical_entitlement_blob(ents: &[Entitlement]) -> String {
+    let mut s = String::new();
+    for e in ents {
+        s.push_str(&format!("ok {} {} {}\n", e.product_id, e.tier, e.exp));
+    }
+    s
+}
+
+/// 校验授权缓存签名（服务端 Ed25519）。`sig_b64` 为服务端追加的 `sig <b64>` 行。
+/// 仅当签名存在且有效时返回 true；客户端无私钥，无法伪造。
+pub fn verify_entitlement_signature(ents: &[Entitlement], sig_b64: &str) -> bool {
+    use ed25519_dalek::Verifier;
+    let raw = match b64_decode(sig_b64) {
+        Some(r) if r.len() == 64 => r,
+        _ => return false,
+    };
+    let sig_arr: [u8; 64] = match raw.try_into() {
+        Ok(a) => a,
+        Err(_) => return false,
+    };
+    let vk = match ed25519_dalek::VerifyingKey::from_bytes(&ENTITLEMENT_VERIFY_KEY) {
+        Ok(k) => k,
+        Err(_) => return false,
+    };
+    let sig = ed25519_dalek::Signature::from_bytes(&sig_arr);
+    vk.verify(canonical_entitlement_blob(ents).as_bytes(), &sig).is_ok()
+}
+
 /// 设备身份文件相对 `$MOX_ROOT` 的位置（删容器不删它；删了=换设备，需重新绑定）。
 pub const DEVICE_FILE_REL: &str = "device.toml";
 /// 授权缓存文件（`mox redeem status` 拉取后落盘；门禁只读缓存，不联网）。
@@ -80,12 +145,19 @@ pub struct Entitlement {
     pub exp: u64,
 }
 
-/// 授权缓存（`entitlements.toml`）：列表 + 拉取时间。
+/// 授权缓存（`entitlements.toml`）：列表 + 拉取时间 + 绑定设备 + 服务端签名。
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EntCache {
     pub ents: Vec<Entitlement>,
     /// 拉取时间（unix 秒）；0 = 从未成功拉取。
     pub fetched_at: u64,
+    /// 写入缓存时的本机设备令牌：**防跨设备拷贝**——把别人机器的
+    /// `entitlements.toml` 拷过来会因 `device_token` 不匹配而失效
+    /// （渗透测试报告·次要问题#1）。无设备身份时为空。
+    pub device_token: String,
+    /// 服务端 Ed25519 签名（base64）。存在且有效时门禁完全信任缓存；
+    /// 缺失则回退旧行为（设备绑定 + TTL）；无效则视为篡改直接拒绝。
+    pub sig: Option<String>,
 }
 
 /// 当前 unix 秒（时钟异常回落 0）。
@@ -267,16 +339,41 @@ pub fn bind_page_url() -> String {
 /// 默认走**官网同域反代**（pages.dev/entitlement/check）——Worker 标准域
 /// workers.dev 国内不可达（爱发电 webhook 443 同款坑），pages.dev 实测可达。
 /// 域名由 [`backend`] 单一来源派生，避免与设备码 / 粉丝客户端各自漂移。
+///
+/// 安全：环境覆盖值仅接受 `https://` 或**本机** `http://`（测试 / 本地自托管，
+/// 无网络 MITM）；拒绝 `http://` 公网主机，防中间人把授权查询劫持到攻击者
+/// 服务器投毒（渗透测试报告·MOXSH_REDEEM_API 劫持）。不合法覆盖值回退官方反代。
 fn entitlement_api() -> String {
-    std::env::var(ENTITLEMENT_API_ENV)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| backend::endpoint("/entitlement/check"))
+    safe_override_url(
+        &std::env::var(ENTITLEMENT_API_ENV).unwrap_or_default(),
+        backend::endpoint("/entitlement/check"),
+    )
 }
 
-/// 联网拉取本机全部授权：`GET <api>?device_token=<hex>` → 逐行解析 `ok <pid> <tier> <exp>`。
-/// 404（无授权）是正常空态，返回空列表而非错误。
-pub fn fetch_entitlements(token: &str) -> ProotResult<Vec<Entitlement>> {
+/// 授权/兑换 API 覆盖值校验：https 任意放行；`http://127.0.0.1`/`localhost`
+/// 视为本机放行；其余 http 视为可能被中间人篡改，回退 `default`。
+fn safe_override_url(env_val: &str, default: String) -> String {
+    if env_val.is_empty() {
+        return default;
+    }
+    if env_val.starts_with("https://") {
+        return env_val.to_string();
+    }
+    if let Some(rest) = env_val.strip_prefix("http://") {
+        let host = rest.split('/').next().unwrap_or("");
+        let is_local =
+            host == "localhost" || host == "127.0.0.1" || host.starts_with("127.0.0.1:");
+        if is_local {
+            return env_val.to_string();
+        }
+    }
+    default
+}
+
+/// 联网拉取本机全部授权：`GET <api>?device_token=<hex>` → 逐行解析 `ok <pid> <tier> <exp>`，
+/// 末尾可选 `sig <base64>` 为服务端 Ed25519 签名。
+/// 404（无授权）是正常空态，返回空列表而非错误。返回 `(授权列表, 签名)`。
+pub fn fetch_entitlements(token: &str) -> ProotResult<(Vec<Entitlement>, Option<String>)> {
     let api = entitlement_api();
     let url = format!("{}?device_token={}", api, token.trim());
     let out = Command::new("curl")
@@ -295,7 +392,7 @@ pub fn fetch_entitlements(token: &str) -> ProotResult<Vec<Entitlement>> {
     let (body, http) = text.rsplit_once('\n').unwrap_or((text.as_ref(), ""));
     match http.trim() {
         "200" => {}
-        "404" => return Ok(Vec::new()), // 无授权：正常空态
+        "404" => return Ok((Vec::new(), None)), // 无授权：正常空态
         other => {
             return Err(ProotError::InvalidArg(format!(
                 "授权查询未通过（HTTP {}）：{}",
@@ -305,24 +402,34 @@ pub fn fetch_entitlements(token: &str) -> ProotResult<Vec<Entitlement>> {
         }
     }
     let mut ents = Vec::new();
+    let mut sig: Option<String> = None;
     for line in body.lines() {
         let mut it = line.split_whitespace();
-        if it.next() != Some("ok") {
-            continue; // 容忍空行/杂讯行
+        match it.next() {
+            Some("ok") => {
+                let product_id = it.next().unwrap_or("").to_string();
+                if product_id.is_empty() {
+                    continue;
+                }
+                let tier = it.next().unwrap_or("").to_string();
+                let exp = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+                ents.push(Entitlement {
+                    product_id,
+                    tier,
+                    exp,
+                });
+            }
+            Some("sig") => {
+                // 服务端 Ed25519 签名（base64）；后续落盘缓存并在门控时验签。
+                let s = it.next().unwrap_or("").to_string();
+                if !s.is_empty() {
+                    sig = Some(s);
+                }
+            }
+            _ => {} // 容忍空行/杂讯行
         }
-        let product_id = it.next().unwrap_or("").to_string();
-        if product_id.is_empty() {
-            continue;
-        }
-        let tier = it.next().unwrap_or("").to_string();
-        let exp = it.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        ents.push(Entitlement {
-            product_id,
-            tier,
-            exp,
-        });
     }
-    Ok(ents)
+    Ok((ents, sig))
 }
 
 // ============================ 授权缓存（entitlements.toml） ============================
@@ -332,15 +439,21 @@ pub fn ents_file_path(root: &Path) -> PathBuf {
     root.join(ENTS_FILE_REL)
 }
 
-/// 写授权缓存（原子替换）。
-pub fn save_ents(root: &Path, ents: &[Entitlement]) -> ProotResult<()> {
+/// 写授权缓存（原子替换）。`sig` 为服务端 Ed25519 签名（base64），无则省略。
+pub fn save_ents(root: &Path, ents: &[Entitlement], sig: Option<&str>) -> ProotResult<()> {
     std::fs::create_dir_all(root).map_err(ProotError::Io)?;
+    let dev_tok = load_device(root).map(|d| d.token).unwrap_or_default();
     let mut text = format!(
         "# mox-proot 商品授权缓存（由 `mox redeem status` 拉取后写入，请勿手改）。\n\
          [cache]\n\
-         fetched_at = {}\n",
-        now_unix()
+         fetched_at = {}\n\
+         device_token = \"{}\"\n",
+        now_unix(),
+        dev_tok
     );
+    if let Some(s) = sig {
+        text.push_str(&format!("sig = \"{}\"\n", s));
+    }
     for e in ents {
         text.push_str(&format!(
             "[[ent]]\nproduct_id = \"{}\"\ntier = \"{}\"\nexp = {}\n",
@@ -398,6 +511,8 @@ pub fn load_ents(root: &Path) -> Option<EntCache> {
             let v = v.trim().trim_matches('"');
             match k.trim() {
                 "fetched_at" if in_cache => c.fetched_at = v.parse().unwrap_or(0),
+                "device_token" if in_cache => c.device_token = v.to_string(),
+                "sig" if in_cache => c.sig = Some(v.to_string()),
                 "product_id" => {
                     if let Some(e) = cur.as_mut() {
                         e.product_id = v.to_string()
@@ -449,6 +564,32 @@ pub fn has_entitlement(root: &Path, product_id: &str) -> bool {
         Some(c) => c,
         None => return false,
     };
+    // 设备绑定：本机已有设备身份时，缓存必须属于本机——拷别人的
+    // `entitlements.toml` 会因 device_token 不符而整份失效（防跨设备白嫖）。
+    // 本机无设备身份时回退到旧行为（真实流程里 refresh_ents 必先生成本机设备）。
+    if let Some(dev) = load_device(root) {
+        if !cache.device_token.is_empty() && cache.device_token != dev.token {
+            return false;
+        }
+    }
+    // 服务端签名：存在时**必须有效**，否则视为篡改直接拒绝（不回退旧逻辑）。
+    // 合法签名证明服务端亲笔签发，门控完全信任声明——离线也按到期日生效，
+    // 无需 TTL，且攻击者无法伪造（无私钥）。彻底关闭渗透测试报告·路径①。
+    if let Some(ref s) = cache.sig {
+        if !verify_entitlement_signature(&cache.ents, s) {
+            return false; // 篡改检测
+        }
+        for e in &cache.ents {
+            if e.product_id != product_id {
+                continue;
+            }
+            if e.exp == 0 || e.exp > now {
+                return true;
+            }
+        }
+        return false;
+    }
+    // 无签名（旧缓存 / 离线降级）：走设备绑定 + TTL 旧逻辑
     for e in &cache.ents {
         if e.product_id != product_id {
             continue;
@@ -470,8 +611,8 @@ pub fn has_entitlement(root: &Path, product_id: &str) -> bool {
 /// `status`：联网拉取 → 落盘缓存 → 返回授权列表（空 = 未购买/未兑换）。
 pub fn refresh_ents(root: &Path) -> ProotResult<Vec<Entitlement>> {
     let dev = ensure_device(root)?;
-    let ents = fetch_entitlements(&dev.token)?;
-    save_ents(root, &ents)?;
+    let (ents, sig) = fetch_entitlements(&dev.token)?;
+    save_ents(root, &ents, sig.as_deref())?;
     Ok(ents)
 }
 
@@ -753,7 +894,7 @@ mod tests {
             Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 },
             Entitlement { product_id: "mox-proot-plus".into(), tier: "plus".into(), exp: now_unix() + 3600 },
         ];
-        save_ents(&root, &ents).unwrap();
+        save_ents(&root, &ents, None).unwrap();
         assert!(ents_fresh(&root));
         assert!(has_entitlement(&root, "proot-pro"));
         assert!(has_entitlement(&root, "mox-proot-plus"));
@@ -782,10 +923,88 @@ mod tests {
     }
 
     #[test]
+    fn entitlement_cache_bound_to_device_blocks_foreign_copy() {
+        // 防跨设备拷贝：本机设备身份与缓存 device_token 不一致时，整份授权失效。
+        let root = tmp("entsdev");
+        std::fs::create_dir_all(&root).unwrap();
+        // 本机设备令牌 aaa
+        save_device(&root, &DeviceInfo { token: "aaa".into(), name: "n".into(), platform: "linux".into() }).unwrap();
+        save_ents(&root, &[Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 }], None).unwrap();
+        assert!(has_entitlement(&root, "proot-pro"), "本机缓存应放行");
+
+        // 攻击者把别人机器的 entitlements.toml 拷过来（device_token=bbb）
+        let p = ents_file_path(&root);
+        let mut s = std::fs::read_to_string(&p).unwrap();
+        s = s.replace("device_token = \"aaa\"", "device_token = \"bbb\"");
+        std::fs::write(&p, s).unwrap();
+        assert!(!has_entitlement(&root, "proot-pro"), "他人授权文件应失效");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // 预生成的有效签名（blob=`ok proot-pro pro 0\n`，对应真实服务端私钥派生公钥），
+    // 仅用于离线构造「服务端亲笔签发」的缓存，验证客户端验签信任逻辑。
+    const VALID_SIG_B64: &str =
+        "OE3p5GJx2hi82OjOlRxN2bC2shpOPjYlohl8SZXCSiR2soCYa8AZbRAXMoKSMOpyn/1+M13a/D3LihZaF8QCCg==";
+
+    #[test]
+    fn signed_cache_trusted_offline_even_when_stale() {
+        // 路径①彻底关闭：缓存陈旧（超过 TTL）但带**有效服务端签名**，
+        // 门控完全信任声明——离线也按到期日生效，无需刷新。
+        let root = tmp("entssig");
+        std::fs::create_dir_all(&root).unwrap();
+        let stale = now_unix() - 30 * 86400;
+        std::fs::write(
+            ents_file_path(&root),
+            format!(
+                "[cache]\nfetched_at = {}\nsig = \"{}\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = 0\n",
+                stale, VALID_SIG_B64
+            ),
+        )
+        .unwrap();
+        assert!(!ents_fresh(&root), "缓存确实陈旧");
+        assert!(
+            has_entitlement(&root, "proot-pro"),
+            "带有效签名的陈旧缓存应离线放行"
+        );
+        assert!(!has_entitlement(&root, "no-such"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn tampered_signature_rejected_even_when_fresh() {
+        // 篡改检测：签名存在但无效（伪造/损坏）→ 直接拒绝，即使缓存新鲜。
+        let root = tmp("entstamper");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            ents_file_path(&root),
+            format!(
+                "[cache]\nfetched_at = {}\nsig = \"AAAA-invalid-signature\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = 0\n",
+                now_unix()
+            ),
+        )
+        .unwrap();
+        assert!(ents_fresh(&root), "缓存新鲜");
+        assert!(!has_entitlement(&root, "proot-pro"), "签名无效必须拒绝");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn verify_entitlement_signature_rejects_garbage() {
+        let ents = vec![Entitlement {
+            product_id: "proot-pro".into(),
+            tier: "pro".into(),
+            exp: 0,
+        }];
+        assert!(!verify_entitlement_signature(&ents, "not-valid-base64!!!"));
+        assert!(!verify_entitlement_signature(&ents, ""));
+        assert!(verify_entitlement_signature(&ents, VALID_SIG_B64));
+    }
+
+    #[test]
     fn empty_ents_cache_is_fresh_but_no_gate() {
         let root = tmp("entsempty");
         std::fs::create_dir_all(&root).unwrap();
-        save_ents(&root, &[]).unwrap();
+        save_ents(&root, &[], None).unwrap();
         assert!(ents_fresh(&root), "刚拉取过的空列表仍是新鲜缓存");
         assert!(!has_entitlement(&root, "proot-pro"));
         let _ = std::fs::remove_dir_all(&root);

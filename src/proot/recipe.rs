@@ -105,22 +105,47 @@ impl RecipeIndex {
 
     /// 运行时加载：按环境变量与可执行文件同目录探测配方目录，
     /// 找不到则回退到内嵌索引（脚本内容以 `script` 文件名在候选路径查找）。
+    ///
+    /// **安全约束（防门禁绕过）**：用户可写目录 / `MOX_RECIPE_DIR` 只能*增*配方，
+    /// 不能*降级或移除*内嵌付费/专属配方的门禁。任何与内嵌同 `id` 的配方，
+    /// 其 `requires` / `fan_only` 强制取内嵌值——即便攻击者在磁盘索引里
+    /// `sed '/requires/d'` 删掉那一行，门禁依旧生效（见渗透测试报告·路径②）。
     pub fn load() -> RecipeIndex {
+        let mut disk = None;
         if let Ok(d) = std::env::var("MOX_RECIPE_DIR") {
             if let Ok(idx) = RecipeIndex::from_dir(Path::new(&d)) {
-                return idx;
+                disk = Some(idx);
             }
         }
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(bin) = exe.parent() {
-                // <bin>/../share/mox-proot/recipes（安装布局）
-                let candidate = bin.join("../share/mox-proot/recipes");
-                if let Ok(idx) = RecipeIndex::from_dir(&candidate) {
-                    return idx;
+        if disk.is_none() {
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(bin) = exe.parent() {
+                    // <bin>/../share/mox-proot/recipes（安装布局）
+                    let candidate = bin.join("../share/mox-proot/recipes");
+                    if let Ok(idx) = RecipeIndex::from_dir(&candidate) {
+                        disk = Some(idx);
+                    }
                 }
             }
         }
-        RecipeIndex::parse(EMBEDDED_INDEX)
+        let mut idx = match disk {
+            Some(d) => d,
+            None => RecipeIndex::parse(EMBEDDED_INDEX),
+        };
+        // 内嵌索引的门禁表（id → (requires, fan_only)）为权威来源。
+        let emb = RecipeIndex::parse(EMBEDDED_INDEX);
+        let mut gate: std::collections::HashMap<&str, (&str, bool)> =
+            std::collections::HashMap::with_capacity(emb.recipes.len());
+        for r in &emb.recipes {
+            gate.insert(r.id.as_str(), (r.requires.as_str(), r.fan_only));
+        }
+        for r in &mut idx.recipes {
+            if let Some((req, fo)) = gate.get(r.id.as_str()) {
+                r.requires = (*req).to_string();
+                r.fan_only = *fo;
+            }
+        }
+        idx
     }
 
     /// 所有配方。
@@ -144,6 +169,14 @@ impl RecipeIndex {
 
     /// 读取脚本：优先配方目录，其次可执行文件同目录 share 路径。
     fn read_script(&self, recipe: &Recipe) -> ProotResult<String> {
+        // 付费配方（requires 非空）：脚本内嵌混淆存储，不在磁盘落明文，
+        // 仅在门禁（requires 判定）通过后由本函数解码使用——杜绝直接
+        // `sh recipes/pro-*.sh` 绕过门禁（渗透测试报告·路径③）。
+        if !recipe.requires.is_empty() {
+            return crate::proot::recipe_paid::decode_paid(&recipe.id).ok_or_else(|| {
+                ProotError::RootfsMissing(format!("付费配方脚本 {}", recipe.id))
+            });
+        }
         if let Some(dir) = &self.dir {
             let p = dir.join(&recipe.script);
             if p.exists() {
@@ -327,6 +360,31 @@ script = "vnc.sh"
     }
 
     #[test]
+    fn paid_scripts_embedded_not_plaintext_on_disk() {
+        // 渗透测试路径③：付费脚本内嵌混淆，磁盘 pro-*.sh 是占位桩，
+        // decode_paid 还原原文；直接 `sh` 磁盘文件无害。
+        let s = crate::proot::recipe_paid::decode_paid("pro-gpu").expect("应有内嵌付费脚本");
+        assert!(s.contains("WebGPU") || s.contains("GPU"), "解码后应含原脚本内容");
+        assert!(!s.contains("占位桩"), "不应是占位桩");
+        // 磁盘占位桩确实只回显提示、不执行真实逻辑
+        let stub = std::fs::read_to_string(
+            std::env::current_dir().unwrap().join("recipes/pro-gpu.sh"),
+        )
+        .or_else(|_| {
+            std::fs::read_to_string(
+                std::env::current_exe()
+                    .unwrap()
+                    .parent()
+                    .unwrap()
+                    .join("../share/mox-proot/recipes/pro-gpu.sh"),
+            )
+        });
+        if let Ok(stub) = stub {
+            assert!(stub.contains("占位桩"), "磁盘 pro-*.sh 应为无害占位桩");
+        }
+    }
+
+    #[test]
     fn parse_requires_flag() {
         let on = RecipeIndex::parse(
             "[[recipe]]\nid=\"pb\"\nname=\"x\"\nscript=\"pb.sh\"\nrequires = \"proot-pro\"\n",
@@ -358,6 +416,33 @@ script = "vnc.sh"
     }
 
     #[test]
+    fn load_overlays_embedded_gating_even_if_disk_strips_requires() {
+        // 渗透测试路径②：攻击者在 MOX_RECIPE_DIR 的 index.toml 里删掉
+        // `requires = "proot-pro"`，load() 仍必须报告该付费配方处于门禁后。
+        let dir = std::env::temp_dir().join(format!("mox-proot-recipe-strip-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // 故意写一份"被删掉门禁行"的索引，但保留付费配方条目
+        std::fs::write(
+            dir.join("index.toml"),
+            "[[recipe]]\nid=\"pro-gpu\"\nname=\"X\"\nscript=\"pro-gpu.sh\"\n\n\
+             [[recipe]]\nid=\"community\"\nname=\"免费社区\"\nscript=\"community.sh\"\n",
+        )
+        .unwrap();
+        std::env::set_var("MOX_RECIPE_DIR", &dir);
+        let idx = RecipeIndex::load();
+        std::env::remove_var("MOX_RECIPE_DIR");
+        let paid = idx.find("pro-gpu").expect("付费配方应仍在列表");
+        assert_eq!(
+            paid.requires, "proot-pro",
+            "即使磁盘索引删了 requires 行，内嵌门禁必须兜底生效"
+        );
+        let comm = idx.find("community").expect("社区配方应可见");
+        assert!(comm.requires.is_empty(), "社区配方自身无门禁不受影响");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn apply_requires_passes_after_gate_when_entitled() {
         // 有新鲜授权缓存时，商品门禁放行 → 错误应来自 rootfs 未安装（DistroNotInstalled），
         // 证明门禁判定本身不拦。
@@ -367,11 +452,15 @@ script = "vnc.sh"
         let root =
             std::env::temp_dir().join(format!("mox-proot-recipe-req-ok-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        crate::proot::redeem::save_ents(&root, &[crate::proot::redeem::Entitlement {
-            product_id: "proot-pro".into(),
-            tier: "pro".into(),
-            exp: 0,
-        }])
+        crate::proot::redeem::save_ents(
+            &root,
+            &[crate::proot::redeem::Entitlement {
+                product_id: "proot-pro".into(),
+                tier: "pro".into(),
+                exp: 0,
+            }],
+            None,
+        )
         .unwrap();
         let err = idx.apply(&root, "pb", "ubuntu").unwrap_err();
         assert!(

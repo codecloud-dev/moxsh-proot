@@ -1,0 +1,15 @@
+# 静态 musl 构建加固（渗透测试报告·#482：musl 静态版 distro 二进制 --help 段错误 139/SIGSEGV）。
+#
+# 根因：全静态可执行文件默认 panic=unwind，依赖 libunwind 在启动时解析展开表与
+# personality；在 musl 静态链接下该解析常失败 → 进程在 main 前 SIGSEGV（纯文本路径如
+# `--help` 也崩，说明是启动期而非业务逻辑）。统一改用 panic=abort（见 Cargo.toml
+# [profile.release]），去掉 unwinder 依赖，静态二进制启动即稳定；对 cdylib（JNI 桥）
+# 也更安全——跨 FFI 边界 unwind 本就是 UB，abort 优于 unwind。
+#
+# crt-static 显式声明完全静态链接（musl 默认即静态，这里显式以防回退动态）。
+# 仅作用于 *-unknown-linux-musl 目标，gnu / android(NDK) 目标不受影响。
+[target.x86_64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]

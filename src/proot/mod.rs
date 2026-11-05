@@ -46,6 +46,9 @@ pub mod net;
 pub mod ptrace;
 pub mod seccomp;
 pub mod recipe;
+/// 付费配方脚本内嵌（混淆）存储——不在磁盘落明文，防直接 `sh`（渗透测试路径③）。
+/// 仅在门禁通过后由 [`recipe`] 在内存解码使用。
+pub mod recipe_paid;
 pub mod redeem;
 pub mod script;
 pub mod settings;

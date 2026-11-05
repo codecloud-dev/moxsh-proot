@@ -31,6 +31,7 @@ crossterm = { version = "0.28", optional = true }
 # 与 ratatui/crossterm 同样特性门控，不污染引擎 cdylib 与 Android 构建。
 # 选用 qrcode 0.14：纯 Rust、无 unsafe、支持 byte 模式 + 多 ECC 等级，足够承载 <300 字节的 verification_uri。
 qrcode = { version = "=0.14.1", optional = true }
+ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] }
 
 # 构建脚本依赖：cc 用于在 Android 目标下把 c/proot_bridge.c 编入 cdylib（见 build.rs）。
 [build-dependencies]
@@ -60,3 +61,7 @@ opt-level = 3
 lto = true
 codegen-units = 1
 strip = true
+# 静态 musl 二进制启动稳定（#482）：panic=unwind 依赖 libunwind，在 musl 静态链接下
+# 启动期解析失败 → SIGSEGV（139）。改用 abort 去掉 unwinder。对 cdylib（JNI 桥）也更安全
+# （跨 FFI unwind 是 UB）。dev/test 仍走默认 unwind，单测不受影响。
+panic = "abort"

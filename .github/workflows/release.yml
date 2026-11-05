@@ -80,6 +80,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.cross_pkg }}
 
+      # musl 静态目标必须用 musl 链接器（musl-gcc），不能用宿主 glibc 的 cc/gcc——
+      # 否则 musl 目标对象被 glibc 启动文件/loader 链接，TLS/relro 错配，运行期
+      # 在 main 前 SIGSEGV（#482 的根因之一；TUI 的 x86_64-musl 已用 musl-gcc 正常）。
+      - name: 安装 musl 工具链（musl 目标）
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
       - name: 安装 NDK 26.1.10909125（android）
         if: matrix.ndk == 'true'
         run: |
@@ -121,7 +130,16 @@ jobs:
               ;;
             aarch64-unknown-linux-musl)
               # crt 对象走 rustup 自包含 musl；链接驱动必须交叉 gcc
+              # ⚠️ 已知更优解：用真正的 aarch64 musl 交叉链接器（如 rust-musl-cross
+              # 镜像的 aarch64-linux-musl-gcc）替代 gnu-gcc，可从根上消除 TLS/relro 错配；
+              # 当前 CI 无该工具链，先用 gnu-gcc + panic=abort（见 .cargo/config.toml / Cargo.toml）
+              # 规避启动期 unwinder 崩溃，后续再切 musl 交叉链接器。
               echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+              ;;
+            x86_64-unknown-linux-musl)
+              # 必须与 TUI 的 x86_64-musl 一致用 musl-gcc，否则宿主 glibc cc 链接 musl 对象
+              # → TLS/relro 错配 → 启动 SIGSEGV（#482）。
+              echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
               ;;
           esac
 

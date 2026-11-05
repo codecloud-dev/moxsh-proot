@@ -582,7 +582,7 @@ impl DistroManager {
         };
 
         // 2) SHA-256 校验：优先用 spec 内置值；为空时尝试运行时拉取清单
-        //    （fetch_expected_sha256：http 镜像可用；https 因 std 无 TLS 栈返回 None）。
+        //    （fetch_expected_sha256：经系统 curl 拉 https 清单，强制 TLS）。
         //    两者皆空才告警跳过——不再静默跳过，留痕便于排障；若清单拉到则真正校验。
         let expected: Option<String> =
             spec.sha256.map(|s| s.to_string()).or_else(|| fetch_expected_sha256(spec));
@@ -855,10 +855,8 @@ impl DistroManager {
 //   2. [`fetch_expected_sha256`] 拉取清单并解析出本发行版归档的期望 hex；
 //   3. [`parse_sha256sums`] 是纯文本解析核心（可单测、可复用）。
 //
-// TLS 边界：std TcpStream 手写 GET 只支持 http（无 TLS 栈）；四个 checksum_url
-// 均为 https，此时 `fetch_expected_sha256` 返回 None——真实校验在 Kotlin
-// BootstrapInstaller / distro 安装流程（OkHttp + 系统证书校验）完成，本函数
-// 供 CI / 桌面测试对 http 镜像端点使用，保持依赖极简（不引 reqwest/rustls）。
+// 清单下载经系统 curl（自动 TLS / 系统证书），强制 https，杜绝明文 MITM 投毒；
+// `download()` 会拿返回值对 rootfs 做 SHA-256 校验（见 `verify_file_sha256`）。
 
 /// 拉取 `spec.checksum_url` 的 SHA256SUMS 并提取 `spec.url_official` 归档名的
 /// 期望 SHA-256（小写 hex）。返回 None 的情形：https 清单（见上 TLS 边界）、
@@ -872,41 +870,31 @@ pub fn fetch_expected_sha256(spec: &DistroSpec) -> Option<String> {
     parse_sha256sums(&body, fname)
 }
 
-/// 最小 HTTP/1.0 GET（仅 http；无重定向、无 TLS，够 checksum 场景用）。
-/// 手写而不引 reqwest：Android 真实下载走 Kotlin 层，此函数仅 CI/桌面测试。
+/// 拉取 URL 文本体（curl 转发，自动 TLS / 系统证书，与 entitlement/fan 同款；
+/// 不引 reqwest/rustls，依赖系统 curl）。返回 None 的情形：非 https（明文一律
+/// 拒绝，防 MITM 投毒）、网络失败、HTTP 非 2xx、空体。
+///
+/// 此前本函数用手写 `TcpStream` 且只认 `http://`，而所有 `checksum_url` 均为
+/// `https://`——`strip_prefix("http://")` 恒失败 → 返回 None → rootfs 下载的
+/// SHA-256 校验被**静默跳过**（渗透测试报告·sha256 清单投毒）。改用 curl 后
+/// 校验才会真正生效。
 fn http_get(url: &str) -> Option<String> {
-    use std::io::Write;
-    use std::net::TcpStream;
-    let rest = url.strip_prefix("http://")?;
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], &rest[i..]),
-        None => (rest, "/"),
-    };
-    // 默认 80 端口（IPv6 字面量不含：checksum 域名均为普通 host）。
-    let addr = if authority.contains(':') {
-        authority.to_string()
-    } else {
-        format!("{}:80", authority)
-    };
-    let mut stream = TcpStream::connect(addr).ok()?;
-    let req = format!(
-        "GET {} HTTP/1.0\r\nHost: {}\r\nUser-Agent: mox-proot-checksum\r\nConnection: close\r\n\r\n",
-        path, authority
-    );
-    stream.write_all(req.as_bytes()).ok()?;
-    let mut resp = Vec::new();
-    stream.read_to_end(&mut resp).ok()?;
-    let text = String::from_utf8_lossy(&resp).into_owned();
-    // 状态行第二字段须为 2xx。
-    let ok = text
-        .split_whitespace()
-        .nth(1)
-        .is_some_and(|s| s.starts_with('2'));
-    if !ok {
+    if !url.starts_with("https://") {
+        return None; // 明文 http 清单可被中间人篡改，直接拒绝
+    }
+    let out = std::process::Command::new("curl")
+        .args(["-sSfL", "--connect-timeout", "15", "--max-time", "30", "--fail"])
+        .arg(url)
+        .output()
+        .ok()?;
+    if !out.status.success() {
         return None;
     }
-    // 头体分离（\r\n\r\n）。
-    text.find("\r\n\r\n").map(|i| text[i + 4..].to_string())
+    let text = String::from_utf8(out.stdout).ok()?;
+    if text.trim().is_empty() {
+        return None;
+    }
+    Some(text)
 }
 
 /// 解析 SHA256SUMS 文本，提取 `filename` 对应行的 hex（统一小写返回）。

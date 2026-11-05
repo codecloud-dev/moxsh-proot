@@ -2045,6 +2045,7 @@ mod tests {
                 tier: "pro".into(),
                 exp: 0,
             }],
+            None,
         )
         .unwrap();
         let out = proot_distro(&["redeem", "check"], &root);

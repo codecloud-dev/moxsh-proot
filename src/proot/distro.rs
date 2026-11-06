@@ -773,6 +773,7 @@ impl DistroManager {
     /// 这里改为 `follow_symlinks(false)` + 自定义递归遍历，额外：
     /// - 排除顶层 `proc`/`sys`/`dev` 伪文件系统（运行时由 proot 绑定，不该进归档）；
     /// - 跳过相对 target 含 `..` 且逃出 rootfs 的符号链接（防宿主路径泄漏）。
+    ///
     /// 常规文件/目录/合法符号链接逐条 `append_path_with_name`（不递归跟随链接）。
     pub fn backup(&self, id: &str, out_tar: &Path) -> ProotResult<()> {
         self.check_id(id)?; // P1：id 路径白名单
@@ -798,6 +799,7 @@ impl DistroManager {
     /// - 替换用同目录内 `rename`（原子），旧 rootfs 先挪到 `.restore-old`；
     /// - 任一步失败都把旧 rootfs 挪回原位，保证容器可用；
     /// - 成功后重跑符号链接规范化（与 install 一致）并写完成标记。
+    ///
     /// 顺带修正旧实现的布局 bug：backup 归档顶层是 `rootfs/`，直接解到
     /// `rootfs` 会得到 `rootfs/rootfs/...` 嵌套；现在解到暂存目录再取 `rootfs/`。
     pub fn restore(&self, id: &str, tar_path: &Path) -> ProotResult<()> {
@@ -859,7 +861,7 @@ impl DistroManager {
         // ---- 阶段 3：收尾（规范化 + 完成标记）；失败同样回滚 ----
         normalize_installed_rootfs(&rootfs);
         if let Err(e) = fs::write(self.ok_marker(id), "restored") {
-            let _ = fs::rename(&rootfs, &staging.join("failed-rootfs"));
+            let _ = fs::rename(&rootfs, staging.join("failed-rootfs"));
             if had_old {
                 let _ = fs::rename(&old, &rootfs);
             }
@@ -1066,6 +1068,7 @@ impl Sha256Stream {
 /// 4. **绝对 hardlink target 跳过**：tar crate 对硬链接走
 ///    `base.join(src)`，绝对 src 会替换掉 base 导致越界报错；且绝对
 ///    hardlink target 非 rootfs 惯例，跳过无损。
+///
 /// 备份专用：递归把 rootfs 逐条写入归档，**不跟随符号链接**。
 ///
 /// `tar::Builder::append_dir_all` 默认 `follow=true`，会把 busybox 的上百个

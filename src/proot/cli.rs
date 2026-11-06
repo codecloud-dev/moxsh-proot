@@ -1676,6 +1676,7 @@ fn fs_create_dir_all(p: &Path) -> ProotResult<()> {
 ///   （`/bin/sh -c` 执行，防误触确认写在这里面）；
 /// - 再否则引擎默认探测：bash -l 优先，sh -l 兜底；
 /// - 会话结束后 `exit_cmd(id)` 在**宿主侧**执行（收尾提示/清理）。
+///
 /// `login`/`shell`/`launch` 在 `--` 之前可追加的引擎选项。
 ///
 /// 【渗透复测 P1 修复】旧实现只取 `--` 之后的命令，`login <id> -b /sdcard:/sdcard`

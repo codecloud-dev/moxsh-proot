@@ -59,6 +59,7 @@ impl RecipeIndex {
     ///   杜绝 `id = "zz;echo PWNED;#"` 注入任意命令 / `../` 路径穿越；
     /// - `script` 含 `/`、`..` 或元字符：置空作废，`read_script` 会拒绝，
     ///   杜绝 `script = "../../etc/passwd"` 读任意文件。
+    ///
     /// 与 distro.rs 的 id 白名单同源，避免两套规则产生绕过缝隙。
     pub fn parse(text: &str) -> RecipeIndex {
         let mut recipes = Vec::new();

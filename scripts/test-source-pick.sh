@@ -39,9 +39,9 @@ mock_pick() {
         for a in "$@"; do case "$a" in http*) url="$a";; esac; done
         case "$url" in
           *github.com*)
-            [ -n "$GH_PROBE" ] && { echo "$GH_PROBE"; return 0; }; return 22 ;;
+            [ -n "$GH_PROBE" ] && { echo "200 $GH_PROBE"; return 0; }; return 22 ;;
           *gitee.com*)
-            [ -n "$GITEE_PROBE" ] && { echo "$GITEE_PROBE"; return 0; }; return 22 ;;
+            [ -n "$GITEE_PROBE" ] && { echo "200 $GITEE_PROBE"; return 0; }; return 22 ;;
         esac
         return 22
       }
@@ -68,9 +68,9 @@ mock_switch() {
         for a in "$@"; do case "$a" in http*) url="$a";; esac; done
         case "$url" in
           *github.com*)
-            [ -n "$GH_PROBE" ] && { echo "$GH_PROBE"; return 0; }; return 22 ;;
+            [ -n "$GH_PROBE" ] && { echo "200 $GH_PROBE"; return 0; }; return 22 ;;
           *gitee.com*)
-            [ -n "$GITEE_PROBE" ] && { echo "$GITEE_PROBE"; return 0; }; return 22 ;;
+            [ -n "$GITEE_PROBE" ] && { echo "200 $GITEE_PROBE"; return 0; }; return 22 ;;
         esac
         return 22
       }
@@ -155,8 +155,8 @@ mock_asset_only_gh() {
         local url="" a
         for a in "$@"; do case "$a" in http*) url="$a";; esac; done
         case "$url" in
-          *github.com*) echo 0.30; return 0 ;;
-          *gitee.com*raw*) echo 0.10; return 0 ;;
+          *github.com*) echo "200 0.30"; return 0 ;;
+          *gitee.com*raw*) echo "200 0.10"; return 0 ;;
           *gitee.com*) return 22 ;;
         esac
         return 22

@@ -301,7 +301,7 @@ jobs:
     # 【渗透复测 P2 修复】旧 job 无任何超时/重试上限：GitHub Actions → Gitee
     # 的 TLS 连接失败（curl exit 35/56）时，每个资产都要耗满默认重试，整条
     # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       GITEE_OWNER: thousand-code-crafts
       GITEE_REPO: moxsh-proot
@@ -316,27 +316,62 @@ jobs:
         run: |
           mkdir -p dist && cd dist
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --clobber
-      - name: 增量上传缺失资产到 Gitee release
+      - name: 增量上传/刷新资产到 Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        timeout-minutes: 10
+        timeout-minutes: 18
         run: |
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
           cd dist
-          # 1) 先取 Gitee 现有资产清单，只补缺失者（幂等，避免每次重传全部 85 个）。
+          # 1) 拉 Gitee 资产清单（name / id / size），分页拉全量。
+          #    ⚠️ Gitee attach_files 列表默认每页仅 20 条，必须带 per_page=100 逐页拉：
+          #    只看第一页会把已存在资产误判缺失 → 重复上传 / 复核误报（实测踩过）。
+          #    ⚠️ 只按文件名跳过不够：滚动 Release 每次重建都产出新二进制，同名但
+          #    size 不同 = Gitee 上还是旧版，国内用户下载拿到修复前代码（实测 14 个）。
+          #    故同名时比对 size，不一致先 DELETE 旧附件（Gitee API 成功返回 204）再传新。
           #    列表接口失败不致命：退化成「全部尝试上传」，仍由下面的有限重试兜住。
-          existing=""
-          if curl -sS --connect-timeout 10 --max-time 30 -o /tmp/glist.json \
-               -H "Authorization: token ${GITEE_TOKEN}" "${API}"; then
-            existing="$(python3 -c 'import json,sys; print("\n".join(a["name"] for a in json.load(open("/tmp/glist.json"))))' 2>/dev/null || true)"
-          fi
+          : > /tmp/gassets.tsv
+          for page in 1 2 3 4 5 6 7 8 9 10; do
+            if ! curl -sS --connect-timeout 10 --max-time 30 -o /tmp/glist.json \
+                 -H "Authorization: token ${GITEE_TOKEN}" \
+                 "${API}?per_page=100&page=${page}"; then
+              break
+            fi
+            before="$(wc -l < /tmp/gassets.tsv)"
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); rows=[a for a in d if isinstance(a,dict) and a.get("name")] if isinstance(d,list) else []; print("\n".join("%s\t%s\t%s" % (a["name"],a.get("id",""),a.get("size","")) for a in rows))' \
+              /tmp/glist.json >> /tmp/gassets.tsv 2>/dev/null || true
+            after="$(wc -l < /tmp/gassets.tsv)"
+            page_n=$((after - before))
+            [ "$page_n" -lt 100 ] && break
+          done
+          existing="$(cut -f1 /tmp/gassets.tsv)"
           has() { printf '%s\n' "$existing" | grep -Fxq "$1"; }
+          # 查某资产的 "<id> <size>"；不存在则返回空
+          gmeta() { awk -F'\t' -v n="$1" '$1==n {print $2" "$3; exit}' /tmp/gassets.tsv; }
 
           ok=0; fail=0; consecutive=0
           for f in *; do
             [ "$f" = "SHA256SUMS" ] && continue
-            if has "$f"; then echo "SKIP $f（Gitee 已存在）"; continue; fi
+            fsz="$(stat -c %s "$f")"
+            if has "$f"; then
+              meta="$(gmeta "$f")"
+              gid="${meta%% *}"; gsz="${meta#* }"
+              if [ "$gsz" = "$fsz" ]; then echo "SKIP $f（Gitee 已存在且 size 一致）"; continue; fi
+              # 同名但 size 不同 = 旧二进制；先删旧附件，成功才传新（避免同名重复资产）。
+              echo "REFRESH $f（Gitee ${gsz}B → 本次 ${fsz}B）"
+              dcode="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+                --connect-timeout 10 --max-time 60 \
+                -H "Authorization: token ${GITEE_TOKEN}" "${API}/${gid}" 2>/dev/null || echo 000)"
+              if [ "$dcode" != "200" ] && [ "$dcode" != "201" ] && [ "$dcode" != "204" ]; then
+                fail=$((fail+1)); consecutive=$((consecutive+1))
+                echo "FAIL $f（删除旧附件 HTTP ${dcode}，跳过上传以免产生重复资产）"
+                if [ "$consecutive" -ge 3 ]; then
+                  echo "::error::Gitee 连续 3 次失败，判定线路不通，提前终止"; break
+                fi
+                continue
+              fi
+            fi
             # 2) 单次上传：有限重试 + 短超时，绝不让某个资产耗满整条 job。
             code="000"
             for attempt in 1 2 3; do

@@ -351,7 +351,7 @@ jobs:
               break
             fi
             before="$(wc -l < /tmp/gassets.tsv)"
-            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); rows=[a for a in d if isinstance(a,dict) and a.get("name")] if isinstance(d,list) else []; print("\n".join("%s\t%s\t%s" % (a["name"],a.get("id",""),a.get("size","")) for a in rows))' \
+            python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); rows=[a for a in d if isinstance(a,dict) and a.get("name")] if isinstance(d,list) else []; print("\n".join("%s\t%s\t%s\t%s" % (a["name"],a.get("id",""),a.get("size",""),a.get("browser_download_url","")) for a in rows))' \
               /tmp/glist.json >> /tmp/gassets.tsv 2>/dev/null || true
             after="$(wc -l < /tmp/gassets.tsv)"
             page_n=$((after - before))
@@ -361,6 +361,8 @@ jobs:
           has() { printf '%s\n' "$existing" | grep -Fxq "$1"; }
           # 查某资产的 "<id> <size>"；不存在则返回空
           gmeta() { awk -F'\t' -v n="$1" '$1==n {print $2" "$3; exit}' /tmp/gassets.tsv; }
+          # 查某资产的 Gitee 直链（内容 sha256 复核用）
+          gurl() { awk -F'\t' -v n="$1" '$1==n {print $4; exit}' /tmp/gassets.tsv; }
 
           # 同名重复自愈：上一轮若「新版已传、旧版删除失败」会留下两条同名附件，
           # 浏览器按文件名下载时可能拿到旧二进制。保留 size 与本地一致的，其余删掉。
@@ -385,9 +387,28 @@ jobs:
             if has "$f"; then
               meta="$(gmeta "$f")"
               gid="${meta%% *}"; gsz="${meta#* }"
-              if [ "$gsz" = "$fsz" ]; then echo "SKIP $f（Gitee 已存在且 size 一致）"; continue; fi
-              echo "REFRESH $f（Gitee ${gsz}B → 本次 ${fsz}B）"
-              pending_del="$gid"
+              if [ "$gsz" = "$fsz" ]; then
+                # ⚠️ 同 size ≠ 同内容：滚动 Release 可能产出尺寸相同、字节不同的
+                # 二进制（实测 mox-proot-linux-amd64-musl 同名同 size 却是旧版），
+                # 只比 size 会一直 SKIP，国内用户永远下不到修复版。按内容 sha256 复核。
+                l_sum="$(sha256sum "$f" | cut -d' ' -f1)"
+                g_url="$(gurl "$f")"; g_sum=""
+                if [ -n "$g_url" ]; then
+                  curl -sS -fSL --connect-timeout 10 --max-time 180 -o /tmp/gcheck.bin "$g_url" 2>/dev/null || true
+                  [ -s /tmp/gcheck.bin ] && g_sum="$(sha256sum /tmp/gcheck.bin | cut -d' ' -f1)"
+                  rm -f /tmp/gcheck.bin
+                fi
+                if [ "$g_sum" = "$l_sum" ]; then echo "SKIP $f（Gitee 内容 sha256 一致）"; continue; fi
+                if [ -z "$g_sum" ]; then
+                  echo "::warning::$f 内容复核下载失败，按 size 一致跳过（建议重跑本 job）"
+                  continue
+                fi
+                echo "REFRESH-CONTENT $f（size 相同但 sha256 不同：国内仍是旧二进制）"
+                pending_del="$gid"
+              else
+                echo "REFRESH $f（Gitee ${gsz}B → 本次 ${fsz}B）"
+                pending_del="$gid"
+              fi
             else
               echo "UPLOAD $f（Gitee 缺失）"
             fi

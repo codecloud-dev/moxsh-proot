@@ -324,6 +324,18 @@ jobs:
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
           cd dist
+          # 0) 凭据自检：attach_files 的列表接口是公开的，GET 成功**不能**证明
+          #    token 有效；DELETE/POST 才需要写权限。旧版把 DELETE 401 误判成
+          #    「线路不通」，实测连红 3 个资产却查不到根因。这里单独验一次。
+          authcode="$(curl -sS -o /tmp/guser.json -w '%{http_code}' \
+            --connect-timeout 10 --max-time 30 \
+            -H "Authorization: token ${GITEE_TOKEN}" \
+            "https://gitee.com/api/v5/user" 2>/dev/null || echo 000)"
+          if [ "$authcode" = "401" ] || [ "$authcode" = "403" ]; then
+            echo "::error::GITEE_TOKEN 无效或权限不足（/api/v5/user HTTP ${authcode}）——这是凭据问题不是线路故障，请更新仓库 Secret"
+            exit 1
+          fi
+          echo "GITEE_TOKEN 凭据自检：HTTP ${authcode}"
           # 1) 拉 Gitee 资产清单（name / id / size），分页拉全量。
           #    ⚠️ Gitee attach_files 列表默认每页仅 20 条，必须带 per_page=100 逐页拉：
           #    只看第一页会把已存在资产误判缺失 → 重复上传 / 复核误报（实测踩过）。
@@ -363,11 +375,17 @@ jobs:
               dcode="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
                 --connect-timeout 10 --max-time 60 \
                 -H "Authorization: token ${GITEE_TOKEN}" "${API}/${gid}" 2>/dev/null || echo 000)"
-              if [ "$dcode" != "200" ] && [ "$dcode" != "201" ] && [ "$dcode" != "204" ]; then
+              if [ "$dcode" = "401" ] || [ "$dcode" = "403" ]; then
+                echo "::error::DELETE ${f} 返回 HTTP ${dcode}：GITEE_TOKEN 无附件删除权限（凭据/scope 问题），请更新仓库 Secret"
+                exit 1
+              fi
+              # 404 = 旧附件已不存在（上一次 DELETE 成功但 POST 失败、或另一路
+              # 补传脚本已删掉）；此时直接上传即可，不会造成同名重复资产。
+              if [ "$dcode" != "200" ] && [ "$dcode" != "201" ] && [ "$dcode" != "204" ] && [ "$dcode" != "404" ]; then
                 fail=$((fail+1)); consecutive=$((consecutive+1))
                 echo "FAIL $f（删除旧附件 HTTP ${dcode}，跳过上传以免产生重复资产）"
                 if [ "$consecutive" -ge 3 ]; then
-                  echo "::error::Gitee 连续 3 次失败，判定线路不通，提前终止"; break
+                  echo "::error::Gitee 连续 3 次删除失败，提前终止（重试本 job 即可补齐）"; break
                 fi
                 continue
               fi
@@ -380,6 +398,10 @@ jobs:
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 "${API}" -F "file=@${f}" 2>/dev/null || echo 000)"
               if [ "$code" = "200" ] || [ "$code" = "201" ]; then break; fi
+              if [ "$code" = "401" ] || [ "$code" = "403" ]; then
+                echo "::error::POST ${f} 返回 HTTP ${code}：GITEE_TOKEN 无附件上传权限，请更新仓库 Secret"
+                exit 1
+              fi
               [ "$attempt" -lt 3 ] && sleep 2
             done
             if [ "$code" = "200" ] || [ "$code" = "201" ]; then
@@ -387,18 +409,21 @@ jobs:
             else
               fail=$((fail+1)); consecutive=$((consecutive+1))
               echo "FAIL $f (HTTP $code): $(head -c 120 /tmp/g.json 2>/dev/null || true)"
-              # 3) 连续失败 3 个基本可判定 Gitee 线路整体不通（TLS 35/56），
-              #    立即收手，不再把剩余几十个资产逐个耗过去。
+              # 3) 连续失败 3 个判定 Gitee 线路/服务整体异常（TLS 35/56、5xx），
+              #    立即收手，不再把剩余几十个资产逐个耗过去。401/403 已在上面
+              #    单独判为凭据问题并直接退出，不会被这里误报成「线路不通」。
               if [ "$consecutive" -ge 3 ]; then
-                echo "::error::Gitee 连续 3 个资产上传失败，判定线路不通，提前终止（避免长时间空转）"
+                echo "::error::Gitee 连续 3 个资产上传失败，提前终止（避免长时间空转，重试本 job 即可补齐）"
                 break
               fi
             fi
           done
           echo "=== Gitee 同步：$ok 成功 / $fail 失败 ==="
-          # 4) 结果诊断：允许「零新增」（资产已齐）通过；有失败则明确报出，
-          #    但不阻塞 GitHub Release 本身（国内镜像可由维护端补传脚本补齐）。
+          # 4) 结果诊断：允许「零新增」（资产已齐）通过；有失败则**让 job 变红**，
+          #    绝不静默放行——同名旧二进制会让国内用户下到修复前版本，
+          #    那种「CI 绿但东西没更新」正是要杜绝的假绿。GitHub Release
+          #    本身在独立 job 已完成，重试本 job 即可补齐国内镜像。
           if [ "$fail" -gt 0 ]; then
-            echo "::warning::Gitee 仍有 $fail 个资产未同步；请用本地补传脚本或重试本 job 补齐"
+            echo "::error::Gitee 仍有 $fail 个资产未同步；请重试本 job 或用本地补传脚本补齐"
             exit 1
           fi

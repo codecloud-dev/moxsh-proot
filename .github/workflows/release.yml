@@ -19,6 +19,10 @@ jobs:
   build-engine:
     name: 引擎（${{ matrix.name }}）
     runs-on: ${{ matrix.runner }}
+    # 2026-11-06 实测：apt 源抖动时「安装交叉 gcc」会无限挂住（正常整个 job
+    # ~70s，故障 run 挂了 16 分钟且无任何上限）。默认 job 超时是 360 分钟，
+    # 会把 checksums / mirror-gitee 一起堵死，Gitee 缺件永远补不上。加硬上限。
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -76,21 +80,52 @@ jobs:
 
       - name: 安装交叉 gcc（aarch64-gnu）
         if: matrix.cross_pkg != ''
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ${{ matrix.cross_pkg }}
+          if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
+            echo "交叉 gcc 已预装，跳过 apt"
+            exit 0
+          fi
+          export DEBIAN_FRONTEND=noninteractive
+          APT='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Dpkg::Use-Pty=0'
+          for i in 1 2 3; do
+            if sudo apt-get $APT update -qq && \
+               sudo apt-get $APT install -y --no-install-recommends ${{ matrix.cross_pkg }}; then
+              exit 0
+            fi
+            echo "apt 第 $i 次失败，5 秒后重试"
+            sleep 5
+          done
+          echo "::error::安装 ${{ matrix.cross_pkg }} 失败（apt 源不可用）"
+          exit 1
 
       # musl 静态目标必须用 musl 链接器（musl-gcc），不能用宿主 glibc 的 cc/gcc——
       # 否则 musl 目标对象被 glibc 启动文件/loader 链接，TLS/relro 错配，运行期
       # 在 main 前 SIGSEGV（#482 的根因之一；TUI 的 x86_64-musl 已用 musl-gcc 正常）。
       - name: 安装 musl 工具链（musl 目标）
         if: contains(matrix.target, 'musl')
+        timeout-minutes: 8
         run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools
+          if command -v musl-gcc >/dev/null 2>&1; then
+            echo "musl-gcc 已预装，跳过 apt"
+            exit 0
+          fi
+          export DEBIAN_FRONTEND=noninteractive
+          APT='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Dpkg::Use-Pty=0'
+          for i in 1 2 3; do
+            if sudo apt-get $APT update -qq && \
+               sudo apt-get $APT install -y --no-install-recommends musl-tools; then
+              exit 0
+            fi
+            echo "apt 第 $i 次失败，5 秒后重试"
+            sleep 5
+          done
+          echo "::error::安装 musl-tools 失败（apt 源不可用）"
+          exit 1
 
       - name: 安装 NDK 26.1.10909125（android）
         if: matrix.ndk == 'true'
+        timeout-minutes: 20
         run: |
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           [ -x "$SDKMANAGER" ] || SDKMANAGER="$(command -v sdkmanager)"
@@ -174,6 +209,7 @@ jobs:
   build-tui:
     name: TUI 控制台（${{ matrix.name }}）
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -194,7 +230,24 @@ jobs:
           key: release-tui-${{ matrix.target }}
       - name: 安装 musl 工具链
         if: matrix.cc == 'musl-gcc'
-        run: sudo apt-get update && sudo apt-get install -y musl-tools
+        timeout-minutes: 8
+        run: |
+          if command -v musl-gcc >/dev/null 2>&1; then
+            echo "musl-gcc 已预装，跳过 apt"
+            exit 0
+          fi
+          export DEBIAN_FRONTEND=noninteractive
+          APT='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Dpkg::Use-Pty=0'
+          for i in 1 2 3; do
+            if sudo apt-get $APT update -qq && \
+               sudo apt-get $APT install -y --no-install-recommends musl-tools; then
+              exit 0
+            fi
+            echo "apt 第 $i 次失败，5 秒后重试"
+            sleep 5
+          done
+          echo "::error::安装 musl-tools 失败（apt 源不可用）"
+          exit 1
       - name: cargo build --release --features tui
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.cc }}

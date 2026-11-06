@@ -25,3 +25,7 @@ permissions:
 jobs:
   release-latest:
     uses: ./.github/workflows/release.yml
+    # reusable workflow 默认【不继承】调用方的 secrets，必须显式 inherit：
+    # 否则 release.yml 里 secrets.GITEE_TOKEN 为空 → 资产列表 GET（公开可读）能过，
+    # 但 DELETE/POST 一律 401「登录失效」，镜像 job 必然失败（实测 08:29 复现）。
+    secrets: inherit

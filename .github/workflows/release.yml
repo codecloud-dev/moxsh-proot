@@ -82,15 +82,23 @@ jobs:
         if: matrix.cross_pkg != ''
         timeout-minutes: 8
         run: |
-          if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1; then
-            echo "交叉 gcc 已预装，跳过 apt"
+          # 预装检测不能只看 gcc 在不在：runner 可能预装了 gcc 但缺 C 启动文件
+          # （crti.o / Scrt1.o 由 libc6-dev-arm64-cross 提供），链接会报
+          # "cannot find crti.o"。用 -print-file-name 实测能否解析到文件。
+          if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && \
+             [ "$(aarch64-linux-gnu-gcc -print-file-name=crti.o)" != "crti.o" ]; then
+            echo "交叉 gcc + crti.o 齐备，跳过 apt"
             exit 0
           fi
           export DEBIAN_FRONTEND=noninteractive
           APT='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Dpkg::Use-Pty=0'
+          # ⚠️ 必须显式装 libc6-dev-arm64-cross：它是 gcc-aarch64-linux-gnu 的
+          # Recommends，加 --no-install-recommends 会被砍掉 → 链接报 crti.o 缺失
+          # （2026-11-06 实测回归）。
           for i in 1 2 3; do
             if sudo apt-get $APT update -qq && \
-               sudo apt-get $APT install -y --no-install-recommends ${{ matrix.cross_pkg }}; then
+               sudo apt-get $APT install -y --no-install-recommends \
+                 ${{ matrix.cross_pkg }} libc6-dev-arm64-cross; then
               exit 0
             fi
             echo "apt 第 $i 次失败，5 秒后重试"

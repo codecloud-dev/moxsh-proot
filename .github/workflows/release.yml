@@ -301,7 +301,7 @@ jobs:
     # 【渗透复测 P2 修复】旧 job 无任何超时/重试上限：GitHub Actions → Gitee
     # 的 TLS 连接失败（curl exit 35/56）时，每个资产都要耗满默认重试，整条
     # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
-    timeout-minutes: 60
+    timeout-minutes: 120
     env:
       GITEE_OWNER: thousand-code-crafts
       GITEE_REPO: moxsh-proot
@@ -319,7 +319,7 @@ jobs:
       - name: 增量上传/刷新资产到 Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        timeout-minutes: 50
+        timeout-minutes: 90
         run: |
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"

@@ -239,6 +239,21 @@ pub fn resolve_host_path(host: &Path, rules: &TranslateRules, follow_last: bool)
     resolve_inner(host, rules, follow_last, 0)
 }
 
+/// 把「剩余组件」拼回基准路径。
+///
+/// ⚠️ `PathBuf::push` / `Path::join` 传入**空路径**时会在末尾追加一个分隔符：
+/// `PathBuf::from("/rootfs/tmp/mox").push(Path::new(""))` → `/rootfs/tmp/mox/`。
+/// 对 `open(O_CREAT)` 这类目标尚不存在的路径，内核收到带尾斜杠的名字会直接
+/// 返回 `EISDIR`（实测 busybox `echo x > /tmp/mox` 报 `Is a directory`），
+/// guest 因此完全无法新建文件。故 rest 为空时必须原样返回基准路径。
+fn join_rest(base: &Path, rest: &Path) -> PathBuf {
+    if rest.as_os_str().is_empty() {
+        base.to_path_buf()
+    } else {
+        base.join(rest)
+    }
+}
+
 fn resolve_inner(host: &Path, rules: &TranslateRules, follow_last: bool, depth: usize) -> PathBuf {
     if depth > MAX_LINK_DEPTH {
         return host.to_path_buf(); // 环/病态：交还内核（ELOOP 由内核裁决）
@@ -265,8 +280,7 @@ fn resolve_inner(host: &Path, rules: &TranslateRules, follow_last: bool, depth: 
             Err(_) => {
                 // 不存在/无权限：剩余组件词法补全后交还内核——
                 // 下方不可能有链接可走查，ENOENT 由内核权威给出。
-                cur.push(rest);
-                return cur;
+                return join_rest(&cur, &rest);
             }
         };
         if !md.file_type().is_symlink() {
@@ -275,18 +289,16 @@ fn resolve_inner(host: &Path, rules: &TranslateRules, follow_last: bool, depth: 
         let target = match fs::read_link(&cur) {
             Ok(t) => t,
             Err(_) => {
-                cur.push(rest);
-                return cur;
+                return join_rest(&cur, &rest);
             }
         };
         if target.is_absolute() {
             // 绝对 target：按绑定表映射（rootfs 内 → rootfs 前缀；绑定 → 宿主绑定点）
             let mapped = rules.guest_to_host(&target.to_string_lossy());
             if !mapped.is_absolute() {
-                cur.push(rest); // 病态：交还内核
-                return cur;
+                return join_rest(&cur, &rest); // 病态：交还内核
             }
-            let joined = mapped.join(&rest);
+            let joined = join_rest(&mapped, &rest);
             // 落进绑定区/宿主直通（含 `-r /`）：不再走查——
             // `/proc/self` 之类链接的解析依赖「谁在执行」，原样交给内核才对。
             if !rules.is_under_rootfs(&mapped) {
@@ -305,7 +317,7 @@ fn resolve_inner(host: &Path, rules: &TranslateRules, follow_last: bool, depth: 
             Some(p) => p.join(&target),
             None => target.clone(),
         };
-        return resolve_inner(&resolved.join(&rest), rules, follow_last, depth + 1);
+        return resolve_inner(&join_rest(&resolved, &rest), rules, follow_last, depth + 1);
     }
     cur
 }
@@ -326,6 +338,27 @@ mod tests {
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         p
+    }
+
+    #[test]
+    fn nonexistent_target_never_gains_trailing_slash() {
+        // 回归（真机 e2e 暴露）：guest `echo x > /tmp/mox` 曾报
+        // `sh: can't create /tmp/mox: Is a directory`。根因是走查到
+        // 「路径不存在」时把空 rest 用 PathBuf::push 拼回，Rust 会追加
+        // 一个尾斜杠，内核对 `open(O_CREAT)` 的 `.../mox/` 直接回 EISDIR。
+        let base = fresh();
+        fs::create_dir_all(base.join("tmp")).unwrap();
+        let rules = TranslateRules::new(&base);
+        for guest in ["/tmp/mox_e2e_new", "/mox2", "/tmp/sub/dir/newfile"] {
+            let host = rules.guest_to_host(guest);
+            let resolved = resolve_host_path(&host, &rules, true);
+            assert_eq!(resolved, host, "{guest} 不存在时应原样返回");
+            assert!(
+                !resolved.to_string_lossy().ends_with('/'),
+                "{guest} 走查后不得带尾斜杠：{resolved:?}"
+            );
+        }
+        fs::remove_dir_all(&base).ok();
     }
 
     #[test]

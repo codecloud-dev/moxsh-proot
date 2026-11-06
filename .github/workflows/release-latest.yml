@@ -19,6 +19,13 @@ on:
       - ".github/workflows/release-latest.yml"
   workflow_dispatch:
 
+# 滚动 Release 会重建并覆盖同一个 `proot-latest` 的全部资产。两个 run 并发时
+# 会互相删/传同名附件（实测并发补传出现过 DELETE 404）。串行排队，绝不取消
+# 已在跑的那个，保证任何时刻国内镜像都是自洽的一套二进制。
+concurrency:
+  group: release-proot-latest
+  cancel-in-progress: false
+
 permissions:
   contents: write
 

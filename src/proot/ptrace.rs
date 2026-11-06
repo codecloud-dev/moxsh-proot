@@ -57,6 +57,22 @@ pub fn diag_enabled() -> bool {
     VERBOSE.load(Ordering::Relaxed) > 0 || std::env::var("MOX_DBG").is_ok()
 }
 
+/// seccomp 加速器是否真正启用。
+///
+/// 【渗透复测 P1 修复】`-v`/`MOX_DBG` 诊断模式与 seccomp 加速器**语义互斥**：
+/// 诊断日志依赖 syscall enter/exit 双停，而 seccomp 把拦截面降为单停
+/// （`PTRACE_EVENT_SECCOMP` 入口停），叠加时事件分支与日志/状态机交错，
+/// 真机复测实测 `MOX_SECCOMP=1 mox-proot -v …` 直接 SIGABRT。seccomp 只是
+/// 性能优化，诊断模式下自动让位即可，不影响翻译正确性。
+///
+/// 必须 tracer 侧（`Tracer::new`）与子进程侧（`spawn_traced_with_cwd`）
+/// **共用本函数**，否则会出现「子进程装了过滤器 + SIGSTOP 握手，tracer
+/// 却不认 seccomp」的挂死。配合 `run_native` 把 `set_verbose` 提前到 spawn
+/// 之前，保证两侧判定一致。
+pub fn seccomp_active() -> bool {
+    std::env::var_os("MOX_SECCOMP").is_some() && !diag_enabled()
+}
+
 /// 引擎内部诊断日志（`-v` 或 env `MOX_DBG=1` 开启，默认零开销）。
 ///
 /// 覆盖引擎最难自证的三个暗面——syscall 拦截的 enter/exit 改写结果、
@@ -1121,8 +1137,9 @@ impl Tracer {
             exit_bufs: std::cell::RefCell::new(std::collections::HashMap::new()),
             scratch: std::cell::RefCell::new(std::collections::HashMap::new()),
             initial_guest_prog: std::cell::RefCell::new(None),
-            // 仅在 env 门控开启时启用 seccomp 加速器；子进程侧同步安装过滤器。
-            seccomp: std::env::var_os("MOX_SECCOMP").is_some(),
+            // 与子进程侧共用 seccomp_active()：诊断模式(-v/MOX_DBG)自动让位，
+            // 避免「子进程装过滤器、tracer 不认」的不一致挂死 / SIGABRT。
+            seccomp: seccomp_active(),
         }
     }
 
@@ -1612,7 +1629,20 @@ impl Tracer {
             return false;
         }
         let Ok(host) = read_child_cstr(pid, addr) else { return false };
-        let Some(guest) = self.rules.host_to_guest(Path::new(&host)) else { return false };
+        // 【渗透复测 P1 修复】旧实现在 host_to_guest 反推失败时直接
+        // `return false`，缓冲里保留的**宿主绝对路径**（如
+        // /data/data/com.termux/files/.../containers/ubuntu/rootfs/home）
+        // 会被 guest 的 `pwd` / `getcwd` 原样读到，泄漏宿主目录结构。
+        //
+        // 兜底**只针对 getcwd（Op::RestoreOnExit）**：readlinkat/readlink 的
+        // 返回缓冲可能是任意链接目标（甚至相对路径/非路径文本），反推失败时
+        // 必须原样放行，强制改写会破坏其语义。
+        let is_getcwd = matches!(plan.op, Op::RestoreOnExit);
+        let guest = match self.rules.host_to_guest(Path::new(&host)) {
+            Some(g) => g,
+            None if is_getcwd => self.strip_host_rootfs_for_guest(&host),
+            None => return false,
+        };
         if guest == host {
             return false;
         }
@@ -1624,6 +1654,28 @@ impl Tracer {
             return self.write_ret_buf(pid, addr, &bytes, regs, ret as u64);
         }
         false
+    }
+
+    /// host→guest 反推失败时的兜底：防止 `pwd`/`getcwd` 把宿主绝对路径
+    /// （含 rootfs 段）原样泄漏给 guest。
+    ///
+    /// - host 路径以 rootfs 开头：截掉 rootfs 前缀，返回 guest 视角路径；
+    /// - 其余（真·宿主路径，既非绑定也不在 rootfs 下）：返回中性 `/`，
+    ///   绝不把 `/data/data/...` 之类的宿主目录结构交出去。
+    fn strip_host_rootfs_for_guest(&self, host: &str) -> String {
+        let root = self.rules.rootfs().to_string_lossy();
+        let root = root.trim_end_matches('/');
+        if !root.is_empty() && root != "/" {
+            if let Some(rest) = host.strip_prefix(root) {
+                let rest = rest.trim_start_matches('/');
+                return if rest.is_empty() {
+                    "/".to_string()
+                } else {
+                    format!("/{}", rest)
+                };
+            }
+        }
+        "/".to_string()
     }
 
     /// 写回还原后的返回缓冲，并**同步返回值**为新字符串长度。
@@ -1868,7 +1920,9 @@ impl Tracer {
                 // 安装失败即 _exit(124)——fail-loud 而非静默跑成未翻译（tracer
                 // 端无法感知子进程 seccomp 是否真的装上，静默失败会让隔离悄悄
                 // 失效）。过滤器随 execve 持久化。
-                if std::env::var_os("MOX_SECCOMP").is_some() {
+                // 与 tracer 侧共用同一判定：诊断模式下不装过滤器，
+                // 也不发 SIGSTOP 握手（否则 tracer 不会来处理该停 → 挂死）。
+                if seccomp_active() {
                     libc::kill(libc::getpid(), libc::SIGSTOP);
                     if !crate::proot::seccomp::install_in_child() {
                         libc::_exit(124);
@@ -3410,5 +3464,54 @@ mod tests {
     #[test]
     fn syscall_insn_len_x86_64() {
         assert_eq!(SYSCALL_INSN_LEN, 2); // `syscall` = 0f 05
+    }
+
+    // ---- 渗透复测 P1：getcwd 兜底不泄漏宿主路径 ----
+
+    /// 反推失败时，含 rootfs 段的宿主路径应被剥离成 guest 视角，
+    /// 纯宿主路径应折叠为 `/`——绝不能把 `/data/data/...` 原样交给 guest。
+    #[test]
+    fn strip_host_rootfs_never_leaks_host_abs_path() {
+        let rootfs = Path::new("/data/data/com.mox-proot/containers/ubuntu/rootfs");
+        let t = Tracer::new(TranslateRules::new(rootfs));
+        assert_eq!(
+            t.strip_host_rootfs_for_guest(
+                "/data/data/com.mox-proot/containers/ubuntu/rootfs/home/user"
+            ),
+            "/home/user"
+        );
+        assert_eq!(
+            t.strip_host_rootfs_for_guest(
+                "/data/data/com.mox-proot/containers/ubuntu/rootfs"
+            ),
+            "/"
+        );
+        // 与 rootfs 无关的纯宿主路径：折叠为 /，不泄漏结构。
+        assert_eq!(t.strip_host_rootfs_for_guest("/host/secret/dir"), "/");
+        // rootfs=/ 的平凡情形也不该抛宿主路径。
+        let t2 = Tracer::new(TranslateRules::new(Path::new("/")));
+        assert_eq!(t2.strip_host_rootfs_for_guest("/any/host/path"), "/");
+    }
+
+    /// seccomp 与诊断模式互斥：仅 MOX_SECCOMP 时启用，叠加 -v / MOX_DBG 让位。
+    #[test]
+    fn seccomp_active_honours_diag_mode() {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let old_dbg = std::env::var_os("MOX_DBG");
+        let old_sec = std::env::var_os("MOX_SECCOMP");
+        let old_v = diag_enabled();
+        std::env::set_var("MOX_SECCOMP", "1");
+        std::env::remove_var("MOX_DBG");
+        set_verbose(0);
+        assert!(seccomp_active());
+        set_verbose(1);
+        assert!(!seccomp_active(), "诊断模式必须让位");
+        set_verbose(0);
+        std::env::set_var("MOX_DBG", "1");
+        assert!(!seccomp_active(), "MOX_DBG 也必须让位");
+        set_verbose(if old_v { 1 } else { 0 });
+        match old_dbg { Some(v) => std::env::set_var("MOX_DBG", v), None => std::env::remove_var("MOX_DBG") }
+        match old_sec { Some(v) => std::env::set_var("MOX_SECCOMP", v), None => std::env::remove_var("MOX_SECCOMP") }
     }
 }

@@ -51,6 +51,15 @@ pub struct RecipeIndex {
 
 impl RecipeIndex {
     /// 解析索引文本（手写 TOML 子集：`[[recipe]]` 数组表 + 简单键值）。
+    ///
+    /// **安全约束（渗透测试 P0-2）**：`id` 会拼进容器内落盘文件名与执行
+    /// 命令串，`script` 会用于 `dir.join(script)` 读文件——二者都来自用户
+    /// 可写的 index.toml，必须过 [`DistroManager::valid_id`] 白名单：
+    /// - `id` 含 shell 元字符（`;`/`#`/空格）或 `..` 等：整条配方丢弃，
+    ///   杜绝 `id = "zz;echo PWNED;#"` 注入任意命令 / `../` 路径穿越；
+    /// - `script` 含 `/`、`..` 或元字符：置空作废，`read_script` 会拒绝，
+    ///   杜绝 `script = "../../etc/passwd"` 读任意文件。
+    /// 与 distro.rs 的 id 白名单同源，避免两套规则产生绕过缝隙。
     pub fn parse(text: &str) -> RecipeIndex {
         let mut recipes = Vec::new();
         let mut cur: Option<Recipe> = None;
@@ -61,7 +70,7 @@ impl RecipeIndex {
             }
             if line == "[[recipe]]" {
                 if let Some(r) = cur.take() {
-                    recipes.push(r);
+                    push_valid(&mut recipes, r);
                 }
                 cur = Some(Recipe::default());
                 continue;
@@ -71,10 +80,14 @@ impl RecipeIndex {
                     let key = k.trim();
                     let val = unquote(v.trim()).to_string();
                     match key {
-                        "id" => r.id = val,
+                        // 非法 id 直接作废（置空），push_valid 会据此丢弃整条。
+                        "id" => r.id = if DistroManager::valid_id(&val) { val } else { String::new() },
                         "name" => r.name = val,
                         "description" => r.description = val,
-                        "script" => r.script = val,
+                        // 非法脚本名作废（置空），read_script 会拒绝读取。
+                        "script" => {
+                            r.script = if DistroManager::valid_id(&val) { val } else { String::new() }
+                        }
                         "tags" => {
                             r.tags = val
                                 .split(',')
@@ -90,7 +103,7 @@ impl RecipeIndex {
             }
         }
         if let Some(r) = cur.take() {
-            recipes.push(r);
+            push_valid(&mut recipes, r);
         }
         RecipeIndex { recipes, dir: None }
     }
@@ -177,9 +190,18 @@ impl RecipeIndex {
                 ProotError::RootfsMissing(format!("付费配方脚本 {}", recipe.id))
             });
         }
+        // 【P0-2】脚本名二次白名单：即便有人绕过 parse 直接构造 Recipe，
+        // 也阻止 `dir.join(script)` 借 `../` 逃出配方目录读任意文件。
+        // 付费配方走上面的内嵌解码分支，不依赖 script 字段。
+        if !DistroManager::valid_id(&recipe.script) {
+            return Err(ProotError::InvalidArg(format!(
+                "配方脚本名非法（仅允许字母数字 ._-）：{}",
+                recipe.id
+            )));
+        }
         if let Some(dir) = &self.dir {
             let p = dir.join(&recipe.script);
-            if p.exists() {
+            if p.is_file() {
                 return std::fs::read_to_string(&p).map_err(ProotError::Io);
             }
         }
@@ -188,7 +210,7 @@ impl RecipeIndex {
                 let p = bin
                     .join("../share/mox-proot/recipes")
                     .join(&recipe.script);
-                if p.exists() {
+                if p.is_file() {
                     return std::fs::read_to_string(&p).map_err(ProotError::Io);
                 }
             }
@@ -235,16 +257,30 @@ impl RecipeIndex {
         std::fs::write(tmp.join("mox-proot-lib.sh"), EMBEDDED_LIB).map_err(ProotError::Io)?;
         let script_name = format!("mox-proot-recipe-{}.sh", recipe.id);
         std::fs::write(tmp.join(&script_name), &script).map_err(ProotError::Io)?;
-        // 经 exec_into 在容器内执行（复用引擎 PATH/环境/控制台绑定）。
-        let tail = vec![
-            "/bin/sh".to_string(),
-            "-c".to_string(),
-            format!(
-                "sh /tmp/{} && echo 'mox-proot: 配方 {} 完成' || echo 'mox-proot: 配方 {} 失败'",
-                script_name, recipe.id, recipe.id
-            ),
-        ];
-        cli::exec_into(root, distro_id, &tail)
+        // 【渗透测试 P0-2 修复】旧实现把 `recipe.id` 拼进 `sh -c` 命令串：
+        //   `sh /tmp/mox-proot-recipe-{id}.sh && echo '配方 {id} 完成' ...`
+        // 复测实测 `id = "zz;echo RECIPE_ID_INJECTION_PROOF;#"` 会在容器内执行
+        // 注入命令。现在改为**直接 argv** 把脚本交给容器内 `/bin/sh`，任何
+        // id 字符都只是独立参数/文件名，绝不进 shell 语法树；再叠加 parse /
+        // read_script 的 `valid_id` 白名单，双重封死命令注入与路径穿越。
+        let tail = vec!["/bin/sh".to_string(), format!("/tmp/{}", script_name)];
+        let code = cli::exec_into(root, distro_id, &tail)?;
+        // 成功/失败提示改由 Rust 侧按退出码给出（不再借 shell 字符串拼接），
+        // 且脚本真实退出码得以保留——旧 `sh -c "…|| echo 失败"` 恒返回 0。
+        if code == 0 {
+            eprintln!("mox-proot: 配方 {} 完成", recipe.id);
+        } else {
+            eprintln!("mox-proot: 配方 {} 失败（退出码 {}）", recipe.id, code);
+        }
+        Ok(code)
+    }
+}
+
+/// 仅接纳 id 合法的配方（P0-2）：非法 id 在 parse 里被置空，这里整条丢弃。
+/// 这样 `find`/`apply` 永远拿不到带 shell 元字符或 `..` 的 id。
+fn push_valid(recipes: &mut Vec<Recipe>, r: Recipe) {
+    if DistroManager::valid_id(&r.id) {
+        recipes.push(r);
     }
 }
 
@@ -452,16 +488,17 @@ script = "vnc.sh"
         let root =
             std::env::temp_dir().join(format!("mox-proot-recipe-req-ok-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        crate::proot::redeem::save_ents(
+        // P0-1 后门禁 fail-closed：先用「设备身份 + 服务端签名」落合法缓存，
+        // 否则 has_entitlement 一律拒绝，测试就走不到容器检查那一步。
+        crate::proot::redeem::testkit::seed_legit_cache(
             &root,
             &[crate::proot::redeem::Entitlement {
                 product_id: "proot-pro".into(),
                 tier: "pro".into(),
                 exp: 0,
             }],
-            None,
-        )
-        .unwrap();
+            crate::proot::redeem::testkit::SIG_PROOT_PRO,
+        );
         let err = idx.apply(&root, "pb", "ubuntu").unwrap_err();
         assert!(
             matches!(err, ProotError::DistroNotInstalled(_)),
@@ -469,5 +506,98 @@ script = "vnc.sh"
             err
         );
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- 渗透测试 P0-2 回归：id 命令注入 / 路径穿越 ----
+
+    /// 复测报告的真机载荷：`id = "zz;echo RECIPE_ID_INJECTION_PROOF;#"`。
+    /// 旧实现会把它拼进 `sh -c` 执行注入命令；现在 parse 必须整条丢弃。
+    #[test]
+    fn parse_drops_recipe_id_with_shell_metacharacters() {
+        let evil = "[[recipe]]\n\
+                    id = \"zz;echo RECIPE_ID_INJECTION_PROOF;#\"\n\
+                    name = \"evil\"\n\
+                    script = \"evil.sh\"\n";
+        let idx = RecipeIndex::parse(evil);
+        assert!(
+            idx.all().is_empty(),
+            "含 ; / # / 空格的 id 必须整条丢弃，不能进入索引"
+        );
+        assert!(idx.find("zz;echo RECIPE_ID_INJECTION_PROOF;#").is_err());
+    }
+
+    #[test]
+    fn parse_drops_ids_that_escape_paths() {
+        // 注意 `-rf` 是**合法** id（valid_id 允许 `-` 开头），不能当非法样本；
+        // 真正要挡的是路径分隔符 / shell 元字符 / 空格 / 以 . 开头。
+        for bad in ["../etc", "..", "a/b", "a\\b", "x y", "id`whoami`", "a;b", "a#b"] {
+            let text = format!(
+                "[[recipe]]\nid = \"{}\"\nname = \"x\"\nscript = \"x.sh\"\n",
+                bad
+            );
+            assert!(
+                RecipeIndex::parse(&text).all().is_empty(),
+                "非法 id {:?} 不应被接纳",
+                bad
+            );
+        }
+        // 合法 id 仍正常保留（别把白名单写成一刀切）。
+        assert_eq!(
+            RecipeIndex::parse(SAMPLE).all().len(),
+            2,
+            "正常社区配方不应被误杀"
+        );
+    }
+
+    /// `script = "../../etc/passwd"`：旧实现会 `dir.join(script)` 读任意文件。
+    /// 现在非法脚本名置空，read_script 明确拒绝。
+    #[test]
+    fn traversing_script_name_is_rejected() {
+        let dir = std::env::temp_dir().join("mox-proot-recipe-traversal");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.toml"),
+            "[[recipe]]\nid = \"evil\"\nname = \"x\"\nscript = \"../../etc/passwd\"\n").unwrap();
+        let idx = RecipeIndex::from_dir(&dir).unwrap();
+        let r = idx.find("evil").expect("id 合法，配方本身应保留");
+        assert!(r.script.is_empty(), "穿越型脚本名必须作废");
+        assert!(
+            idx.script_content("evil").is_err(),
+            "作废的脚本名不得触发文件读取"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 即便绕过 parse 手工构造 Recipe，read_script 的白名单也要兜住。
+    #[test]
+    fn read_script_rejects_forged_recipe_with_bad_script() {
+        let idx = RecipeIndex {
+            recipes: vec![Recipe {
+                id: "good".into(),
+                script: "../secret".into(),
+                ..Recipe::default()
+            }],
+            dir: None,
+        };
+        assert!(idx.script_content("good").is_err());
+    }
+
+    /// apply 的执行参数必须是 argv（`/bin/sh` + 脚本路径），不能出现
+    /// `sh -c` 拼接出的命令串。这里通过源码级不变量间接钉死：注入 id
+    /// 在 parse 阶段就被丢弃，apply 找不到配方直接报 DistroUnknown，
+    /// 根本走不到引擎执行。
+    #[test]
+    fn injected_id_never_reaches_apply() {
+        let idx = RecipeIndex::parse(
+            "[[recipe]]\nid = \"zz;echo PWNED;#\"\nname = \"e\"\nscript = \"e.sh\"\n",
+        );
+        let root = std::env::temp_dir().join("mox-proot-recipe-inject");
+        assert!(
+            matches!(
+                idx.apply(&root, "zz;echo PWNED;#", "ubuntu"),
+                Err(ProotError::DistroUnknown(_))
+            ),
+            "注入 id 必须在索引层就被丢弃"
+        );
     }
 }

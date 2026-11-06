@@ -14,7 +14,7 @@
 //! （不擅自改 sources.list，尊重发行版默认）。
 
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -765,7 +765,15 @@ impl DistroManager {
         Ok(())
     }
 
-    /// 备份：把 rootfs 打包为 tar.gz（`<id>/rootfs` 顶级目录，恢复时可校验布局）。
+    /// 备份：把 rootfs 打包为 tar.gz（顶层 `rootfs/` 目录，restore 按此识别布局）。
+    ///
+    /// 【渗透测试 P0-3 修复】`tar::Builder` 默认 `follow=true`，会把符号链接
+    /// **展开成实体文件**：busybox 的上百个 applet 都指向同一个 ~808KB 二进制，
+    /// 旧实现把它们各自复制一份，备份膨胀到 150MB 且恢复后 applet 语义损坏。
+    /// 这里改为 `follow_symlinks(false)` + 自定义递归遍历，额外：
+    /// - 排除顶层 `proc`/`sys`/`dev` 伪文件系统（运行时由 proot 绑定，不该进归档）；
+    /// - 跳过相对 target 含 `..` 且逃出 rootfs 的符号链接（防宿主路径泄漏）。
+    /// 常规文件/目录/合法符号链接逐条 `append_path_with_name`（不递归跟随链接）。
     pub fn backup(&self, id: &str, out_tar: &Path) -> ProotResult<()> {
         self.check_id(id)?; // P1：id 路径白名单
         let rootfs = self.distro_rootfs(id);
@@ -775,22 +783,93 @@ impl DistroManager {
         let out = fs::File::create(out_tar)?;
         let enc = flate2::write::GzEncoder::new(out, flate2::Compression::new(6));
         let mut builder = tar::Builder::new(enc);
-        // 顶级目录名固定 "rootfs"，restore 按此识别布局。
-        builder.append_dir_all("rootfs", &rootfs)?;
+        builder.follow_symlinks(false);
+        append_rootfs_tree(&mut builder, &rootfs, Path::new("rootfs"), &rootfs)?;
         builder.into_inner()?.finish()?;
         Ok(())
     }
 
     /// 恢复：从备份 tar.gz 还原到指定 id 的 rootfs（覆盖已有）。
+    ///
+    /// 【渗透测试 P0-4 修复】旧实现先 `remove_dir_all(&rootfs)` 再解包，
+    /// 解包一旦失败（归档损坏/中途断电）容器就**永久损毁**、无法回滚。
+    /// 现在改为「解到同级暂存目录 → 校验布局 → 原子 rename 替换 → 失败回滚」：
+    /// - 解包与校验阶段完全不碰现有 rootfs；
+    /// - 替换用同目录内 `rename`（原子），旧 rootfs 先挪到 `.restore-old`；
+    /// - 任一步失败都把旧 rootfs 挪回原位，保证容器可用；
+    /// - 成功后重跑符号链接规范化（与 install 一致）并写完成标记。
+    /// 顺带修正旧实现的布局 bug：backup 归档顶层是 `rootfs/`，直接解到
+    /// `rootfs` 会得到 `rootfs/rootfs/...` 嵌套；现在解到暂存目录再取 `rootfs/`。
     pub fn restore(&self, id: &str, tar_path: &Path) -> ProotResult<()> {
         self.check_id(id)?; // P1：id 路径白名单
+        let container = self.containers_dir().join(id);
+        fs::create_dir_all(&container)?;
         let rootfs = self.distro_rootfs(id);
-        if rootfs.is_dir() {
-            fs::remove_dir_all(&rootfs)?;
+        // 同一容器内建暂存/旧目录，保证 rename 在同一文件系统（原子）。
+        let tag = format!(
+            "{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        );
+        let staging = container.join(format!(".restore-staging-{}", tag));
+        let old = container.join(format!(".restore-old-{}", tag));
+        // 清掉上次中断可能残留的同名目录（tag 含纳秒，通常不会撞）。
+        let _ = fs::remove_dir_all(&staging);
+        let _ = fs::remove_dir_all(&old);
+
+        // ---- 阶段 1：解到暂存目录（完全不动现有 rootfs）----
+        fs::create_dir_all(&staging)?;
+        if let Err(e) = extract_tar(tar_path, &staging) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(e);
         }
-        fs::create_dir_all(&rootfs)?;
-        extract_tar(tar_path, &rootfs)?;
-        fs::write(self.ok_marker(id), "restored")?;
+        // 归档顶层 `rootfs/`；兼容无顶层包裹的裸 rootfs 归档。
+        let nested = staging.join("rootfs");
+        let src = if nested.is_dir() { nested } else { staging.clone() };
+        let non_empty = fs::read_dir(&src)
+            .map(|mut it| it.next().is_some())
+            .unwrap_or(false);
+        if !non_empty {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(ProotError::ExtractFailed(
+                "备份归档中不含有效 rootfs 内容".to_string(),
+            ));
+        }
+
+        // ---- 阶段 2：原子替换（失败即回滚）----
+        let had_old = rootfs.is_dir();
+        if had_old {
+            if let Err(e) = fs::rename(&rootfs, &old) {
+                let _ = fs::remove_dir_all(&staging);
+                return Err(ProotError::Io(e));
+            }
+        }
+        let swap = fs::rename(&src, &rootfs).map_err(ProotError::Io);
+        if let Err(e) = swap {
+            if had_old {
+                let _ = fs::rename(&old, &rootfs); // 回滚：恢复旧容器
+            }
+            let _ = fs::remove_dir_all(&staging);
+            return Err(e);
+        }
+
+        // ---- 阶段 3：收尾（规范化 + 完成标记）；失败同样回滚 ----
+        normalize_installed_rootfs(&rootfs);
+        if let Err(e) = fs::write(self.ok_marker(id), "restored") {
+            let _ = fs::rename(&rootfs, &staging.join("failed-rootfs"));
+            if had_old {
+                let _ = fs::rename(&old, &rootfs);
+            }
+            let _ = fs::remove_dir_all(&staging);
+            return Err(ProotError::Io(e));
+        }
+
+        // 成功：清理旧容器与暂存残骸。
+        let _ = fs::remove_dir_all(&old);
+        let _ = fs::remove_dir_all(&staging);
         Ok(())
     }
 
@@ -987,6 +1066,64 @@ impl Sha256Stream {
 /// 4. **绝对 hardlink target 跳过**：tar crate 对硬链接走
 ///    `base.join(src)`，绝对 src 会替换掉 base 导致越界报错；且绝对
 ///    hardlink target 非 rootfs 惯例，跳过无损。
+/// 备份专用：递归把 rootfs 逐条写入归档，**不跟随符号链接**。
+///
+/// `tar::Builder::append_dir_all` 默认 `follow=true`，会把 busybox 的上百个
+/// applet 链接各自展开成 ~808KB 实体副本（渗透测试实测备份膨胀到 150MB），
+/// 且无法排除伪文件系统或逃逸链接。这里在 `follow_symlinks(false)` 之上
+/// 自行遍历，逐条 `append_path_with_name`（对链接写 link header，不读目标）。
+fn append_rootfs_tree<W: Write>(
+    builder: &mut tar::Builder<W>,
+    dir: &Path,
+    arc: &Path,
+    rootfs: &Path,
+) -> ProotResult<()> {
+    // 当前目录自身（顶层即 "rootfs"）：follow=false 下只写一个 dir header。
+    builder.append_path_with_name(dir, arc).map_err(ProotError::Io)?;
+    let mut entries = fs::read_dir(dir)
+        .map_err(ProotError::Io)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ProotError::Io)?;
+    entries.sort_by_key(|e| e.file_name()); // 稳定顺序，归档可复现
+    for e in entries {
+        let name = e.file_name();
+        // 顶层伪文件系统：运行时由 proot 绑定（-b /dev /proc /sys），不进归档。
+        if arc == Path::new("rootfs")
+            && matches!(name.to_string_lossy().as_ref(), "proc" | "sys" | "dev")
+        {
+            continue;
+        }
+        let path = e.path();
+        let child_arc = arc.join(&name);
+        let meta = fs::symlink_metadata(&path).map_err(ProotError::Io)?;
+        let ft = meta.file_type();
+        if ft.is_symlink() {
+            let target = fs::read_link(&path).map_err(ProotError::Io)?;
+            // 相对 target 且 `..` 逃出 rootfs 的链接：跳过，避免把宿主路径
+            // 带进归档（解压侧 extract_tar_gz_checked 也会拦，双向兜底）。
+            if !target.is_absolute() {
+                let rel = path.strip_prefix(rootfs).unwrap_or(&path);
+                let parent = rel.parent().unwrap_or_else(|| Path::new(""));
+                if !resolve_under(rootfs, parent, &target).starts_with(rootfs) {
+                    continue;
+                }
+            }
+            // 合法链接：follow=false 下写 symlink 条目，不展开目标内容。
+            builder
+                .append_path_with_name(&path, &child_arc)
+                .map_err(ProotError::Io)?;
+        } else if ft.is_dir() {
+            append_rootfs_tree(builder, &path, &child_arc, rootfs)?;
+        } else if ft.is_file() {
+            builder
+                .append_path_with_name(&path, &child_arc)
+                .map_err(ProotError::Io)?;
+        }
+        // socket / fifo / 设备节点等：跳过，归档只保留常规内容。
+    }
+    Ok(())
+}
+
 pub fn extract_tar(archive: &Path, dest: &Path) -> ProotResult<()> {
     let name = archive.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     let lower = name.to_lowercase();
@@ -1270,5 +1407,123 @@ deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  other-rootfs.t
             assert!(spec.checksum_url.starts_with("https://"), "{}", spec.id);
             assert_eq!(fetch_expected_sha256(&spec), None);
         }
+    }
+
+    // ---- 渗透复测 P0-3 / P0-4：backup / restore ----
+
+    fn test_root(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("mox-proot-br-{}-{}", tag, std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// 造一个装好的 rootfs：一个实体文件 + 若干 applet symlink + 伪目录 + 逃逸链接。
+    fn seed_rootfs(root: &Path, id: &str) -> PathBuf {
+        let rootfs = DistroManager::new(root).distro_rootfs(id);
+        fs::create_dir_all(rootfs.join("bin")).unwrap();
+        fs::create_dir_all(rootfs.join("usr/bin")).unwrap();
+        fs::create_dir_all(rootfs.join("dev")).unwrap();
+        fs::write(rootfs.join("bin/busybox"), vec![0x7f; 4096]).unwrap();
+        fs::write(rootfs.join("dev/should-not-be-in-backup"), b"secret").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            // 100 个 applet 链接指向同一个 4KB busybox——若 backup 跟随链接，
+            // 归档会膨胀到 ~400KB；不跟随则应远小于此。
+            for i in 0..100 {
+                symlink("/bin/busybox", rootfs.join(format!("usr/bin/applet{}", i))).unwrap();
+            }
+            // 逃逸链接（../.. 逃出 rootfs）：应被跳过。
+            symlink("../../../etc/passwd", rootfs.join("usr/bin/escape")).unwrap();
+        }
+        rootfs
+    }
+
+    /// 列出 tar.gz 内条目名（用系统 tar 读，避免与被测打包逻辑同源）。
+    fn tar_entries(path: &Path) -> Vec<String> {
+        let out = std::process::Command::new("tar")
+            .arg("-tzf").arg(path).output().unwrap();
+        String::from_utf8_lossy(&out.stdout)
+            .lines().map(|s| s.to_string()).collect()
+    }
+
+    /// P0-3：备份不展开 symlink、排除伪文件系统与逃逸链接。
+    #[test]
+    fn backup_does_not_follow_symlinks_and_skips_pseudo_fs() {
+        let root = test_root("backup");
+        let rootfs = seed_rootfs(&root, "ubuntu");
+        let out = root.join("backup.tar.gz");
+        DistroManager::new(&root).backup("ubuntu", &out).unwrap();
+
+        let entries = tar_entries(&out);
+        assert!(entries.iter().any(|e| e == "rootfs/bin/busybox"), "实体文件应在归档");
+        assert!(
+            entries.iter().any(|e| e.starts_with("rootfs/usr/bin/applet")),
+            "applet symlink 应作为链接条目存在"
+        );
+        assert!(
+            !entries.iter().any(|e| e.contains("dev/should-not-be-in-backup")),
+            "顶层 /dev 伪文件系统不得进归档"
+        );
+        assert!(
+            !entries.iter().any(|e| e.contains("usr/bin/escape")),
+            "逃逸 symlink 不得进归档"
+        );
+        // 不跟随：100 个 4KB applet 若被展开，gzip 前的 tar 至少 400KB；
+        // 归档体积应远小于 100KB（4KB 实体 + 100 个链接头）。
+        let sz = fs::metadata(&out).unwrap().len();
+        assert!(sz < 100_000, "备份膨胀，疑似跟随了 symlink：{} bytes", sz);
+
+        // 往返：改掉原内容后 restore，验证布局与 applet 链接都还原。
+        fs::write(rootfs.join("bin/busybox"), b"changed").unwrap();
+        DistroManager::new(&root).restore("ubuntu", &out).unwrap();
+        assert_eq!(fs::read(rootfs.join("bin/busybox")).unwrap(), vec![0x7f; 4096]);
+        assert!(
+            !rootfs.join("rootfs").exists(),
+            "restore 不得产生 rootfs/rootfs 嵌套"
+        );
+        #[cfg(unix)]
+        assert!(fs::symlink_metadata(rootfs.join("usr/bin/applet0")).unwrap()
+            .file_type().is_symlink(), "applet 应还原为 symlink 而非实体副本");
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// P0-4：归档损坏时 restore 失败但**旧容器完好可回滚**（旧实现先删后解，直接毁容器）。
+    #[test]
+    fn restore_keeps_old_rootfs_when_archive_is_broken() {
+        let root = test_root("restore-bad");
+        let rootfs = seed_rootfs(&root, "ubuntu");
+        fs::create_dir_all(rootfs.join("etc")).unwrap();
+        fs::write(rootfs.join("etc/important.conf"), b"DO-NOT-LOSE").unwrap();
+        let bad = root.join("broken.tar.gz");
+        fs::write(&bad, b"this is definitely not a gzip archive").unwrap();
+
+        assert!(DistroManager::new(&root).restore("ubuntu", &bad).is_err());
+        assert_eq!(
+            fs::read(rootfs.join("etc/important.conf")).unwrap(),
+            b"DO-NOT-LOSE",
+            "解包失败后旧容器必须原样保留"
+        );
+        assert!(fs::read(rootfs.join("bin/busybox")).unwrap().len() == 4096);
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// P0-4：空归档（无有效 rootfs 内容）也不得毁掉已有容器。
+    #[test]
+    fn restore_rejects_empty_archive_without_touching_container() {
+        let root = test_root("restore-empty");
+        let rootfs = seed_rootfs(&root, "ubuntu");
+        fs::write(rootfs.join("marker"), b"KEEP").unwrap();
+        // 造一个只含顶层空目录的合法 tar.gz。
+        let staging = root.join("empty-stage");
+        fs::create_dir_all(&staging).unwrap();
+        let out = std::process::Command::new("tar")
+            .args(["-czf"]).arg(root.join("empty.tar.gz"))
+            .arg("-C").arg(&staging).arg(".").output().unwrap();
+        assert!(out.status.success());
+        assert!(DistroManager::new(&root).restore("ubuntu", &root.join("empty.tar.gz")).is_err());
+        assert_eq!(fs::read(rootfs.join("marker")).unwrap(), b"KEEP");
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -23,6 +23,12 @@ use mox_proot::proot::links;
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let root = default_root();
+    // 【P1】`--version`/`-V`：纯文本路径，不触网/不触引擎（musl 静态构建
+    // 也能安全返回），与 `-h/--help` 同一层级。
+    if args.first().map(String::as_str).is_some_and(|a| matches!(a, "--version" | "-V")) {
+        println!("{}", cli::version_line());
+        process::exit(0);
+    }
     let code = match args.first().map(String::as_str) {
         // login/shell/launch 需要真起引擎（其余子命令是文本输出，走共享路由）。
         Some("login") | Some("shell") => exec_login(&root, &args),
@@ -41,7 +47,9 @@ fn main() {
         _ => {
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             print!("{}", cli::proot_distro(&refs, &root));
-            0
+            // 【P1】未知子命令必须返回非 0：旧实现恒 0，脚本/CI 会把
+            // 「敲错命令」误判为成功（报告实测 exit code 0）。
+            if cli::is_unknown_subcommand(&refs) { 2 } else { 0 }
         }
     };
     process::exit(code);
@@ -74,12 +82,31 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
         eprintln!("用法: mox-proot-distro {} <id|mx:名字> [-- 命令...]", sub);
         return 2;
     };
-    // 解析 -- 之后的用户命令（与 launch 一致）；无则按登录/非登录 shell 处理。
+    // 【P1】`--` 之前是引擎选项（-b/-w/-e/-v/-0），之后才是容器内命令。
+    // 旧实现只取 `--` 之后，前面的选项被静默丢弃——用户以为 -b 挂载生效
+    // 其实没有。现在解析成结构化覆盖并真正注入 ProotConfig。
     let rest = &args[2..];
     let dash = rest.iter().position(|a| a == "--");
-    let tail: Vec<String> = dash.map(|p| rest[p + 1..].to_vec()).unwrap_or_default();
+    let (head, tail): (Vec<String>, Vec<String>) = match dash {
+        Some(p) => (rest[..p].to_vec(), rest[p + 1..].to_vec()),
+        None => (rest.to_vec(), Vec::new()),
+    };
+    let opts = match cli::parse_engine_opts(&head) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("mox-proot-distro: {}", e);
+            return 2;
+        }
+    };
     // mx: 短链：复用 launch 通道（解析 + 未装自动装 + 进容器），与 launch 完全互通。
+    // launch 通道自带「未装自动装」，不接受外部绑定覆盖；若用户确实给了引擎
+    // 选项，明确报错而不是静默丢弃（避免"以为 -b 生效其实没有"）。
     if links::is_mx(spec) {
+        if !head.is_empty() {
+            eprintln!("mox-proot-distro: mx: 短链启动不支持 -- 之前的引擎选项（{}）；\
+                       请改用普通发行版 id，或把参数放到 -- 之后作为容器内命令", head.join(" "));
+            return 2;
+        }
         return match cli::launch_spec(root, spec, &tail) {
             Ok(code) => code,
             Err(e) => {
@@ -121,7 +148,7 @@ fn exec_login(root: &Path, args: &[String]) -> i32 {
     } else {
         tail.clone()
     };
-    match cli::exec_into(root, spec, &shell) {
+    match cli::exec_into_with_opts(root, spec, &shell, &opts) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("mox-proot-distro: {}", e);
@@ -138,13 +165,20 @@ fn exec_launch(root: &Path, args: &[String]) -> i32 {
         eprintln!("用法: mox-proot-distro launch <mx:名字|id> [-- 命令...]");
         return 2;
     };
-    // `--` 之后的命令作为 tail（与 run_native 的口径一致）。
-    let tail: Vec<String> = args
-        .iter()
-        .skip(2)
-        .position(|a| a == "--")
-        .map(|p| args[2 + p + 1..].to_vec())
-        .unwrap_or_default();
+    // 【P1】`--` 之前若有引擎选项，明确报错而非静默丢弃（launch 通道
+    // 自带"未装自动装"，不接受外部绑定覆盖）。`--` 之后才是容器内命令。
+    let rest = &args[2..];
+    let dash = rest.iter().position(|a| a == "--");
+    let (head, tail): (Vec<String>, Vec<String>) = match dash {
+        Some(p) => (rest[..p].to_vec(), rest[p + 1..].to_vec()),
+        None => (rest.to_vec(), Vec::new()),
+    };
+    if !head.is_empty() {
+        eprintln!("mox-proot-distro: launch 不支持 -- 之前的引擎选项（{}）；\
+                   请用 login/shell 带 -b/-w/-e，或把参数放到 -- 之后作为容器内命令",
+                  head.join(" "));
+        return 2;
+    }
     match cli::launch_spec(root, spec, &tail) {
         Ok(code) => code,
         Err(e) => {

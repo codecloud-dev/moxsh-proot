@@ -298,6 +298,10 @@ jobs:
     name: 镜像到 Gitee（国内线路）
     needs: [checksums]
     runs-on: ubuntu-latest
+    # 【渗透复测 P2 修复】旧 job 无任何超时/重试上限：GitHub Actions → Gitee
+    # 的 TLS 连接失败（curl exit 35/56）时，每个资产都要耗满默认重试，整条
+    # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
+    timeout-minutes: 20
     env:
       GITEE_OWNER: thousand-code-crafts
       GITEE_REPO: moxsh-proot
@@ -308,22 +312,58 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
+        timeout-minutes: 8
         run: |
           mkdir -p dist && cd dist
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --clobber
-      - name: 上传全部资产到 Gitee release
+      - name: 增量上传缺失资产到 Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        timeout-minutes: 10
         run: |
+          set -u
+          API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
           cd dist
-          ok=0; fail=0
+          # 1) 先取 Gitee 现有资产清单，只补缺失者（幂等，避免每次重传全部 85 个）。
+          #    列表接口失败不致命：退化成「全部尝试上传」，仍由下面的有限重试兜住。
+          existing=""
+          if curl -sS --connect-timeout 10 --max-time 30 -o /tmp/glist.json \
+               -H "Authorization: token ${GITEE_TOKEN}" "${API}"; then
+            existing="$(python3 -c 'import json,sys; print("\n".join(a["name"] for a in json.load(open("/tmp/glist.json"))))' 2>/dev/null || true)"
+          fi
+          has() { printf '%s\n' "$existing" | grep -Fxq "$1"; }
+
+          ok=0; fail=0; consecutive=0
           for f in *; do
             [ "$f" = "SHA256SUMS" ] && continue
-            code=$(curl -s -o /tmp/g.json -w '%{http_code}' -X POST \
-              -H "Authorization: token ${GITEE_TOKEN}" \
-              "https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files" \
-              -F "file=@${f}")
-            if [ "$code" = "200" ] || [ "$code" = "201" ]; then ok=$((ok+1)); echo "OK   $f"; else fail=$((fail+1)); echo "FAIL $f (HTTP $code): $(head -c 120 /tmp/g.json)"; fi
+            if has "$f"; then echo "SKIP $f（Gitee 已存在）"; continue; fi
+            # 2) 单次上传：有限重试 + 短超时，绝不让某个资产耗满整条 job。
+            code="000"
+            for attempt in 1 2 3; do
+              code="$(curl -sS -o /tmp/g.json -w '%{http_code}' -X POST \
+                --connect-timeout 10 --max-time 60 --retry 1 --retry-delay 2 \
+                -H "Authorization: token ${GITEE_TOKEN}" \
+                "${API}" -F "file=@${f}" 2>/dev/null || echo 000)"
+              if [ "$code" = "200" ] || [ "$code" = "201" ]; then break; fi
+              [ "$attempt" -lt 3 ] && sleep 2
+            done
+            if [ "$code" = "200" ] || [ "$code" = "201" ]; then
+              ok=$((ok+1)); consecutive=0; echo "OK   $f"
+            else
+              fail=$((fail+1)); consecutive=$((consecutive+1))
+              echo "FAIL $f (HTTP $code): $(head -c 120 /tmp/g.json 2>/dev/null || true)"
+              # 3) 连续失败 3 个基本可判定 Gitee 线路整体不通（TLS 35/56），
+              #    立即收手，不再把剩余几十个资产逐个耗过去。
+              if [ "$consecutive" -ge 3 ]; then
+                echo "::error::Gitee 连续 3 个资产上传失败，判定线路不通，提前终止（避免长时间空转）"
+                break
+              fi
+            fi
           done
           echo "=== Gitee 同步：$ok 成功 / $fail 失败 ==="
-          [ "$fail" -eq 0 ]
+          # 4) 结果诊断：允许「零新增」（资产已齐）通过；有失败则明确报出，
+          #    但不阻塞 GitHub Release 本身（国内镜像可由维护端补传脚本补齐）。
+          if [ "$fail" -gt 0 ]; then
+            echo "::warning::Gitee 仍有 $fail 个资产未同步；请用本地补传脚本或重试本 job 补齐"
+            exit 1
+          fi

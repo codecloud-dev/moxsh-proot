@@ -117,6 +117,12 @@ pub fn run_config(
     command: &[String],
     env: &[String],
 ) -> i32 {
+    // 【P1 修复】诊断开关必须在 `Tracer::new` / `spawn` **之前**落地：
+    // 旧实现放在 spawn 之后，`Tracer::new` 里 `seccomp_active()` 读到的
+    // `diag_enabled()` 还是 false，于是 `-v` 与 `MOX_SECCOMP=1` 叠加时
+    // tracer 侧开了 seccomp、子进程侧也装了过滤器，但诊断日志走双停路径，
+    // 状态机交错导致 SIGABRT。提前设置后 seccomp_active() 两侧一致地让位。
+    crate::proot::ptrace::set_verbose(config.verbose);
     let rules = config.to_rules();
     let initial_cwd = initial_cwd_for(config, &rules);
     // 初始 execve 宿主侧预解析（见 prepare_initial_exec 文档）：
@@ -141,8 +147,6 @@ pub fn run_config(
             return 126;
         }
     };
-    // `-v` 诊断日志级别落地到全局开关（见 ptrace::diag_enabled）。
-    crate::proot::ptrace::set_verbose(config.verbose);
     match tracer.run(child) {
         Ok(code) => code,
         Err(e) => {
@@ -650,6 +654,35 @@ fn install_progress(msg: &str, done: u64, total: u64) {
     }
 }
 
+/// 已知子命令白名单（供 `--version` 与「未知子命令退出码」判定共用）。
+/// 与下方 match 分支保持一致；新增子命令务必同步此处。
+const KNOWN_SUBCOMMANDS: &[&str] = &[
+    "list", "versions", "install", "login", "shell", "remove", "backup",
+    "restore", "net", "env", "recipe", "fan", "redeem", "access", "time",
+    "egg", "wizard", "launch", "help", "-h", "--help", "--json", "--plain",
+    "--version", "-V", "tui",
+];
+
+/// 剥离 `--json`/`--plain` 等全局开关后，取真正的子命令。
+fn primary_subcommand<'a>(args: &[&'a str]) -> &'a str {
+    args.iter()
+        .copied()
+        .find(|a| !matches!(*a, "--json" | "--plain" | ""))
+        .unwrap_or("")
+}
+
+/// 【P1】子命令是否为未知命令（供二进制入口设置非 0 退出码）。
+/// 空参数视为 `help`（合法），其余不在白名单的一律判未知。
+pub fn is_unknown_subcommand(args: &[&str]) -> bool {
+    let sub = primary_subcommand(args);
+    !sub.is_empty() && !KNOWN_SUBCOMMANDS.contains(&sub)
+}
+
+/// 【P1】`--version` / `-V` 的版本串（二进制入口与文本路由共用）。
+pub fn version_line() -> String {
+    format!("mox-proot-distro {}（mox-proot 兼容实现）", env!("CARGO_PKG_VERSION"))
+}
+
 /// `proot-distro` 主路由（对齐上游子命令集）。
 pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
     let mgr = DistroManager::new(mox_proot_root);
@@ -695,9 +728,12 @@ pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
         "launch" => "用法: mox-proot-distro launch mx:<名字> [-- 命令...]\n\
              （mx:alpine / mx:ubuntu / mx:debian / mx:kali；自定义见 ~/.config/mox-proot/links.toml）"
             .to_string(),
+        // 【P1】`--version`/`-V`：与 `mox-proot --help` 一样的纯文本路径，
+        // 不触网、不触引擎，musl 静态构建也能安全返回。
+        "--version" | "-V" => version_line(),
         "help" | "--help" | "-h" | "" => HELP.to_string(),
         other => {
-            let known = ["list", "install", "login", "shell", "remove", "backup", "restore", "net", "env", "recipe", "time", "egg", "wizard", "versions", "access", "launch"];
+            let known = KNOWN_SUBCOMMANDS;
             let lower = other.to_lowercase();
             let guess = known.iter().find(|k| !lower.is_empty() && (k.starts_with(&lower) || lower.starts_with(**k)));
             let mut out = format!(
@@ -1640,7 +1676,75 @@ fn fs_create_dir_all(p: &Path) -> ProotResult<()> {
 ///   （`/bin/sh -c` 执行，防误触确认写在这里面）；
 /// - 再否则引擎默认探测：bash -l 优先，sh -l 兜底；
 /// - 会话结束后 `exit_cmd(id)` 在**宿主侧**执行（收尾提示/清理）。
+/// `login`/`shell`/`launch` 在 `--` 之前可追加的引擎选项。
+///
+/// 【渗透复测 P1 修复】旧实现只取 `--` 之后的命令，`login <id> -b /sdcard:/sdcard`
+/// 里的绑定被**静默丢弃**——用户以为挂载生效，实际没有，属于危险的认知错觉。
+/// 现在把这些选项解析成结构化覆盖，真正注入 `ProotConfig`；遇到不支持的
+/// 选项则明确报错（而非静默忽略）。
+#[derive(Debug, Clone, Default)]
+pub struct ExecIntoOpts {
+    /// 追加绑定 (guest, host)。
+    pub binds: Vec<(String, String)>,
+    /// 覆盖容器内初始工作目录。
+    pub cwd: Option<String>,
+    /// 追加环境变量 KEY=VALUE。
+    pub env: Vec<(String, String)>,
+    /// 诊断级别（`-v` 累加）。
+    pub verbose: u8,
+    /// fake root 显式开关（`-0`）。
+    pub fake_root: Option<bool>,
+}
+
+/// 解析 `--` 之前的引擎选项；不支持的选项直接返回错误文案。
+pub fn parse_engine_opts(args: &[String]) -> Result<ExecIntoOpts, String> {
+    let mut o = ExecIntoOpts::default();
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-b" | "--bind" | "-m" | "--mount" => {
+                i += 1;
+                let v = args.get(i).ok_or("-b 缺少参数（期望 host:guest）")?;
+                o.binds.push(parse_binding(v)?);
+            }
+            "-w" | "--pwd" | "--cwd" => {
+                i += 1;
+                o.cwd = Some(args.get(i).ok_or("-w 缺少参数")?.clone());
+            }
+            "-e" | "--env" => {
+                i += 1;
+                let v = args.get(i).ok_or("-e 缺少参数")?;
+                let (k, val) = v.split_once('=').ok_or("-e 需要 KEY=VALUE 形式")?;
+                if k.is_empty() {
+                    return Err("-e 的 KEY 不能为空".to_string());
+                }
+                o.env.push((k.to_string(), val.to_string()));
+            }
+            "-v" | "--verbose" => o.verbose = o.verbose.saturating_add(1),
+            "-0" | "--root-id" => o.fake_root = Some(true),
+            other => {
+                return Err(format!(
+                    "login/shell 不支持选项 {}（可用 -b/-w/-e/-v/-0，或放到 `--` 之后作为容器内命令）",
+                    other
+                ))
+            }
+        }
+        i += 1;
+    }
+    Ok(o)
+}
+
 pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
+    exec_into_with_opts(root, id, tail, &ExecIntoOpts::default())
+}
+
+/// 带引擎选项覆盖的 `exec_into`（`--` 之前的 -b/-w/-e/-v 真正生效）。
+pub fn exec_into_with_opts(
+    root: &Path,
+    id: &str,
+    tail: &[String],
+    opts: &ExecIntoOpts,
+) -> ProotResult<i32> {
     let mgr = DistroManager::new(root);
     let rootfs = mgr.distro_rootfs(id);
     if !rootfs.is_dir() {
@@ -1671,11 +1775,29 @@ pub fn exec_into(root: &Path, id: &str, tail: &[String]) -> ProotResult<i32> {
     };
 
     let mut cfg = ProotConfig::with_distro_defaults(&rootfs);
+    // 【P1】`--` 之前的 -b/-w/-e/-v/-0 真正注入引擎配置（旧实现静默丢弃）。
+    // 绑定「后加优先」→ 放在控制台绑定之后，保证用户 -b 覆盖默认绑定。
     // 容器内控制台：bind 宿主 bin + MOX_ROOT，注入 mox 固定命令
     // （roadmap §3；MOX_PROOT_CONSOLE=0 可关）。
     console::bind_console(&mut cfg, root, &console::host_bin_dir());
+    for (guest, host) in &opts.binds {
+        cfg.bind(guest, host);
+    }
+    if let Some(cwd) = &opts.cwd {
+        cfg.cwd = cwd.clone();
+    }
+    for (k, v) in &opts.env {
+        cfg.env.push((k.clone(), v.clone()));
+    }
+    if opts.verbose > 0 {
+        cfg.verbose = cfg.verbose.max(opts.verbose);
+    }
+    if let Some(fr) = opts.fake_root {
+        cfg.fake_root = fr;
+    }
     // env_command() 形如 ["/usr/bin/env", "-i", "HOME=...", ...]，跳过前两个
-    // 前缀词即纯 KEY=VALUE 列表（spawn 直接 execve 用）。
+    // 前缀词即纯 KEY=VALUE 列表（spawn 直接 execve 用）。用户 -e 已在上面
+    // 追加到 cfg.env，env_command 会按「用户显式 -e 最高」合入。
     let env: Vec<String> = cfg.env_command().into_iter().skip(2).collect();
     let code = run_config(&cfg, &shell, &env);
 
@@ -2038,16 +2160,17 @@ mod tests {
         let root = std::env::temp_dir().join(format!("mox-proot-redeem-check-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        redeem::save_ents(
+        // P0-1 后门禁 fail-closed：测试缓存也必须带本机设备身份 + 服务端签名，
+        // 与真实 `mox redeem status` 落盘格式一致。
+        redeem::testkit::seed_legit_cache(
             &root,
             &[redeem::Entitlement {
                 product_id: "proot-pro".into(),
                 tier: "pro".into(),
                 exp: 0,
             }],
-            None,
-        )
-        .unwrap();
+            redeem::testkit::SIG_PROOT_PRO,
+        );
         let out = proot_distro(&["redeem", "check"], &root);
         assert!(out.contains("本地缓存"), "应标注离线只读：{}", out);
         assert!(out.contains("proot-pro"));
@@ -2070,7 +2193,12 @@ mod tests {
             if let Ok((mut s, _)) = listener.accept() {
                 let mut buf = [0u8; 4096];
                 let _ = s.read(&mut buf);
-                let body = "ok proot-pro pro 0\nok mox-proot-plus plus 4102444800\n";
+                // 与真实后端一致：清单 + 服务端 Ed25519 签名行（签名对应上面两行 + \n）。
+                // 签名取自 redeem::testkit 单一来源，避免硬编码串与夹具漂移。
+                let body = format!(
+                    "ok proot-pro pro 0\nok mox-proot-plus plus 4102444800\nsig {}\n",
+                    crate::proot::redeem::testkit::SIG_TWO
+                );
                 let resp = format!(
                     "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
                     body.len(),
@@ -2349,5 +2477,82 @@ mod launch_tests {
         assert!(out.contains("用法"), "{}", out);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // ---- 渗透复测 P1：CLI 行为 ----
+
+    /// `--version`/`-V` 纯文本可用，不触网/不触引擎。
+    #[test]
+    fn version_subcommands_work() {
+        for flag in ["--version", "-V"] {
+            let out = proot_distro(&[flag], Path::new("/nonexistent"));
+            assert!(out.contains(env!("CARGO_PKG_VERSION")), "{}: {}", flag, out);
+            assert!(out.contains("mox-proot-distro"), "{}", out);
+        }
+        assert!(!is_unknown_subcommand(&["--version"]));
+        assert!(!is_unknown_subcommand(&["-V"]));
+    }
+
+    /// 未知子命令判定：合法命令（含全局开关）放行，乱敲的判未知。
+    #[test]
+    fn unknown_subcommand_detection() {
+        assert!(is_unknown_subcommand(&["frobnicate"]));
+        assert!(is_unknown_subcommand(&["--json", "frobnicate"]));
+        assert!(!is_unknown_subcommand(&[]));
+        assert!(!is_unknown_subcommand(&["help"]));
+        assert!(!is_unknown_subcommand(&["--help"]));
+        assert!(!is_unknown_subcommand(&["--json", "list"]));
+        assert!(!is_unknown_subcommand(&["recipe", "list"]));
+        // 既有文案仍保留，别把用户引导弄丢。
+        let out = proot_distro(&["frobnicate"], Path::new("/nonexistent"));
+        assert!(out.contains("未知子命令"));
+    }
+
+    /// P1：`--` 之前的 -b/-w/-e/-v/-0 不再静默丢弃，而是解析成结构化覆盖。
+    #[test]
+    fn engine_opts_are_parsed_not_dropped() {
+        let args: Vec<String> = ["-b", "/sdcard:/sdcard", "-w", "/root",
+                                 "-e", "FOO=bar", "-v", "-v", "-0"]
+            .iter().map(|s| s.to_string()).collect();
+        let o = parse_engine_opts(&args).unwrap();
+        assert_eq!(o.binds, vec![("/sdcard".to_string(), "/sdcard".to_string())]);
+        assert_eq!(o.cwd.as_deref(), Some("/root"));
+        assert_eq!(o.env, vec![("FOO".to_string(), "bar".to_string())]);
+        assert_eq!(o.verbose, 2);
+        assert_eq!(o.fake_root, Some(true));
+        // 空选项 = 默认，行为与旧路径一致。
+        assert!(parse_engine_opts(&[]).unwrap().binds.is_empty());
+    }
+
+    /// P1：不支持/缺参数的选项必须明确报错，绝不静默吞掉。
+    #[test]
+    fn engine_opts_reject_unknown_or_malformed() {
+        assert!(parse_engine_opts(&["--bogus".into()]).is_err());
+        assert!(parse_engine_opts(&["-b".into()]).is_err());
+        assert!(parse_engine_opts(&["-e".into(), "NOEQUALS".into()]).is_err());
+        assert!(parse_engine_opts(&["-w".into()]).is_err());
+        // 合法空 -e 值仍可（KEY=）。
+        assert!(parse_engine_opts(&["-e".into(), "K=".into()]).is_ok());
+    }
+
+    /// P1：诊断模式下 seccomp 自动让位（避免真机实测的 SIGABRT）。
+    /// 该断言依赖进程级环境，用 MUtex 串行，且完整恢复现场。
+    #[test]
+    fn seccomp_yields_to_diagnostics() {
+        static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _g = L.lock().unwrap_or_else(|e| e.into_inner());
+        let old_v = crate::proot::ptrace::diag_enabled();
+        let old_dbg = std::env::var_os("MOX_DBG");
+        let old_sec = std::env::var_os("MOX_SECCOMP");
+        std::env::set_var("MOX_SECCOMP", "1");
+        std::env::remove_var("MOX_DBG");
+        crate::proot::ptrace::set_verbose(0);
+        assert!(crate::proot::ptrace::seccomp_active(), "仅 seccomp 时应启用");
+        crate::proot::ptrace::set_verbose(1);
+        assert!(!crate::proot::ptrace::seccomp_active(), "-v 时 seccomp 必须让位");
+        // 恢复现场
+        crate::proot::ptrace::set_verbose(if old_v { 1 } else { 0 });
+        match old_dbg { Some(v) => std::env::set_var("MOX_DBG", v), None => std::env::remove_var("MOX_DBG") }
+        match old_sec { Some(v) => std::env::set_var("MOX_SECCOMP", v), None => std::env::remove_var("MOX_SECCOMP") }
     }
 }

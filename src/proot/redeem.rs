@@ -564,46 +564,37 @@ pub fn has_entitlement(root: &Path, product_id: &str) -> bool {
         Some(c) => c,
         None => return false,
     };
-    // 设备绑定：本机已有设备身份时，缓存必须属于本机——拷别人的
-    // `entitlements.toml` 会因 device_token 不符而整份失效（防跨设备白嫖）。
-    // 本机无设备身份时回退到旧行为（真实流程里 refresh_ents 必先生成本机设备）。
-    if let Some(dev) = load_device(root) {
-        if !cache.device_token.is_empty() && cache.device_token != dev.token {
-            return false;
-        }
-    }
-    // 服务端签名：存在时**必须有效**，否则视为篡改直接拒绝（不回退旧逻辑）。
-    // 合法签名证明服务端亲笔签发，门控完全信任声明——离线也按到期日生效，
-    // 无需 TTL，且攻击者无法伪造（无私钥）。彻底关闭渗透测试报告·路径①。
-    if let Some(ref s) = cache.sig {
-        if !verify_entitlement_signature(&cache.ents, s) {
-            return false; // 篡改检测
-        }
-        for e in &cache.ents {
-            if e.product_id != product_id {
-                continue;
-            }
-            if e.exp == 0 || e.exp > now {
-                return true;
-            }
-        }
+    // 【渗透测试复测 P0-1】字段缺失一律按"拒绝"处理。
+    //
+    // 旧实现的两个致命漏洞（真机实测可 5 行 toml 解锁全部付费配方）：
+    //   · 验签写在 `if let Some(sig)` 里 → 不写 `sig` 行即整段跳过；
+    //   · 设备绑定在 `device_token` 为空 / 本机无 device.toml 时跳过。
+    // 攻击者只要伪造 entitlements.toml 时同时省略这两个可选字段，就回落到
+    // "无签名降级"分支，`exp > now` 直接放行。故此处改为**强制三连校验**：
+    //   1) 本机设备身份必须存在（合法缓存必经 refresh_ents → ensure_device）；
+    //   2) 缓存 device_token 必须存在且等于本机 token；
+    //   3) 缓存 sig 必须存在且 Ed25519 验签通过（无私钥无法伪造）。
+    // 任一不满足立即拒绝，绝不回落。代价：升级后旧缓存需联网刷新一次
+    //（`mox redeem status`），换取付费门禁不可伪造。
+    let dev = match load_device(root) {
+        Some(d) => d,
+        None => return false,
+    };
+    if cache.device_token.is_empty() || cache.device_token != dev.token {
         return false;
     }
-    // 无签名（旧缓存 / 离线降级）：走设备绑定 + TTL 旧逻辑
+    let sig = match cache.sig.as_deref() {
+        Some(s) => s,
+        None => return false,
+    };
+    if !verify_entitlement_signature(&cache.ents, sig) {
+        return false;
+    }
+    // 签名有效：完全信任服务端声明——离线也按到期日生效，无需 TTL。
     for e in &cache.ents {
-        if e.product_id != product_id {
-            continue;
-        }
-        if e.exp == 0 {
-            // 永久授权：陈旧缓存不可信（可能已被吊销），需刷新后才放行
-            if ents_fresh(root) {
-                return true;
-            }
-        } else if e.exp > now {
-            // 有限期订阅：按服务端承诺的到期日判定，离线也有效
+        if e.product_id == product_id && (e.exp == 0 || e.exp > now) {
             return true;
         }
-        // exp<=now 的有限期授权：已过期，视为无（继续检查其余条目）
     }
     false
 }
@@ -792,6 +783,34 @@ pub fn open_browser(url: &str) -> Opened {
     Opened::Failed
 }
 
+/// 测试夹具（仅 cfg(test) 编译）：供 cli/recipe 等跨模块门禁测试构造
+/// 「服务端已签名 + 绑定本机设备」的合法授权缓存。P0-1 之后门禁为
+/// fail-closed（缺 sig 或缺 device.toml 一律拒绝），各测试不能再自行
+/// 用 `save_ents(root, ents, None)` 伪造缓存，必须经此夹具落盘。
+///
+/// 签名样本是公钥验签数据（对应内嵌 ENTITLEMENT_VERIFY_KEY），非机密；
+/// 私钥仅在 mox-id 后端，客户端代码里绝不出现。
+#[cfg(test)]
+pub(crate) mod testkit {
+    use super::*;
+
+    /// `ok proot-pro pro 0\n` 的 Ed25519 签名（base64）。
+    pub const SIG_PROOT_PRO: &str = "OE3p5GJx2hi82OjOlRxN2bC2shpOPjYlohl8SZXCSiR2soCYa8AZbRAXMoKSMOpyn/1+M13a/D3LihZaF8QCCg==";
+    /// `ok proot-pro pro 0\nok mox-proot-plus plus 4102444800\n` 的签名。
+    pub const SIG_TWO: &str = "hl5hEmw7LkvzK8q3xTkFnqL9krYwvmKQYj4S7EQf58CqeCZGm4HjI5sFfqGMLIYA0DYvhi6ABJzpdIwKqKpXAw==";
+
+    /// 落一份本机合法缓存：先写 device.toml（设备身份），再写带服务端签名的
+    /// entitlements.toml，使 `has_entitlement` 的三连校验（设备 + token + 签名）全过。
+    pub fn seed_legit_cache(root: &Path, ents: &[Entitlement], sig: &str) {
+        save_device(
+            root,
+            &DeviceInfo { token: "aaa".into(), name: "n".into(), platform: "linux".into() },
+        )
+        .unwrap();
+        save_ents(root, ents, Some(sig)).unwrap();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -884,6 +903,25 @@ mod tests {
     }
 
     // ---- 授权缓存 ----
+    // 预生成的有效签名（对应真实服务端私钥派生公钥；私钥只在 mox-id 后端，
+    // 客户端代码里绝不出现）。用于离线构造「服务端亲笔签发」的缓存做测试。
+    const SIG_SINGLE: &str = "OE3p5GJx2hi82OjOlRxN2bC2shpOPjYlohl8SZXCSiR2soCYa8AZbRAXMoKSMOpyn/1+M13a/D3LihZaF8QCCg=="; // ok proot-pro pro 0
+    const SIG_TWO: &str = "hl5hEmw7LkvzK8q3xTkFnqL9krYwvmKQYj4S7EQf58CqeCZGm4HjI5sFfqGMLIYA0DYvhi6ABJzpdIwKqKpXAw=="; // 上面 + ok mox-proot-plus plus 4102444800
+    const SIG_EMPTY: &str = "efGAaXXpFmzW5T8OMWKGwTsh1saDaHRkO7zL27QBlhWuu6diaae/+Pkf/sdiXrGYeIXVMCMV9WDR2QKEmn2oCQ=="; // 空清单
+    const SIG_PAST: &str = "FcKVmi5M263tUk9Lng9iSVCgag0xGQ62LddaLIwrif24PZeV4gm7NKzzjTyMeG5R3XCrlO60gl5WYCaQ29AnCA=="; // ok proot-pro pro 1000000000
+    const FUTURE_EXP: u64 = 4102444800; // 2100-01-01
+    const PAST_EXP: u64 = 1000000000;  // 2001-09-09
+
+    /// 构造一份「本机合法」缓存：先落设备身份，再写带服务端签名的缓存。
+    fn seed_legit(root: &Path, ents: &[Entitlement], sig: &str) {
+        save_device(
+            root,
+            &DeviceInfo { token: "aaa".into(), name: "n".into(), platform: "linux".into() },
+        )
+        .unwrap();
+        save_ents(root, ents, Some(sig)).unwrap();
+    }
+
     #[test]
     fn ents_cache_roundtrip_fresh_and_gate() {
         let root = tmp("ents");
@@ -892,9 +930,9 @@ mod tests {
         assert!(!has_entitlement(&root, "proot-pro"));
         let ents = vec![
             Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 },
-            Entitlement { product_id: "mox-proot-plus".into(), tier: "plus".into(), exp: now_unix() + 3600 },
+            Entitlement { product_id: "mox-proot-plus".into(), tier: "plus".into(), exp: FUTURE_EXP },
         ];
-        save_ents(&root, &ents, None).unwrap();
+        seed_legit(&root, &ents, SIG_TWO);
         assert!(ents_fresh(&root));
         assert!(has_entitlement(&root, "proot-pro"));
         assert!(has_entitlement(&root, "mox-proot-plus"));
@@ -907,17 +945,15 @@ mod tests {
     }
 
     #[test]
-    fn ents_cache_stale_and_expired_gate_off() {
-        let root = tmp("entsstale");
+    fn signed_but_expired_entitlement_rejected() {
+        // 签名有效（服务端确实签过这个 exp）但已过期 → 按声明的到期日拒绝。
+        let root = tmp("entspast");
         std::fs::create_dir_all(&root).unwrap();
-        // 手工写一个 8 天前的缓存（超 TTL）+ 一个昨天过期的授权
-        let old = now_unix() - 8 * 86400;
-        std::fs::write(
-            ents_file_path(&root),
-            format!("[cache]\nfetched_at = {}\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = {}\n", old, now_unix() - 86400),
-        )
-        .unwrap();
-        assert!(!ents_fresh(&root), "8 天前的缓存应判陈旧");
+        seed_legit(
+            &root,
+            &[Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: PAST_EXP }],
+            SIG_PAST,
+        );
         assert!(!has_entitlement(&root, "proot-pro"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -927,9 +963,7 @@ mod tests {
         // 防跨设备拷贝：本机设备身份与缓存 device_token 不一致时，整份授权失效。
         let root = tmp("entsdev");
         std::fs::create_dir_all(&root).unwrap();
-        // 本机设备令牌 aaa
-        save_device(&root, &DeviceInfo { token: "aaa".into(), name: "n".into(), platform: "linux".into() }).unwrap();
-        save_ents(&root, &[Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 }], None).unwrap();
+        seed_legit(&root, &[Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 }], SIG_SINGLE);
         assert!(has_entitlement(&root, "proot-pro"), "本机缓存应放行");
 
         // 攻击者把别人机器的 entitlements.toml 拷过来（device_token=bbb）
@@ -941,31 +975,90 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // 预生成的有效签名（blob=`ok proot-pro pro 0\n`，对应真实服务端私钥派生公钥），
-    // 仅用于离线构造「服务端亲笔签发」的缓存，验证客户端验签信任逻辑。
-    const VALID_SIG_B64: &str =
-        "OE3p5GJx2hi82OjOlRxN2bC2shpOPjYlohl8SZXCSiR2soCYa8AZbRAXMoKSMOpyn/1+M13a/D3LihZaF8QCCg==";
-
+    /// 【P0-1 回归】渗透测试真机复现的攻击：伪造 toml 同时省略 `sig` 与
+    /// `device_token` 两个可选字段，旧实现会跳过验签 + 跳过设备绑定，回落到
+    /// 无签名分支把 `exp > now` 直接放行。现在必须一律拒绝。
     #[test]
-    fn signed_cache_trusted_offline_even_when_stale() {
-        // 路径①彻底关闭：缓存陈旧（超过 TTL）但带**有效服务端签名**，
-        // 门控完全信任声明——离线也按到期日生效，无需刷新。
-        let root = tmp("entssig");
+    fn forged_cache_omitting_sig_and_device_token_is_rejected() {
+        let root = tmp("entsforge");
         std::fs::create_dir_all(&root).unwrap();
-        let stale = now_unix() - 30 * 86400;
+        // 攻击载荷：5 行，未来 exp，无 sig 行、无 device_token 行
+        std::fs::write(
+            ents_file_path(&root),
+            format!(
+                "[cache]\nfetched_at = {}\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = {}\n",
+                now_unix(), FUTURE_EXP
+            ),
+        )
+        .unwrap();
+        assert!(!has_entitlement(&root, "proot-pro"), "省略 sig/device_token 的伪造必须拒绝");
+
+        // 变体 A：本机有 device.toml，但缓存仍省略两个字段
+        seed_legit(&root, &[], SIG_EMPTY); // 先建合法设备身份（空授权）
+        std::fs::write(
+            ents_file_path(&root),
+            format!(
+                "[cache]\nfetched_at = {}\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = {}\n",
+                now_unix(), FUTURE_EXP
+            ),
+        )
+        .unwrap();
+        assert!(!has_entitlement(&root, "proot-pro"), "有设备身份但缓存无 sig 也必须拒绝");
+
+        // 变体 B：有 device_token、无 sig
+        std::fs::write(
+            ents_file_path(&root),
+            format!(
+                "[cache]\nfetched_at = {}\ndevice_token = \"aaa\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = {}\n",
+                now_unix(), FUTURE_EXP
+            ),
+        )
+        .unwrap();
+        assert!(!has_entitlement(&root, "proot-pro"), "缺 sig 必须拒绝");
+
+        // 变体 C：有 sig、无 device_token
         std::fs::write(
             ents_file_path(&root),
             format!(
                 "[cache]\nfetched_at = {}\nsig = \"{}\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = 0\n",
-                stale, VALID_SIG_B64
+                now_unix(), SIG_SINGLE
             ),
         )
         .unwrap();
-        assert!(!ents_fresh(&root), "缓存确实陈旧");
-        assert!(
-            has_entitlement(&root, "proot-pro"),
-            "带有效签名的陈旧缓存应离线放行"
+        assert!(!has_entitlement(&root, "proot-pro"), "缺 device_token 必须拒绝");
+
+        // 变体 D：无 device.toml（攻击者删掉设备身份文件）
+        let root2 = tmp("entsnodev");
+        std::fs::create_dir_all(&root2).unwrap();
+        std::fs::write(
+            ents_file_path(&root2),
+            format!(
+                "[cache]\nfetched_at = {}\nsig = \"{}\"\ndevice_token = \"aaa\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = 0\n",
+                now_unix(), SIG_SINGLE
+            ),
+        )
+        .unwrap();
+        assert!(!has_entitlement(&root2, "proot-pro"), "无设备身份文件必须拒绝");
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&root2);
+    }
+
+    #[test]
+    fn signed_cache_trusted_offline_even_when_stale() {
+        // 签名有效 → 完全信任服务端声明：缓存陈旧（超 TTL）也离线放行。
+        let root = tmp("entssig");
+        std::fs::create_dir_all(&root).unwrap();
+        seed_legit(&root, &[Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 }], SIG_SINGLE);
+        let p = ents_file_path(&root);
+        let mut s = std::fs::read_to_string(&p).unwrap();
+        let old = load_ents(&root).unwrap().fetched_at;
+        s = s.replace(
+            &format!("fetched_at = {}", old),
+            &format!("fetched_at = {}", now_unix() - 30 * 86400),
         );
+        std::fs::write(&p, s).unwrap();
+        assert!(!ents_fresh(&root), "缓存确实陈旧");
+        assert!(has_entitlement(&root, "proot-pro"), "带有效签名的陈旧缓存应离线放行");
         assert!(!has_entitlement(&root, "no-such"));
         let _ = std::fs::remove_dir_all(&root);
     }
@@ -975,10 +1068,11 @@ mod tests {
         // 篡改检测：签名存在但无效（伪造/损坏）→ 直接拒绝，即使缓存新鲜。
         let root = tmp("entstamper");
         std::fs::create_dir_all(&root).unwrap();
+        seed_legit(&root, &[], SIG_EMPTY);
         std::fs::write(
             ents_file_path(&root),
             format!(
-                "[cache]\nfetched_at = {}\nsig = \"AAAA-invalid-signature\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = 0\n",
+                "[cache]\nfetched_at = {}\ndevice_token = \"aaa\"\nsig = \"AAAA-invalid-signature\"\n[[ent]]\nproduct_id = \"proot-pro\"\ntier = \"pro\"\nexp = 0\n",
                 now_unix()
             ),
         )
@@ -997,14 +1091,21 @@ mod tests {
         }];
         assert!(!verify_entitlement_signature(&ents, "not-valid-base64!!!"));
         assert!(!verify_entitlement_signature(&ents, ""));
-        assert!(verify_entitlement_signature(&ents, VALID_SIG_B64));
+        assert!(verify_entitlement_signature(&ents, SIG_SINGLE));
+        // 签名是对整个清单的：单条签名不能用于双条清单
+        let two = vec![
+            Entitlement { product_id: "proot-pro".into(), tier: "pro".into(), exp: 0 },
+            Entitlement { product_id: "mox-proot-plus".into(), tier: "plus".into(), exp: FUTURE_EXP },
+        ];
+        assert!(!verify_entitlement_signature(&two, SIG_SINGLE));
+        assert!(verify_entitlement_signature(&two, SIG_TWO));
     }
 
     #[test]
     fn empty_ents_cache_is_fresh_but_no_gate() {
         let root = tmp("entsempty");
         std::fs::create_dir_all(&root).unwrap();
-        save_ents(&root, &[], None).unwrap();
+        seed_legit(&root, &[], SIG_EMPTY);
         assert!(ents_fresh(&root), "刚拉取过的空列表仍是新鲜缓存");
         assert!(!has_entitlement(&root, "proot-pro"));
         let _ = std::fs::remove_dir_all(&root);

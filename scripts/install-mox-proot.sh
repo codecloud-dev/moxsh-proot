@@ -69,8 +69,22 @@ printf '  %s\n\n' "多架构容器引擎 · 一键安装"
 # 两端资产都不可达时默认 GitHub——错误信息指向标准源，且瞬时抖动下
 # GitHub 的全球可达性通常更好。
 probe_seconds() {
-  # $1 = URL；成功输出耗时（秒），失败输出空。
-  curl -fsS -o /dev/null --connect-timeout 4 --max-time 8 -w '%{time_total}' "$1" 2>/dev/null || true
+  # $1 = URL；**仅 HTTP 200** 才输出耗时（秒），其余一律输出空。
+  #
+  # 【渗透复测 P2 修复】旧实现 `curl -fsS ... -w '%{time_total}' ... || true`
+  # 有致命缺陷：curl 即便因 `-f` 判失败（404 / 域名不存在 / 证书错 / 302 未跟随），
+  # `-w` 依然会打印 time_total；`|| true` 又吞掉非零退出码，于是「打不开的源」
+  # 被当成「可达且快」，选源直接选错，国内用户白等一轮 404。
+  # 现在同时取 http_code，跟随重定向，只有最终 200 才算可达；连接失败时
+  # http_code 为 000，同样落选。探测的是 .sha256 小文件，全量下载无压力。
+  local out code t
+  out="$(curl -sSL -o /dev/null --connect-timeout 4 --max-time 10 \
+        -w '%{http_code} %{time_total}' "$1" 2>/dev/null || true)"
+  code="${out%% *}"
+  t="${out#* }"
+  if [ "$code" = "200" ] && [ -n "$t" ]; then
+    printf '%s' "$t"
+  fi
 }
 
 pick_source() {
@@ -207,8 +221,15 @@ trap 'rm -rf "$TMP"' EXIT
 #     第三方即可下发）。需 mox-site 仓库部署 /dl 目录并同步二进制；未部署时该通道
 #     自然落空，不影响前序通道。
 # 注：jsDelivr 仅服务仓库内文件、不服务 Release 二进制资产（实测 404），
-# 故二进制兜底统一走 ghproxy；脚本 raw 的 jsDelivr 备援见 README。
-MIRROR_PROXIES="https://ghproxy.net/https://"
+# 脚本 raw 的 jsDelivr 备援见 README。
+#
+# 【渗透复测 P2 修复】ghproxy.net 这类公共代理存活率不稳定，且被墙/停服时
+# 对每个资产都要白等一次 12s 超时（4 个二进制 × 2 校验文件 ≈ 8 次死等），
+# 更糟的是部分代理对不存在的资产返回 200 错误页而非 404，会把探测带偏。
+# 与官网静态通道一致：改为**默认关闭**，仅当用户显式设置
+# MOX_PROOT_MIRROR_PROXIES（确认代理当前可用）时才加入兜底链。
+# 真正兜底靠「另一端 GitHub↔Gitee」+ sha256 强校验，不依赖第三方代理。
+MIRROR_PROXIES="${MOX_PROOT_MIRROR_PROXIES:-}"
 # 官网静态通道默认**关闭**：在线安装实测 https://mox-site.pages.dev/dl 为 404，
 # 旧版把它当第四级兜底，等于每个资产都要白等一次 12s 超时的死链。
 # 只有显式设置 MOX_PROOT_WEBSITE_DL（真正部署了 /dl）时才启用。

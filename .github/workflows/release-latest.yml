@@ -15,8 +15,11 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
       - "go/**"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/release-latest.yml"
+      # 2026-11-06：原先这里还列了 release.yml / release-latest.yml 自身。
+      # 副作用极大——**只改工作流文本也会重建并覆盖全部二进制**，于是
+      # `proot-latest` 的 44 个资产 digest 全变，Gitee 必须全量追赶，
+      # 跨国上传一慢就超时留缺件（本轮连续踩了多次）。工作流改动不改变
+      # 产物，不该触发滚动 Release；需要验证时用 workflow_dispatch 手动跑。
   workflow_dispatch:
 
 # 滚动 Release 会重建并覆盖同一个 `proot-latest` 的全部资产。两个 run 并发时

@@ -422,9 +422,6 @@ jobs:
           has() { printf '%s\n' "$existing" | grep -Fxq "$1"; }
           # 查某资产的 "<id> <size>"；不存在则返回空
           gmeta() { awk -F'\t' -v n="$1" '$1==n {print $2" "$3; exit}' /tmp/gassets.tsv; }
-          # 查某资产的 Gitee 直链（内容 sha256 复核用）
-          gurl() { awk -F'\t' -v n="$1" '$1==n {print $4; exit}' /tmp/gassets.tsv; }
-
           # 同名重复自愈：上一轮若「新版已传、旧版删除失败」会留下两条同名附件，
           # 浏览器按文件名下载时可能拿到旧二进制。保留 size 与本地一致的，其余删掉。
           python3 -c 'import os; rows=[l.rstrip("\n").split("\t") for l in open("/tmp/gassets.tsv")]; d={}; [d.setdefault(r[0],[]).append((r[1],r[2])) for r in rows if len(r)>=3]; print("\n".join(aid for n,its in d.items() if len(its)>1 for aid,sz in its if aid != next((a for a,s2 in its if os.path.isfile(n) and s2==str(os.path.getsize(n))), None)))' > /tmp/gdupids.txt 2>/dev/null || true
@@ -435,6 +432,23 @@ jobs:
               -H "Authorization: token ${GITEE_TOKEN}" "${API}/${dupid}" 2>/dev/null || echo 000)"
             echo "DEDUP 移除重复附件 id=${dupid} HTTP=${dc}"
           done < /tmp/gdupids.txt
+
+          # 并发预下载 Gitee 附件用于内容 sha256 复核。
+          # 旧实现在主循环里串行 `curl --max-time 180` 逐资产下载：44 个附件
+          # 最坏 132 分钟，实测 2026-11-06 跑满 38 分钟仍卡在 installer 段、
+          # 90 分钟 step 根本不够，最后只能取消 job 由本地收口。改为 8 路并发
+          # 预取后固定 ~2 分钟，主循环只读本地文件算 sha256，零网络等待。
+          mkdir -p /tmp/gcheck
+          # 只传直链：文件名取 URL 末段（Gitee 的 browser_download_url 末段即资产名）。
+          # 下载失败就不留文件 → 主循环按「无法证明一致」保守重传，绝不静默 SKIP。
+          awk -F'\t' '$1 ~ /^mox-proot-/ && $4 != "" {print $4}' /tmp/gassets.tsv \
+            | xargs -r -P 8 -I URL bash -c '
+                u="URL"; n="${u##*/}"
+                curl -sS -fSL --connect-timeout 10 --max-time 120 \
+                  -o "/tmp/gcheck/$n" "$u" 2>/dev/null \
+                  || rm -f "/tmp/gcheck/$n"
+              '
+          echo "内容复核预下载完成：$(find /tmp/gcheck -type f | wc -l) 个"
 
           ok=0; fail=0; consecutive=0
           for f in *; do
@@ -453,11 +467,9 @@ jobs:
                 # 二进制（实测 mox-proot-linux-amd64-musl 同名同 size 却是旧版），
                 # 只比 size 会一直 SKIP，国内用户永远下不到修复版。按内容 sha256 复核。
                 l_sum="$(sha256sum "$f" | cut -d' ' -f1)"
-                g_url="$(gurl "$f")"; g_sum=""
-                if [ -n "$g_url" ]; then
-                  curl -sS -fSL --connect-timeout 10 --max-time 180 -o /tmp/gcheck.bin "$g_url" 2>/dev/null || true
-                  [ -s /tmp/gcheck.bin ] && g_sum="$(sha256sum /tmp/gcheck.bin | cut -d' ' -f1)"
-                  rm -f /tmp/gcheck.bin
+                g_sum=""
+                if [ -s "/tmp/gcheck/$f" ]; then
+                  g_sum="$(sha256sum "/tmp/gcheck/$f" | cut -d' ' -f1)"
                 fi
                 if [ "$g_sum" = "$l_sum" ]; then echo "SKIP $f（Gitee 内容 sha256 一致）"; continue; fi
                 if [ -z "$g_sum" ]; then

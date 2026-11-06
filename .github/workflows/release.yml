@@ -400,10 +400,12 @@ jobs:
                 fi
                 if [ "$g_sum" = "$l_sum" ]; then echo "SKIP $f（Gitee 内容 sha256 一致）"; continue; fi
                 if [ -z "$g_sum" ]; then
-                  echo "::warning::$f 内容复核下载失败，按 size 一致跳过（建议重跑本 job）"
-                  continue
+                  # 拿不到远端内容时**绝不 SKIP**：无法证明一致就按「可能过期」，
+                  # 直接重传本次产物（宁可多传，也不能让国内继续下发旧二进制）。
+                  echo "REFRESH-UNVERIFIED $f（远端内容复核下载失败，保守重传）"
+                else
+                  echo "REFRESH-CONTENT $f（size 相同但 sha256 不同：国内仍是旧二进制）"
                 fi
-                echo "REFRESH-CONTENT $f（size 相同但 sha256 不同：国内仍是旧二进制）"
                 pending_del="$gid"
               else
                 echo "REFRESH $f（Gitee ${gsz}B → 本次 ${fsz}B）"

@@ -301,7 +301,7 @@ jobs:
     # 【渗透复测 P2 修复】旧 job 无任何超时/重试上限：GitHub Actions → Gitee
     # 的 TLS 连接失败（curl exit 35/56）时，每个资产都要耗满默认重试，整条
     # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       GITEE_OWNER: thousand-code-crafts
       GITEE_REPO: moxsh-proot
@@ -319,7 +319,7 @@ jobs:
       - name: 增量上传/刷新资产到 Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        timeout-minutes: 25
+        timeout-minutes: 50
         run: |
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
@@ -362,6 +362,17 @@ jobs:
           # 查某资产的 "<id> <size>"；不存在则返回空
           gmeta() { awk -F'\t' -v n="$1" '$1==n {print $2" "$3; exit}' /tmp/gassets.tsv; }
 
+          # 同名重复自愈：上一轮若「新版已传、旧版删除失败」会留下两条同名附件，
+          # 浏览器按文件名下载时可能拿到旧二进制。保留 size 与本地一致的，其余删掉。
+          python3 -c 'import os; rows=[l.rstrip("\n").split("\t") for l in open("/tmp/gassets.tsv")]; d={}; [d.setdefault(r[0],[]).append((r[1],r[2])) for r in rows if len(r)>=3]; print("\n".join(aid for n,its in d.items() if len(its)>1 for aid,sz in its if aid != next((a for a,s2 in its if os.path.isfile(n) and s2==str(os.path.getsize(n))), None)))' > /tmp/gdupids.txt 2>/dev/null || true
+          while read -r dupid; do
+            [ -z "$dupid" ] && continue
+            dc="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+              --connect-timeout 10 --max-time 120 \
+              -H "Authorization: token ${GITEE_TOKEN}" "${API}/${dupid}" 2>/dev/null || echo 000)"
+            echo "DEDUP 移除重复附件 id=${dupid} HTTP=${dc}"
+          done < /tmp/gdupids.txt
+
           ok=0; fail=0; consecutive=0
           for f in *; do
             [ "$f" = "SHA256SUMS" ] && continue
@@ -370,35 +381,22 @@ jobs:
             # 会把整条 job 拖到超时（09:04 实测）。跳过它们不影响国内下载。
             case "$f" in mox-proot-*) ;; *) echo "SKIP $f（旧名历史资产，不再同步）"; continue ;; esac
             fsz="$(stat -c %s "$f")"
+            pending_del=""
             if has "$f"; then
               meta="$(gmeta "$f")"
               gid="${meta%% *}"; gsz="${meta#* }"
               if [ "$gsz" = "$fsz" ]; then echo "SKIP $f（Gitee 已存在且 size 一致）"; continue; fi
-              # 同名但 size 不同 = 旧二进制；先删旧附件，成功才传新（避免同名重复资产）。
               echo "REFRESH $f（Gitee ${gsz}B → 本次 ${fsz}B）"
-              dcode="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
-                --connect-timeout 10 --max-time 60 \
-                -H "Authorization: token ${GITEE_TOKEN}" "${API}/${gid}" 2>/dev/null || echo 000)"
-              if [ "$dcode" = "401" ] || [ "$dcode" = "403" ]; then
-                echo "::error::DELETE ${f} 返回 HTTP ${dcode}：GITEE_TOKEN 无附件删除权限（凭据/scope 问题），请更新仓库 Secret"
-                exit 1
-              fi
-              # 404 = 旧附件已不存在（上一次 DELETE 成功但 POST 失败、或另一路
-              # 补传脚本已删掉）；此时直接上传即可，不会造成同名重复资产。
-              if [ "$dcode" != "200" ] && [ "$dcode" != "201" ] && [ "$dcode" != "204" ] && [ "$dcode" != "404" ]; then
-                fail=$((fail+1)); consecutive=$((consecutive+1))
-                echo "FAIL $f（删除旧附件 HTTP ${dcode}，跳过上传以免产生重复资产）"
-                if [ "$consecutive" -ge 3 ]; then
-                  echo "::error::Gitee 连续 3 次删除失败，提前终止（重试本 job 即可补齐）"; break
-                fi
-                continue
-              fi
+              pending_del="$gid"
+            else
+              echo "UPLOAD $f（Gitee 缺失）"
             fi
-            # 2) 单次上传：有限重试 + 短超时，绝不让某个资产耗满整条 job。
+            # 【关键】先传新、后删旧：POST 超时/失败时旧附件仍在，绝不会重演
+            # 09:04 那次「DELETE 成功但 POST 超时 → 国内镜像直接缺件」的事故。
             code="000"
-            for attempt in 1 2 3; do
+            for attempt in 1 2; do
               code="$(curl -sS -o /tmp/g.json -w '%{http_code}' -X POST \
-                --connect-timeout 10 --max-time 120 --retry 1 --retry-delay 2 \
+                --connect-timeout 10 --max-time 240 \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 "${API}" -F "file=@${f}" 2>/dev/null || echo 000)"
               if [ "$code" = "200" ] || [ "$code" = "201" ]; then break; fi
@@ -406,20 +404,35 @@ jobs:
                 echo "::error::POST ${f} 返回 HTTP ${code}：GITEE_TOKEN 无附件上传权限，请更新仓库 Secret"
                 exit 1
               fi
-              [ "$attempt" -lt 3 ] && sleep 2
+              [ "$attempt" -lt 2 ] && sleep 5
             done
-            if [ "$code" = "200" ] || [ "$code" = "201" ]; then
-              ok=$((ok+1)); consecutive=0; echo "OK   $f"
-            else
+            if [ "$code" != "200" ] && [ "$code" != "201" ]; then
               fail=$((fail+1)); consecutive=$((consecutive+1))
               echo "FAIL $f (HTTP $code): $(head -c 120 /tmp/g.json 2>/dev/null || true)"
-              # 3) 连续失败 3 个判定 Gitee 线路/服务整体异常（TLS 35/56、5xx），
-              #    立即收手，不再把剩余几十个资产逐个耗过去。401/403 已在上面
-              #    单独判为凭据问题并直接退出，不会被这里误报成「线路不通」。
+              # 连续失败 3 个判定线路/服务异常，立即收手（401/403 已单独处理）。
               if [ "$consecutive" -ge 3 ]; then
-                echo "::error::Gitee 连续 3 个资产上传失败，提前终止（避免长时间空转，重试本 job 即可补齐）"
+                echo "::error::Gitee 连续 3 个资产上传失败，提前终止（重试本 job 即可补齐）"
                 break
               fi
+              continue
+            fi
+            ok=$((ok+1)); consecutive=0
+            # 新版已落地才删旧；删除失败只警告，下次 job 的去重步骤会清理。
+            if [ -n "$pending_del" ]; then
+              dcode="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+                --connect-timeout 10 --max-time 120 \
+                -H "Authorization: token ${GITEE_TOKEN}" "${API}/${pending_del}" 2>/dev/null || echo 000)"
+              if [ "$dcode" = "401" ] || [ "$dcode" = "403" ]; then
+                echo "::error::DELETE ${f} 返回 HTTP ${dcode}：GITEE_TOKEN 无附件删除权限，请更新仓库 Secret"
+                exit 1
+              fi
+              if [ "$dcode" = "200" ] || [ "$dcode" = "201" ] || [ "$dcode" = "204" ] || [ "$dcode" = "404" ]; then
+                echo "OK   $f（旧附件 ${pending_del} 已移除）"
+              else
+                echo "::warning::$f 新版已上传，旧附件删除失败 HTTP ${dcode}（下次 job 去重会清理）"
+              fi
+            else
+              echo "OK   $f"
             fi
           done
           echo "=== Gitee 同步：$ok 成功 / $fail 失败 ==="

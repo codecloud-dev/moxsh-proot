@@ -301,7 +301,7 @@ jobs:
     # 【渗透复测 P2 修复】旧 job 无任何超时/重试上限：GitHub Actions → Gitee
     # 的 TLS 连接失败（curl exit 35/56）时，每个资产都要耗满默认重试，整条
     # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       GITEE_OWNER: thousand-code-crafts
       GITEE_REPO: moxsh-proot
@@ -319,7 +319,7 @@ jobs:
       - name: 增量上传/刷新资产到 Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        timeout-minutes: 18
+        timeout-minutes: 25
         run: |
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
@@ -365,6 +365,10 @@ jobs:
           ok=0; fail=0; consecutive=0
           for f in *; do
             [ "$f" = "SHA256SUMS" ] && continue
+            # 旧名 moxsh-* 是改名前的历史遗留资产，安装脚本与客户端只用
+            # mox-proot-* 新名；其中包含 5MB 旧 installer，逐个 DELETE+POST
+            # 会把整条 job 拖到超时（09:04 实测）。跳过它们不影响国内下载。
+            case "$f" in mox-proot-*) ;; *) echo "SKIP $f（旧名历史资产，不再同步）"; continue ;; esac
             fsz="$(stat -c %s "$f")"
             if has "$f"; then
               meta="$(gmeta "$f")"
@@ -394,7 +398,7 @@ jobs:
             code="000"
             for attempt in 1 2 3; do
               code="$(curl -sS -o /tmp/g.json -w '%{http_code}' -X POST \
-                --connect-timeout 10 --max-time 60 --retry 1 --retry-delay 2 \
+                --connect-timeout 10 --max-time 120 --retry 1 --retry-delay 2 \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 "${API}" -F "file=@${f}" 2>/dev/null || echo 000)"
               if [ "$code" = "200" ] || [ "$code" = "201" ]; then break; fi

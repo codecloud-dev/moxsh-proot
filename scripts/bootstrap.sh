@@ -23,6 +23,16 @@ JS="https://cdn.jsdelivr.net/gh/codecloud-dev/moxsh-proot@main/scripts/install-m
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
 
+# 下载回来的必须是**安装器脚本**，不能是 200 状态的 HTML 错误页 / CDN 拦截页。
+# 探源已过滤非 200，但 CDN 劫持、镜像缓存脏仍可能返回 200 + HTML；
+# `exec sh "$TMP"` 之前再做一次内容断言，杜绝「把网页当脚本执行」。
+is_installer() {
+    [ -s "$1" ] || return 1
+    head -c 1024 "$1" 2>/dev/null | grep -qi '<html\|<!doctype\|<head\|<script' && return 1
+    head -c 1024 "$1" 2>/dev/null | grep -q 'mox-proot' || return 1
+    return 0
+}
+
 command -v curl >/dev/null 2>&1 || die "未找到 curl（Termux 里执行: pkg install curl）"
 
 TMP="${TMPDIR:-/tmp}/mox-proot-installer.$$"
@@ -35,9 +45,16 @@ for pair in "gh $GH" "gt $GT" "js $JS"; do
     set -- $pair
     label="$1"; url="$2"
     (
-        # -o /dev/null 只测吞吐与可达；-w 取高精度耗时（秒，浮点）
-        rtt=$(curl -s -o /dev/null -w '%{time_total}' --connect-timeout 4 --max-time 10 "$url" 2>/dev/null)
-        if [ -n "$rtt" ]; then
+        # 【P0 修复，与 install-mox-proot.sh::probe_seconds 同源】
+        # 旧实现只取 %{time_total}：curl 即使撞上 404 / 登录跳转 / CDN 错页 / 域名不存在，
+        # 也会打印一个耗时数字，于是「打不开的源」被当成「可达且最快」，随后
+        # 下载回来的是 HTML 错误页，却直接 `exec sh "$TMP"` 执行——这是引导层最危险的坑。
+        # 现在同时取 http_code，**仅最终 200** 才记为候选；000/404/3xx/5xx 一律落选。
+        out=$(curl -sSL -o /dev/null -w '%{http_code} %{time_total}' \
+              --connect-timeout 4 --max-time 10 "$url" 2>/dev/null || true)
+        code="${out%% *}"
+        rtt="${out#* }"
+        if [ "$code" = "200" ] && [ -n "$rtt" ] && [ "$rtt" != "$out" ]; then
             printf '%s %s %s\n' "$rtt" "$label" "$url" > "$probe_dir/$label"
         fi
     ) &
@@ -51,10 +68,11 @@ rm -rf "$probe_dir"
 
 if [ -n "$best" ]; then
     say "从最快源($best_label)拉取安装器…"
-    if curl -fsSL --connect-timeout 10 --max-time 180 "$best" -o "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+    if curl -fsSL --connect-timeout 10 --max-time 180 "$best" -o "$TMP" 2>/dev/null && is_installer "$TMP"; then
         say "交棒全量安装器（依赖检查 / 选源下载 / 校验 / 落盘）…"
         exec sh "$TMP"
     fi
+    say "最快源返回内容不是安装器，改走串行回退…"
 fi
 
 # ---- 3) 探测全败：串行回退兜底（绝不干等卡死的源）----
@@ -62,7 +80,7 @@ say "并行探测无果，串行回退各源…"
 for pair in "gh $GH" "gt $GT" "js $JS"; do
     set -- $pair
     label="$1"; url="$2"
-    if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$TMP" 2>/dev/null && [ -s "$TMP" ]; then
+    if curl -fsSL --connect-timeout 10 --max-time 180 "$url" -o "$TMP" 2>/dev/null && is_installer "$TMP"; then
         say "交棒全量安装器（源 $label）…"
         exec sh "$TMP"
     fi

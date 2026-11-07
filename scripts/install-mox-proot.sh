@@ -186,6 +186,13 @@ else
       fi
     fi
   fi
+  # 【P0 修复】自救开关必须真生效：此前报错文案让用户设
+  # MOX_PROOT_FORCE_MUSL=1，但全文只有那一处提示、判定块根本没读它 —— 用户照做
+  # 毫无变化，等于给了条死路。现在显式覆盖探测结果（musl 静态版零 glibc 依赖）。
+  if [ "${MOX_PROOT_FORCE_MUSL:-0}" = "1" ]; then
+    use_musl=1
+    log "已启用 MOX_PROOT_FORCE_MUSL=1：强制使用静态 musl 版"
+  fi
   if [ "$use_musl" = 1 ]; then
     ASSET_SUFFIX="linux-${ARCH_ALIAS}-musl"
   fi
@@ -217,23 +224,19 @@ trap 'rm -rf "$TMP"' EXIT
 # 多级镜像兜底通道（国内外分流，2026-11 起）：
 #   - ghproxy 类：把 GitHub Release 完整 URL 整体前缀，国内直连 GitHub 超时时的兜底；
 #     实测 ghproxy.net 对 Release 资产返回 200。
-#   - 官网静态通道：mox-site 自建 CDN 直出二进制（与 GitHub/Gitee 解耦，官网不依赖
-#     第三方即可下发）。需 mox-site 仓库部署 /dl 目录并同步二进制；未部署时该通道
-#     自然落空，不影响前序通道。
+# 决策（2026-11-07）：官网静态 /dl 通道**不做**——站点从未部署 functions/dl，
+# 长期 404，留着只会让每个资产白等一次超时。相关占位代码与注释已整体移除，
+# 分发链路固定为 GitHub ↔ Gitee 双端 + 用户可选的 ghproxy 镜像 + sha256 强校验。
 # 注：jsDelivr 仅服务仓库内文件、不服务 Release 二进制资产（实测 404），
 # 脚本 raw 的 jsDelivr 备援见 README。
 #
 # 【渗透复测 P2 修复】ghproxy.net 这类公共代理存活率不稳定，且被墙/停服时
 # 对每个资产都要白等一次 12s 超时（4 个二进制 × 2 校验文件 ≈ 8 次死等），
 # 更糟的是部分代理对不存在的资产返回 200 错误页而非 404，会把探测带偏。
-# 与官网静态通道一致：改为**默认关闭**，仅当用户显式设置
-# MOX_PROOT_MIRROR_PROXIES（确认代理当前可用）时才加入兜底链。
+# 改为**默认关闭**，仅当用户显式设置 MOX_PROOT_MIRROR_PROXIES
+# （确认代理当前可用）时才加入兜底链。
 # 真正兜底靠「另一端 GitHub↔Gitee」+ sha256 强校验，不依赖第三方代理。
 MIRROR_PROXIES="${MOX_PROOT_MIRROR_PROXIES:-}"
-# 官网静态通道默认**关闭**：在线安装实测 https://mox-site.pages.dev/dl 为 404，
-# 旧版把它当第四级兜底，等于每个资产都要白等一次 12s 超时的死链。
-# 只有显式设置 MOX_PROOT_WEBSITE_DL（真正部署了 /dl）时才启用。
-WEBSITE_DL="${MOX_PROOT_WEBSITE_DL:-}"
 
 # 由 GitHub Release 基址派生 ghproxy 镜像候选 URL 列表。
 mirror_urls() {
@@ -245,7 +248,7 @@ mirror_urls() {
 }
 
 # 带切源重试 + 多级镜像兜底的资产下载（$1 = 资产名，$2 = 输出路径）。
-# 兜底顺序：当前选源 → 另一端（github↔gitee）→ ghproxy 镜像 → 官网静态通道。
+# 兜底顺序：当前选源 → 另一端（github↔gitee）→ ghproxy 镜像（用户显式启用时）。
 fetch_asset_file() {
   local asset="$1" out="$2" cand
   # 1) 当前选源（GitHub / Gitee 二选一；Gitee 现已含二进制资产，国内直连可用）
@@ -264,11 +267,6 @@ fetch_asset_file() {
       return 0
     fi
   done
-  # 4) 官网静态通道（可选；默认未部署，仅显式配置 MOX_PROOT_WEBSITE_DL 才尝试）
-  if [ -n "${WEBSITE_DL}" ] \
-     && curl -fSL --retry 2 --connect-timeout 12 -o "$out" "${WEBSITE_DL}/${asset}"; then
-    return 0
-  fi
   return 1
 }
 
@@ -321,7 +319,8 @@ install_bin() {
     die "自检失败：${name} --help 执行失败（退出码 ${help_rc}）。
   实际输出：${help_out:-（空）}
   常见原因：系统 glibc 低于该二进制的构建基线，或下载到损坏/错架构文件。
-  可尝试：MOX_PROOT_FORCE_MUSL=1 强制走零依赖 musl 静态版。"
+  可尝试强制走零依赖 musl 静态版（整行复制执行）：
+  curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-mox-proot.sh | MOX_PROOT_FORCE_MUSL=1 sh"
   fi
   if ! printf '%s\n' "$help_out" | grep -Eq '用法[:：]|Usage|proot-distro|proot '; then
     die "自检失败：${name} --help 输出不像用法文本（前 3 行）：
@@ -442,11 +441,24 @@ if [ -n "$ARCHIVE_URL" ]; then
     # fs::read_dir 只扫一层、不递归，放进 hooks/lua/ 反而永远加载不到。
     # 旧版这里 `mkdir -p hooks/lua` 又立刻 `rmdir`（建了空目录再删），
     # 属于无意义操作且注释与行为不符，已移除。
-    cp "${TMP}/py/runtime/provision.py" "${TMP}/py/runtime/login_hook.py" \
-       "${MOX_ROOT}/hooks/" 2>/dev/null || true
-    cp "${TMP}/lua/proot.lua" "${MOX_ROOT}/hooks/" 2>/dev/null || true
-    cp "${TMP}/lua/hooks/post-install.lua" "${TMP}/lua/hooks/pre-login.lua" \
-       "${MOX_ROOT}/hooks/" 2>/dev/null || true
+    # 【P0 修复】升级安装不得静默覆盖用户手改过的钩子：旧实现直接 cp，
+    # 用户在 ~/.mox-proot/hooks/ 里改过的 post-install / pre-login 会被种子版悄悄换掉。
+    # 改为「已存在则保留」；不用 cp -n（busybox/Termux 不保证支持），自己判 -f 更可移植。
+    seed_hook() {
+      for s in "$@"; do
+        [ -f "$s" ] || continue
+        b="$(basename "$s")"
+        d="${MOX_ROOT}/hooks/${b}"
+        if [ -f "$d" ]; then
+          log "保留已有钩子 ${b}（不覆盖用户修改）"
+          continue
+        fi
+        cp "$s" "$d" 2>/dev/null || warn "钩子种子写入失败：${b}"
+      done
+    }
+    seed_hook "${TMP}/py/runtime/provision.py" "${TMP}/py/runtime/login_hook.py" \
+              "${TMP}/lua/proot.lua" \
+              "${TMP}/lua/hooks/post-install.lua" "${TMP}/lua/hooks/pre-login.lua"
     log "钩子种子完成：${MOX_ROOT}/hooks（post-install / pre-login 生命周期）"
   else
     warn "tarball 内未找到钩子文件，跳过种子——引擎无钩子照常工作。"
@@ -478,12 +490,12 @@ for chk in mox-proot mox-proot-distro mox; do
   fi
 done
 if [ "$SELF_OK" = 1 ]; then
-  # 版本自检：--version 应回报版本串（不同版本退出码约定不一，捕获文本即可）。
-  VER_OUT="$("${BINDIR}/mox-proot" --version 2>&1 || true)"
-  if [ -n "$VER_OUT" ]; then
+  # 【P1 修复】引擎主程序现已实现 --version/-V 且 rc=0；旧实现用 `|| true`
+  # 吞掉退出码，rc=2 也会报「自检通过」，安装收尾一直挂假绿警告。
+  if VER_OUT="$("${BINDIR}/mox-proot" --version 2>&1)" && [ -n "$VER_OUT" ]; then
     ok "引擎自检通过：${VER_OUT}"
   else
-    warn "引擎 --version 无输出（不阻断，可手动执行 mox-proot --help 排查）"
+    warn "引擎 --version 自检失败（退出码非 0 或无输出），建议执行 mox-proot --help 排查"
   fi
 else
   warn "自检发现缺项，其余功能可能不受影响；建议重跑安装脚本"
@@ -491,34 +503,33 @@ fi
 
 cat <<EOF
 
-用法速查（对齐上游 proot 常用选项）：
-  mox-proot -R ~/ubuntu -0 -- bash          # 推荐绑定集 + fake root 进发行版
-  mox-proot -r ~/ubuntu -w /root -- sh      # 最小模式，指定初始目录
-  mox-proot -S ~/ubuntu -0 -- apt update    # 装包场景（最小绑定集）
-  mox-proot --help                          # 完整用法
+────────── 先跑这三步，确认装好了 ──────────
+  mox-proot-distro install alpine                      # 最小镜像，几十秒就好
+  mox-proot-distro login alpine -- cat /etc/os-release
+  mox                                                  # 进容器后敲它，出管理台
 
-rootfs 未安装？用 distro 管理器装一个（引擎同一套）：
-  mox-proot-distro install ubuntu
-  mox-proot-distro login ubuntu
+上面两行能跑通就说明引擎、rootfs、路径翻译全部就绪。
+（想装大发行版把 alpine 换成 ubuntu/kali 即可；首次下载会久一点，不是卡死。）
 
-容器内控制台（固定命令，进任意容器后直接输入）：
-  mox                     # 拉起管理控制台（list/install/remove/net/env）
-  mox install kali        # 在容器里再装一个发行版（反穿透到宿主）
+────────── 更进一步的命令（用到再查）──────────
+  mox-proot -R ~/ubuntu -0 -- bash       # 原生引擎：推荐绑定集 + fake root
+  mox-proot --help                       # 完整用法 / 默认绑定集说明
+  mox-proot-distro backup <id>           # 备份（打印归档绝对路径与大小）
+  mox-proot-distro restore <id> <归档>   # 恢复（打印恢复到哪一天的备份）
+  mox-proot-distro versions ubuntu       # 列出可选版本
+  mox-proot-distro time / mox egg        # 时相问候 + 古诗 / 彩蛋
+  mox-proot-installer update             # Go 安装器：richer 更新体验
+                                         # 下载：https://github.com/codecloud-dev/moxsh-proot/releases/tag/proot-latest
 
-惊喜三件套（时间上下文感知 / 古诗 / 彩蛋）：
-  mox                     # 无参进入：按当前时相送应景问候 + 古诗
-  mox egg                 # 隐藏彩蛋（暗号：egg / 彩蛋 / konami / 蛋）
-  mox-proot-distro time   # 单独打印时相问候 + 古诗
-  mox-proot-distro versions ubuntu          # 列出可选版本
-  mox-proot-distro install ubuntu --version "22.04 LTS"   # 选版本号安装
+────────── 付费配方显示 🔒 时 ──────────
+  访问 https://mox-site.pages.dev/fan 兑换，或容器内执行 mox redeem login 授权。
 
-钩子（安装/登录时自动执行，可编辑）：
-  ${MOX_ROOT}/hooks/post-install.py     # 装完后供给检查（DNS/hosts）
-  ${MOX_ROOT}/hooks/pre-login.py        # 登录时环境快照
+钩子（安装/登录时自动执行，可编辑；升级安装不会覆盖你改过的文件）：
+  ${MOX_ROOT}/hooks/provision.py        # 装完后供给检查（DNS/hosts）
+  ${MOX_ROOT}/hooks/login_hook.py       # 登录时环境快照
   ${MOX_ROOT}/hooks/proot.lua           # 声明式配置（motd / DNS 偏好）
-
- richer 更新体验（Go 安装器，支持 update/probe）：
-  mox-proot-installer update
+  ${MOX_ROOT}/hooks/post-install.lua    # 安装后生命周期钩子
+  ${MOX_ROOT}/hooks/pre-login.lua       # 登录前生命周期钩子
 
 有问题反馈：${ISSUES_URL}
 EOF

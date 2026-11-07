@@ -53,6 +53,12 @@ pub fn route(command: &str, args: &[&str], mox_proot_root: &Path) -> String {
 pub fn run_native(args: &[String]) -> i32 {
     // `tui` 子命令（路线图 0.4.0，特性门控）：仅桌面 `--features tui` 构建提供，
     // 拉起 ratatui 控制台。原版 Termux 无此子命令（App 内自有原生 UI）。
+    // 【P1】与 mox-proot-distro 对齐：--version / -V 是纯文本路径，rc=0，
+    // 不触网、不进引擎。安装脚本收尾自检依赖此语义（不再用 `|| true` 吞退出码）。
+    if args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V") {
+        println!("{}", engine_version_line());
+        return 0;
+    }
     #[cfg(feature = "tui")]
     if args.first().map(|s| s.as_str() == "tui").unwrap_or(false) {
         return crate::proot::tui::run_tui();
@@ -683,6 +689,22 @@ pub fn version_line() -> String {
     format!("mox-proot-distro {}（mox-proot 兼容实现）", env!("CARGO_PKG_VERSION"))
 }
 
+/// 独立引擎主程序 `mox-proot` 的版本串。此前只有 distro 二进制实现了
+/// `--version`/`-V`，引擎主程序落到未知子命令 exit 2，安装脚本收尾自检一直假绿。
+pub fn engine_version_line() -> String {
+    format!("mox-proot {}（Rust ptrace 引擎）", env!("CARGO_PKG_VERSION"))
+}
+
+/// 空参数时的精简首屏：只给「装 → 自证 → 进管理台」三步，细节留给 `help`。
+fn quick_start() -> String {
+    "mox-proot-distro —— 三步开始：\n\
+       mox-proot-distro install alpine\n\
+       mox-proot-distro login alpine -- cat /etc/os-release   # 能输出系统信息即装好了\n\
+       mox                                                    # 进容器后打开管理台\n\n\
+     完整命令清单：mox-proot-distro help"
+        .to_string()
+}
+
 /// `proot-distro` 主路由（对齐上游子命令集）。
 pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
     let mgr = DistroManager::new(mox_proot_root);
@@ -731,7 +753,10 @@ pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
         // 【P1】`--version`/`-V`：与 `mox-proot --help` 一样的纯文本路径，
         // 不触网、不触引擎，musl 静态构建也能安全返回。
         "--version" | "-V" => version_line(),
-        "help" | "--help" | "-h" | "" => HELP.to_string(),
+        "help" | "--help" | "-h" => HELP.to_string(),
+        // 【体验修复】用户直接敲 `mox-proot-distro` 回车时给最短上手路径，
+        // 不再把空参数混进「未知子命令」分支，也不塞一整屏速查表。
+        "" => quick_start(),
         other => {
             let known = KNOWN_SUBCOMMANDS;
             let lower = other.to_lowercase();
@@ -899,6 +924,13 @@ fn cmd_recipe(args: &[&str], mox_proot_root: &Path) -> String {
                     "  {:<8} {:<16} {}{}\n",
                     r.id, r.name, r.description, lock
                 ));
+            }
+            // 新手看到 🔒 不知道去哪开通：直接给可点的地址与容器内命令。
+            if out.contains("[🔒]") {
+                out.push_str(
+                    "\n🔒 = 尚未解锁：访问 https://mox-site.pages.dev/fan 兑换，\n\
+                     或在容器内执行 `mox redeem login` 完成授权后重新 list。\n",
+                );
             }
             out
         }
@@ -1575,9 +1607,45 @@ fn cmd_backup(mgr: &DistroManager, args: &[&str]) -> String {
         return "用法: proot-distro backup <id> <out.tar.gz>".into();
     };
     match mgr.backup(id, Path::new(out)) {
-        Ok(()) => format!("已备份到 {}", out),
+        Ok(()) => {
+            // 【体验修复】单独一行打印绝对路径与大小，用户不用再 find / du。
+            let p = Path::new(out);
+            let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            let size = std::fs::metadata(p).map(|m| m.len()).unwrap_or(0);
+            format!(
+                "✓ 已备份 {}\n  归档：{}\n  大小：{:.2} MiB（{} 字节）",
+                id,
+                abs.display(),
+                size as f64 / 1_048_576.0,
+                size
+            )
+        }
         Err(e) => format!("proot-distro: {}", e),
     }
+}
+
+/// UTC 秒 → `YYYY-MM-DD HH:MM UTC`（civil-from-days，避免为此引入 chrono）。
+fn utc_stamp(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let sod = secs % 86_400;
+    let z = days + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if m <= 2 { 1 } else { 0 };
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02} UTC",
+        year,
+        m,
+        d,
+        sod / 3600,
+        (sod % 3600) / 60
+    )
 }
 
 /// `restore <id> <tar>`：恢复。
@@ -1586,7 +1654,18 @@ fn cmd_restore(mgr: &DistroManager, args: &[&str], _mox_proot_root: &Path) -> St
         return "用法: proot-distro restore <id> <tar.tar.gz>".into();
     };
     match mgr.restore(id, Path::new(tar)) {
-        Ok(()) => format!("已恢复 {}", id),
+        Ok(()) => {
+            // 【体验修复】恢复到「哪一天哪一个备份」要明确，避免多份归档时搞混。
+            let when = std::fs::metadata(tar)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| utc_stamp(d.as_secs()));
+            match when {
+                Some(ts) => format!("✓ 已恢复 {} 到 {} 的备份（归档 {}）", id, ts, tar),
+                None => format!("✓ 已恢复 {}（归档 {}）", id, tar),
+            }
+        }
         Err(e) => format!("proot-distro: {}", e),
     }
 }

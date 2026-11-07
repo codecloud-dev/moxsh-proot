@@ -68,6 +68,7 @@ pub mod qrcode_term;
 /// 因此也带 `login` 子命令；此前被 `tui` 门禁挡住，等于后端从未对正式产物开放。
 /// 二维码渲染在无 tui 时降级为「URL + 验证码」纯文本，功能不受影响。
 pub mod device_code;
+pub mod device_claim;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -111,7 +112,13 @@ impl fmt::Display for ProotError {
             ProotError::RootfsMissing(p) => write!(f, "rootfs 不存在: {}", p),
             ProotError::DistroUnknown(id) => write!(f, "未知发行版: {}", id),
             ProotError::DistroAlreadyInstalled(id) => write!(f, "发行版已安装: {}", id),
-            ProotError::DistroNotInstalled(id) => write!(f, "发行版未安装: {}", id),
+            // 【体验修复】用户直接 login 一个没装的发行版时，给出可直接复制的下一步命令，
+            // 而不是只丢一句「发行版未安装」让人不知道该敲什么。
+            ProotError::DistroNotInstalled(id) => write!(
+                f,
+                "发行版未安装: {}\n  下一步（整行复制）：mox-proot-distro install {}",
+                id, id
+            ),
             ProotError::DistroUnsupportedArch { id, host_arch } => write!(
                 f,
                 "发行版 {} 不支持当前架构 {}（可换 ubuntu/debian/alpine，或用自定义 rootfs）",

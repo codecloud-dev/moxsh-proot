@@ -1639,6 +1639,10 @@ impl Tracer {
         // 必须原样放行，强制改写会破坏其语义。
         let is_getcwd = matches!(plan.op, Op::RestoreOnExit);
         let guest = match self.rules.host_to_guest(Path::new(&host)) {
+            // 反推「成功」但结果与输入一模一样 = 根本没映射（命中根绑定
+            // /mox-proot-root 之类时会出现），缓冲里仍是宿主绝对路径。
+            // 对 getcwd 必须继续走剥离兜底，否则 `pwd` 又把宿主路径吐出来。
+            Some(g) if is_getcwd && g == host => self.strip_host_rootfs_for_guest(&host),
             Some(g) => g,
             None if is_getcwd => self.strip_host_rootfs_for_guest(&host),
             None => return false,
@@ -1667,6 +1671,11 @@ impl Tracer {
         let root = root.trim_end_matches('/');
         if !root.is_empty() && root != "/" {
             if let Some(rest) = host.strip_prefix(root) {
+                // 路径边界：/rootfs-evil/xxx 不是 /rootfs 下的路径，不能误剥，
+                // 否则会把宿主上同级目录伪装成 guest 路径。
+                if !rest.is_empty() && !rest.starts_with('/') {
+                    return "/".to_string();
+                }
                 let rest = rest.trim_start_matches('/');
                 return if rest.is_empty() {
                     "/".to_string()
@@ -3488,6 +3497,15 @@ mod tests {
         );
         // 与 rootfs 无关的纯宿主路径：折叠为 /，不泄漏结构。
         assert_eq!(t.strip_host_rootfs_for_guest("/host/secret/dir"), "/");
+        // 同前缀但不是同一目录：必须按路径边界拒绝，不能误剥成 /secret。
+        assert_eq!(
+            t.strip_host_rootfs_for_guest(
+                "/data/data/com.mox-proot/containers/ubuntu/rootfs-evil/secret"
+            ),
+            "/"
+        );
+        // 容器内控制台的根绑定名本身也不能被当成宿主路径吐出去。
+        assert_eq!(t.strip_host_rootfs_for_guest("/mox-proot-root/hooks"), "/");
         // rootfs=/ 的平凡情形也不该抛宿主路径。
         let t2 = Tracer::new(TranslateRules::new(Path::new("/")));
         assert_eq!(t2.strip_host_rootfs_for_guest("/any/host/path"), "/");

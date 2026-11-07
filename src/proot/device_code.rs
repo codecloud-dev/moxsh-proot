@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use crate::proot::backend;
+use crate::proot::device_claim::{self, DeviceClaim};
 
 /// 后端基址默认常量：取 [`backend::ID_BASE`] 的真实部署地址。
 /// 可用环境变量 `MOX_ID_BASE` 覆盖（自托管 / 联调）。
@@ -97,29 +98,70 @@ pub fn load_device_token() -> Option<String> {
 
 // ───────────────────────── 网络层（curl） ─────────────────────────
 
-fn curl_post_json(url: &str, body: &str) -> Result<String, String> {
+/// POST JSON；`claim` 非空时同时带 `X-Mox-Device-Claim` 头。
+///
+/// 后端已改为**强制设备声明**：不带声明的 `/device/code` 直接 400 不发码。
+/// header + body 双通道是为了兼容会剥离自定义头的反代/CDN。
+fn curl_post_json(url: &str, body: &str, claim: Option<&DeviceClaim>) -> Result<String, String> {
+    let header;
+    // 不用 -f：/device/token 的 authorization_pending / expired_token 等业务状态
+    // 走 HTTP 400 + JSON body，`-f` 会把它们一律变成 curl 22，轮询永远「网络失败」。
+    // 改用 -w 取状态码，4xx 的 body 交回解析层，只有 5xx 与传输层失败才报错。
+    let mut args: Vec<&str> = vec![
+        "-sS", "-X", "POST", "-H", "content-type: application/json", "-w", "\n%{http_code}",
+    ];
+    if let Some(c) = claim {
+        header = format!("X-Mox-Device-Claim: {}", c.header_value());
+        args.push("-H");
+        args.push(&header);
+    }
+    args.extend_from_slice(&["--max-time", "20", "-d", body, url]);
     let out = Command::new("curl")
-        .args(["-fsS", "-X", "POST", "-H", "content-type: application/json", "--max-time", "20", "-d", body, url])
+        .args(&args)
         .output()
         .map_err(|e| format!("调用 curl 失败（请确认系统已安装 curl）: {e}"))?;
     if !out.status.success() {
-        return Err(format!("请求 {} 失败 (HTTP {})", url, out.status.code().unwrap_or(-1)));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!(
+            "请求 {} 失败 (curl {})：{}",
+            url,
+            out.status.code().unwrap_or(-1),
+            stderr.trim()
+        ));
     }
-    String::from_utf8(out.stdout).map_err(|_| "响应不是合法 UTF-8".to_string())
+    let raw = String::from_utf8(out.stdout).map_err(|_| "响应不是合法 UTF-8".to_string())?;
+    let (body, code_s) = raw.rsplit_once('\n').unwrap_or((raw.as_str(), "000"));
+    let code: u32 = code_s.trim().parse().unwrap_or(0);
+    if code >= 500 || code == 0 {
+        return Err(format!("请求 {} 失败 (HTTP {})：{}", url, code, body.trim()));
+    }
+    Ok(body.to_string())
 }
 
-/// 请求设备码（联网）。
+/// 当前设备声明（申请码与轮询共用同一份，服务端据此比对设备一致性）。
+fn claim_for_request() -> Result<DeviceClaim, String> {
+    device_claim::build()
+}
+
+/// 请求设备码（联网）。**必须携带设备声明**，否则后端拒绝签发。
 pub fn request_code(base: &str) -> Result<DeviceCodeResp, String> {
+    let claim = claim_for_request()?;
     let url = backend::join(base, "/device/code");
-    let text = curl_post_json(&url, "{}")?;
+    let body = format!("{{\"device_claim\":{}}}", claim.canonical_json());
+    let text = curl_post_json(&url, &body, Some(&claim))?;
     parse_device_code(&text)
 }
 
-/// 轮询换取 device_token（联网）。
+/// 轮询换取 device_token（联网）。带同一设备声明，防止设备码被别的设备冒领。
 pub fn poll_token(base: &str, device_code: &str) -> Result<PollOutcome, String> {
+    let claim = claim_for_request()?;
     let url = backend::join(base, "/device/token");
-    let body = format!("{{\"device_code\":\"{}\"}}", escape_json(device_code));
-    let text = curl_post_json(&url, &body)?;
+    let body = format!(
+        "{{\"device_code\":\"{}\",\"device_claim\":{}}}",
+        escape_json(device_code),
+        claim.canonical_json()
+    );
+    let text = curl_post_json(&url, &body, Some(&claim))?;
     Ok(parse_token(&text))
 }
 

@@ -237,9 +237,9 @@ jobs:
         with:
           # 2026-11-08：key 必须带链接指纹。旧缓存里存着「动态 musl TUI」二进制，
           # 复用后即使改了 RUSTFLAGS，cargo 也可能直接 Fresh 跳过重新链接。
-          # v3：去掉 -static（与 +crt-static 混用导致静态产物启动期 TLS 错配 SIGSEGV），
-          # 仅用 target 专属 +crt-static，与已验证可跑的 build-engine 完全对齐。
-          key: release-tui-${{ matrix.target }}-static-v3
+          # v4：不再自造 RUSTFLAGS，逐字复制 build-engine 的成功路径
+          #（GITHUB_ENV 链接器 + 完全依赖 .cargo/config.toml 的 +crt-static）。
+          key: release-tui-${{ matrix.target }}-static-v4
       - name: 安装 musl 工具链
         if: matrix.cc == 'musl-gcc'
         timeout-minutes: 8
@@ -260,17 +260,34 @@ jobs:
           done
           echo "::error::安装 musl-tools 失败（apt 源不可用）"
           exit 1
+      # 与 build-engine 的「配置 CC / AR / LINKER」步骤逐字一致：写进 GITHUB_ENV
+      # 成为 job 级环境变量，而不是 step 级 env。三轮 CI 实测：build-tui 一旦在
+      # step 级 env 里塞 CARGO_TARGET_*（LINKER 或 RUSTFLAGS），产物就退回动态 musl；
+      # build-engine 用 GITHUB_ENV + 裸 cargo build + .cargo/config.toml 的
+      # [target.x86_64-unknown-linux-musl] rustflags，稳定产出可跑的 static-pie。
+      - name: 配置 musl 链接器（对齐 build-engine）
+        if: matrix.cc == 'musl-gcc'
+        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
       - name: cargo build --release --features tui
-        env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.cc }}
-          # 2026-11-08 真机实测 + 两轮 CI 复核：
-          #   · step 级 RUSTFLAGS 曾被旧缓存复用绕过 → 产物动态、启动 SIGSEGV；
-          #   · 改 target 专属 + 冷缓存后 +crt-static 生效；但额外叠加 -C link-arg=-static
-          #     虽让产物无 INTERP，却与 rustc self-contained CRT 混用，静态产物 --version
-          #     仍 SIGSEGV(139)。build-engine 只用 +crt-static（config.toml）即产出可跑的
-          #     static-pie，故此处只保留 +crt-static，与成功路径逐字对齐，不画蛇添足。
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
+      # 兜底：若默认构建仍是动态 musl（缺 /lib/ld-musl-x86_64.so.1 的机器上启动必崩），
+      # 用「纯 -static、不叠加 +crt-static」重链一次 —— 避免 rustc self-contained CRT
+      # 与 musl-gcc 启动文件重复导致静态产物启动期 SIGSEGV(139)。收集步骤会硬验静态 + 可跑。
+      - name: 确保 musl TUI 静态链接（必要时纯 -static 重链）
+        if: contains(matrix.target, 'musl')
+        run: |
+          set -e
+          BIN="target/${{ matrix.target }}/release/mox-proot-tui"
+          if file "$BIN" | grep -Eq 'static'; then
+            echo "OK: 默认构建已静态（对齐 build-engine 的 +crt-static）"
+            exit 0
+          fi
+          echo "!! 默认构建仍是动态 musl，改用纯 -C link-arg=-static 重链"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-arg=-static" \
+            cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
+          echo "=== 重链后 ==="; file "$BIN"
+          readelf -l "$BIN" | grep -i interp || echo "NO_INTERP（静态）"
       - name: 收集 TUI 产物（含静态链接与 CLI 自检）
         run: |
           set -e

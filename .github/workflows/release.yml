@@ -237,7 +237,9 @@ jobs:
         with:
           # 2026-11-08：key 必须带链接指纹。旧缓存里存着「动态 musl TUI」二进制，
           # 复用后即使改了 RUSTFLAGS，cargo 也可能直接 Fresh 跳过重新链接。
-          key: release-tui-${{ matrix.target }}-static-v2
+          # v3：去掉 -static（与 +crt-static 混用导致静态产物启动期 TLS 错配 SIGSEGV），
+          # 仅用 target 专属 +crt-static，与已验证可跑的 build-engine 完全对齐。
+          key: release-tui-${{ matrix.target }}-static-v3
       - name: 安装 musl 工具链
         if: matrix.cc == 'musl-gcc'
         timeout-minutes: 8
@@ -261,28 +263,41 @@ jobs:
       - name: cargo build --release --features tui
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.cc }}
-          # 2026-11-08 真机实测 + CI 复核：step 级 RUSTFLAGS 实测没能改变最终链接方式
-          # （产物仍是 dynamically linked / interpreter /lib/ld-musl-x86_64.so.1，
-          # 启动期 TLS 初始化即 SIGSEGV，连 --version 都跑不了）。改用 target 专属
-          # CARGO_TARGET_*_RUSTFLAGS（不影响 host build scripts），并在链接器层硬加
-          # -static —— 双保险保证产物无 PT_INTERP；cache key 同时换版强制冷链接。
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static -C link-arg=-static' || '' }}
+          # 2026-11-08 真机实测 + 两轮 CI 复核：
+          #   · step 级 RUSTFLAGS 曾被旧缓存复用绕过 → 产物动态、启动 SIGSEGV；
+          #   · 改 target 专属 + 冷缓存后 +crt-static 生效；但额外叠加 -C link-arg=-static
+          #     虽让产物无 INTERP，却与 rustc self-contained CRT 混用，静态产物 --version
+          #     仍 SIGSEGV(139)。build-engine 只用 +crt-static（config.toml）即产出可跑的
+          #     static-pie，故此处只保留 +crt-static，与成功路径逐字对齐，不画蛇添足。
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
       - name: 收集 TUI 产物（含静态链接与 CLI 自检）
         run: |
           set -e
           BIN="target/${{ matrix.target }}/release/mox-proot-tui"
+          # 无条件打印链接形态：musl 启动期 SIGSEGV 反复出现，留足现场证据。
+          echo "=== 产物链接形态（诊断）==="
+          file "$BIN"
+          readelf -h "$BIN" | grep -iE "Type:" || true
+          readelf -l "$BIN" | grep -i interp || echo "NO_INTERP（静态，无动态加载器）"
           if [[ "${{ matrix.target }}" == *musl* ]]; then
             if ! file "$BIN" | grep -Eq 'static'; then
               echo "::error::musl TUI 产物不是静态链接，启动期会 SIGSEGV"
-              file "$BIN"
               exit 1
             fi
           fi
           # x86_64 产物可本机直跑：--version / --help 必须在无 TTY 下 rc=0。
           # 这一条会在 CI 里拦住「装完见不到 TUI」的坏资产。
           if [[ "${{ matrix.target }}" == x86_64* ]]; then
-            "$BIN" --version
+            if ! "$BIN" --version; then
+              echo "::error::TUI 无 TTY --version 崩溃（装完见不到 TUI），抓 syscall 现场"
+              command -v strace >/dev/null 2>&1 || sudo apt-get install -y -qq strace >/dev/null 2>&1 || true
+              if command -v strace >/dev/null 2>&1; then
+                strace -f -o /tmp/tui.strace "$BIN" --version || true
+                echo "=== strace 尾部 ==="; tail -25 /tmp/tui.strace || true
+              fi
+              exit 1
+            fi
             "$BIN" --help > /dev/null
             echo "TUI CLI 自检通过"
           fi

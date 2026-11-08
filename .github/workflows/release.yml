@@ -235,7 +235,9 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          key: release-tui-${{ matrix.target }}
+          # 2026-11-08：key 必须带链接指纹。旧缓存里存着「动态 musl TUI」二进制，
+          # 复用后即使改了 RUSTFLAGS，cargo 也可能直接 Fresh 跳过重新链接。
+          key: release-tui-${{ matrix.target }}-static-v2
       - name: 安装 musl 工具链
         if: matrix.cc == 'musl-gcc'
         timeout-minutes: 8
@@ -259,10 +261,12 @@ jobs:
       - name: cargo build --release --features tui
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.cc }}
-          # 2026-11-08 真机实测：build-tui 单独 job 曾产出「动态链接 musl」的 TUI
-          # （interpreter /lib/ld-musl-x86_64.so.1），启动期 TLS 初始化即 SIGSEGV，
-          # 连 --version 都跑不了。显式 +crt-static 与 build-engine 对齐。
-          RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
+          # 2026-11-08 真机实测 + CI 复核：step 级 RUSTFLAGS 实测没能改变最终链接方式
+          # （产物仍是 dynamically linked / interpreter /lib/ld-musl-x86_64.so.1，
+          # 启动期 TLS 初始化即 SIGSEGV，连 --version 都跑不了）。改用 target 专属
+          # CARGO_TARGET_*_RUSTFLAGS（不影响 host build scripts），并在链接器层硬加
+          # -static —— 双保险保证产物无 PT_INTERP；cache key 同时换版强制冷链接。
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static -C link-arg=-static' || '' }}
         run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
       - name: 收集 TUI 产物（含静态链接与 CLI 自检）
         run: |

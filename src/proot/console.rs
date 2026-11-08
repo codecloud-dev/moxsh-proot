@@ -112,6 +112,11 @@ _  _ ____ _  _
   mox-proot
 MOX_BANNER
   __mox_greet
+  # 装了 TUI 且当前是交互终端 → 无参 mox 直接进图形控制台。
+  # 无 TTY（脚本 / CI / ssh -c）时回退命令版，绝不硬崩、绝不 os error 11。
+  if [ -x "$(dirname "$0")/mox-proot-tui" ] && [ -t 0 ] && [ -t 1 ]; then
+    exec "$(dirname "$0")/mox-proot-tui" "$@"
+  fi
 fi
 exec env MOX_ROOT="$ROOT" "$(dirname "$0")/mox-proot-distro" "$@"
 "#;

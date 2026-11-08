@@ -759,6 +759,8 @@ pub fn is_error_output(s: &str) -> bool {
     }
     t.starts_with("用法:")
         || t.starts_with("✗")
+        || t.starts_with("wizard: 未知参数")
+        || t.starts_with("wizard: 非法发行版")
         || t.starts_with("proot-distro: 未知发行版")
         || t.starts_with("proot-distro: 安装失败")
         || t.starts_with("proot-distro net: ")

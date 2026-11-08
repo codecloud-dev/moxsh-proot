@@ -149,7 +149,8 @@ fn wizard_bad_args() {
         (vec!["wizard", "--bogus"], "未知参数"),
     ] {
         let out = sb.run(&args);
-        assert!(out.status.success(), "{:?} 应退出 0", args);
+        // 2026-11-08 真机复测：CLI 错误路径统一 rc≠0（用法/缺参数/未知参数）。
+        assert!(!out.status.success(), "{:?} 是用法错误，应退出非 0：{:?}", args, out);
         let stdout = String::from_utf8_lossy(&out.stdout);
         assert!(
             stdout.contains(needle),

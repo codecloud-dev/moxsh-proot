@@ -230,16 +230,19 @@ jobs:
             cc: musl-gcc
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      # 【根因·2026-11-08 第四轮 CI 定位】此前这里用 @stable（当前 1.9x），
+      # 而 build-engine 用 @master + 固定 1.86.0。两代 rustc 对 musl 的
+      # crt-static 默认行为不同：同一份 .cargo/config.toml 在 1.86 产出可跑的
+      # static-pie，在 1.9x 却产出动态 musl（缺 ld-musl 的机器上启动即 SIGSEGV）。
+      # TUI 与引擎必须用同一个 toolchain，逐字对齐，不再各装各的 stable。
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.86.0"
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          # 2026-11-08：key 必须带链接指纹。旧缓存里存着「动态 musl TUI」二进制，
-          # 复用后即使改了 RUSTFLAGS，cargo 也可能直接 Fresh 跳过重新链接。
-          # v4：不再自造 RUSTFLAGS，逐字复制 build-engine 的成功路径
-          #（GITHUB_ENV 链接器 + 完全依赖 .cargo/config.toml 的 +crt-static）。
-          key: release-tui-${{ matrix.target }}-static-v4
+          # v5：换 1.86.0 toolchain 后必须冷编译，避免复用 1.9x 的动态产物。
+          key: release-tui-${{ matrix.target }}-static-v5
       - name: 安装 musl 工具链
         if: matrix.cc == 'musl-gcc'
         timeout-minutes: 8
@@ -270,24 +273,6 @@ jobs:
         run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
       - name: cargo build --release --features tui
         run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
-      # 兜底：若默认构建仍是动态 musl（缺 /lib/ld-musl-x86_64.so.1 的机器上启动必崩），
-      # 用「纯 -static、不叠加 +crt-static」重链一次 —— 避免 rustc self-contained CRT
-      # 与 musl-gcc 启动文件重复导致静态产物启动期 SIGSEGV(139)。收集步骤会硬验静态 + 可跑。
-      - name: 确保 musl TUI 静态链接（必要时纯 -static 重链）
-        if: contains(matrix.target, 'musl')
-        run: |
-          set -e
-          BIN="target/${{ matrix.target }}/release/mox-proot-tui"
-          if file "$BIN" | grep -Eq 'static'; then
-            echo "OK: 默认构建已静态（对齐 build-engine 的 +crt-static）"
-            exit 0
-          fi
-          echo "!! 默认构建仍是动态 musl，改用纯 -C link-arg=-static 重链"
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc \
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-arg=-static" \
-            cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
-          echo "=== 重链后 ==="; file "$BIN"
-          readelf -l "$BIN" | grep -i interp || echo "NO_INTERP（静态）"
       - name: 收集 TUI 产物（含静态链接与 CLI 自检）
         run: |
           set -e

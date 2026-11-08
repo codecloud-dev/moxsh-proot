@@ -570,6 +570,28 @@ jobs:
               echo "OK   $f"
             fi
           done
+
+          # 5) 【2026-11-08 国内镜像上线验收修复】清理 Gitee 上「GitHub 已下架」的
+          #    陈旧附件。镜像 job 历来只做增量上传/刷新、从不删除，GitHub 侧删掉的
+          #    坏资产会永久留在国内：实测 `mox-proot-tui-linux-amd64-musl`（动态
+          #    musl，--version 直接 SIGSEGV rc=139）在 Gitee 仍 HTTP 200 可下载。
+          #    只清理 `mox-proot-*` 前缀；旧名 `moxsh-*` 历史资产不动。
+          while IFS=$'\t' read -r gname gid gsz gurl; do
+            case "$gname" in mox-proot-*) ;; *) continue ;; esac
+            [ -z "$gid" ] && continue
+            [ -f "$gname" ] && continue
+            pcode="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \
+              --connect-timeout 10 --max-time 120 \
+              -H "Authorization: token ${GITEE_TOKEN}" "${API}/${gid}" 2>/dev/null || echo 000)"
+            if [ "$pcode" = "200" ] || [ "$pcode" = "204" ] || [ "$pcode" = "404" ]; then
+              ok=$((ok+1))
+              echo "PURGE $gname（GitHub 已无此资产，已从国内镜像下架）HTTP=${pcode}"
+            else
+              fail=$((fail+1))
+              echo "::error::PURGE $gname 失败 HTTP=${pcode}（坏资产仍可被国内用户下载）"
+            fi
+          done < /tmp/gassets.tsv
+
           echo "=== Gitee 同步：$ok 成功 / $fail 失败 ==="
           # 4) 结果诊断：允许「零新增」（资产已齐）通过；有失败则**让 job 变红**，
           #    绝不静默放行——同名旧二进制会让国内用户下到修复前版本，

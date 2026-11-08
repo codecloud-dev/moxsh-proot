@@ -214,6 +214,16 @@ jobs:
   # TUI 控制台二进制：依赖 ratatui 0.29 / qrcode 0.14，依赖链要求 rustc 1.88+，
   # 而引擎 CI 锁 1.86.0（glibc 2.35 基线）——故单独用 stable 构建，不塞进
   # build-engine 矩阵。此前 `--bins` 不带 tui，release 里根本没有 TUI 资产。
+  #
+  # 【2026-11-08 五轮 CI 实证结论】只发布 gnu TUI，暂不发布 musl TUI：
+  #   · TUI 依赖链（darling 0.24 / image 0.25 / instability）MSRV ≥ 1.88，
+  #     而能产出「可跑 static-pie」的引擎 toolchain 是 1.86.0 —— 用 1.86 编不了
+  #     TUI，用 ≥1.88 编 musl 又退回动态链接（缺 ld-musl 的机器启动即 SIGSEGV）。
+  #   · 强行 -static 得到静态 EXEC，但 TUI 依赖仍崩在第一个 syscall 之前（strace 空）。
+  # 与其发布一个「装完一跑就段错误」的坏资产、并把整条发布链路（checksums /
+  # Gitee 镜像）一起拖红，不如只发 gnu TUI：musl 平台由安装器自动跳过 TUI 资产并
+  # 降级命令版（launch_sibling_tui 缺文件时友好提示 rc=2，不硬崩）。
+  # 待 TUI 依赖降到 MSRV 1.86 或换掉静态 musl CRT 方案后再恢复该矩阵项。
   build-tui:
     name: TUI 控制台（${{ matrix.name }}）
     runs-on: ubuntu-22.04
@@ -224,53 +234,14 @@ jobs:
         include:
           - target: x86_64-unknown-linux-gnu
             name: linux-amd64
-            cc: ""
-          - target: x86_64-unknown-linux-musl
-            name: linux-amd64-musl
-            cc: musl-gcc
     steps:
       - uses: actions/checkout@v4
-      # 【根因·2026-11-08 第四轮 CI 定位】此前这里用 @stable（当前 1.9x），
-      # 而 build-engine 用 @master + 固定 1.86.0。两代 rustc 对 musl 的
-      # crt-static 默认行为不同：同一份 .cargo/config.toml 在 1.86 产出可跑的
-      # static-pie，在 1.9x 却产出动态 musl（缺 ld-musl 的机器上启动即 SIGSEGV）。
-      # TUI 与引擎必须用同一个 toolchain，逐字对齐，不再各装各的 stable。
-      - uses: dtolnay/rust-toolchain@master
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: "1.86.0"
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          # v5：换 1.86.0 toolchain 后必须冷编译，避免复用 1.9x 的动态产物。
-          key: release-tui-${{ matrix.target }}-static-v5
-      - name: 安装 musl 工具链
-        if: matrix.cc == 'musl-gcc'
-        timeout-minutes: 8
-        run: |
-          if command -v musl-gcc >/dev/null 2>&1; then
-            echo "musl-gcc 已预装，跳过 apt"
-            exit 0
-          fi
-          export DEBIAN_FRONTEND=noninteractive
-          APT='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Dpkg::Use-Pty=0'
-          for i in 1 2 3; do
-            if sudo apt-get $APT update -qq && \
-               sudo apt-get $APT install -y --no-install-recommends musl-tools; then
-              exit 0
-            fi
-            echo "apt 第 $i 次失败，5 秒后重试"
-            sleep 5
-          done
-          echo "::error::安装 musl-tools 失败（apt 源不可用）"
-          exit 1
-      # 与 build-engine 的「配置 CC / AR / LINKER」步骤逐字一致：写进 GITHUB_ENV
-      # 成为 job 级环境变量，而不是 step 级 env。三轮 CI 实测：build-tui 一旦在
-      # step 级 env 里塞 CARGO_TARGET_*（LINKER 或 RUSTFLAGS），产物就退回动态 musl；
-      # build-engine 用 GITHUB_ENV + 裸 cargo build + .cargo/config.toml 的
-      # [target.x86_64-unknown-linux-musl] rustflags，稳定产出可跑的 static-pie。
-      - name: 配置 musl 链接器（对齐 build-engine）
-        if: matrix.cc == 'musl-gcc'
-        run: echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
+          key: release-tui-${{ matrix.target }}-gnu-v1
       - name: cargo build --release --features tui
         run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
       - name: 收集 TUI 产物（含静态链接与 CLI 自检）

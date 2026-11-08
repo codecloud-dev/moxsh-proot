@@ -392,7 +392,7 @@ jobs:
       - name: 增量上传/刷新资产到 Gitee release
         env:
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
-        timeout-minutes: 90
+        timeout-minutes: 110
         run: |
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
@@ -463,12 +463,27 @@ jobs:
           echo "内容复核预下载完成：$(find /tmp/gcheck -type f | wc -l) 个"
 
           ok=0; fail=0; consecutive=0
+          # 【2026-11-08 真机复测修复】记录本轮「已确认与本地一致」的二进制。
+          # 旧版按文件名字母序遍历，5MB 级 installer POST 超时失败时，同名
+          # `.sha256` 却已刷新成新 hash → 国内镜像「校验文件指向新二进制、
+          # 文件仍是旧的」，用户 sha256sum -c 必挂，比 job 变红更隐蔽。
+          # 现在二进制没确认同步就不许动它的 .sha256，保证任何时刻国内镜像
+          # 都是自洽的一套（要么全旧、要么全新）。
+          : > /tmp/g_synced.txt
           for f in *; do
             [ "$f" = "SHA256SUMS" ] && continue
             # 旧名 moxsh-* 是改名前的历史遗留资产，安装脚本与客户端只用
             # mox-proot-* 新名；其中包含 5MB 旧 installer，逐个 DELETE+POST
             # 会把整条 job 拖到超时（09:04 实测）。跳过它们不影响国内下载。
             case "$f" in mox-proot-*) ;; *) echo "SKIP $f（旧名历史资产，不再同步）"; continue ;; esac
+            case "$f" in
+              *.sha256)
+                if ! grep -Fxq "${f%.sha256}" /tmp/g_synced.txt; then
+                  echo "HOLD  $f（对应二进制未确认同步，跳过以防 sha256 与旧二进制错配）"
+                  continue
+                fi
+                ;;
+            esac
             fsz="$(stat -c %s "$f")"
             pending_del=""
             if has "$f"; then
@@ -483,7 +498,11 @@ jobs:
                 if [ -s "/tmp/gcheck/$f" ]; then
                   g_sum="$(sha256sum "/tmp/gcheck/$f" | cut -d' ' -f1)"
                 fi
-                if [ "$g_sum" = "$l_sum" ]; then echo "SKIP $f（Gitee 内容 sha256 一致）"; continue; fi
+                if [ "$g_sum" = "$l_sum" ]; then
+                  echo "SKIP $f（Gitee 内容 sha256 一致）"
+                  echo "$f" >> /tmp/g_synced.txt
+                  continue
+                fi
                 if [ -z "$g_sum" ]; then
                   # 拿不到远端内容时**绝不 SKIP**：无法证明一致就按「可能过期」，
                   # 直接重传本次产物（宁可多传，也不能让国内继续下发旧二进制）。
@@ -502,9 +521,16 @@ jobs:
             # 【关键】先传新、后删旧：POST 超时/失败时旧附件仍在，绝不会重演
             # 09:04 那次「DELETE 成功但 POST 超时 → 国内镜像直接缺件」的事故。
             code="000"
+            # 5MB 级 Go installer 跨国 POST 实测 240s 不够（2026-11-08 四个
+            # installer 连续两次各耗满 240s，共 8 分钟/个，全部 HTTP 000）。
+            # 按体积分级给超时：小文件仍 240s，大文件 600s，避免一刀切拖死 job。
+            if [ "$fsz" -ge 1048576 ]; then post_maxtime=600; else post_maxtime=240; fi
             for attempt in 1 2; do
+              # 覆盖写响应体：POST 超时会留下上一个资产的 JSON，旧版据此打印的
+              # 报错内容其实是别的资产，误导排障。
+              : > /tmp/g.json
               code="$(curl -sS -o /tmp/g.json -w '%{http_code}' -X POST \
-                --connect-timeout 10 --max-time 240 \
+                --connect-timeout 10 --max-time "$post_maxtime" \
                 -H "Authorization: token ${GITEE_TOKEN}" \
                 "${API}" -F "file=@${f}" 2>/dev/null || echo 000)"
               if [ "$code" = "200" ] || [ "$code" = "201" ]; then break; fi
@@ -525,6 +551,7 @@ jobs:
               continue
             fi
             ok=$((ok+1)); consecutive=0
+            echo "$f" >> /tmp/g_synced.txt
             # 新版已落地才删旧；删除失败只警告，下次 job 的去重步骤会清理。
             if [ -n "$pending_del" ]; then
               dcode="$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE \

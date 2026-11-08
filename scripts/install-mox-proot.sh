@@ -339,9 +339,12 @@ install_bin "mox-proot-distro-${ASSET_SUFFIX}" "mox-proot-distro"
 log "安装完成：${BINDIR}/mox-proot-distro"
 
 # ---------------------------------------------------------------- TUI 控制台（可选资产）
-# 2026-11-08 真机实测：Release 目前只为 linux-amd64 / linux-amd64-musl 发布 TUI 资产，
-# Android / arm64 尚无。绝不能因为缺 TUI 让整个安装 die（那比没有 TUI 更糟）。
-# 先用 HEAD 快速探活，存在才下载 + 校验 sha256；任何失败仅警告，命令版照常可用。
+# 2026-11-08 五轮 CI 实证：Release 只为 linux-amd64（gnu）发布 TUI。
+#   musl TUI 的依赖链 MSRV ≥1.88 与「能产出可跑静态产物」的 1.86 工具链冲突，
+#   强行 -static 得到静态 EXEC 但仍在首个 syscall 前 SIGSEGV，故 musl TUI 已整体
+#   下架；Android / arm64 同样没有 TUI 资产。这些平台自动降级为命令版。
+# 缺 TUI 绝不能让整个安装 die（那比没有 TUI 更糟）。先用 HEAD 探活，存在才
+# 下载 + 校验 sha256；任何失败仅警告，命令版照常可用。
 TUI_ASSET="mox-proot-tui-${ASSET_SUFFIX}"
 TUI_READY=0
 if curl -fsSIL --connect-timeout 6 --max-time 12 "${BASE_URL}/${TUI_ASSET}.sha256" >/dev/null 2>&1; then

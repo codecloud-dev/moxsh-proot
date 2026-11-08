@@ -1,21 +1,23 @@
 //! 后端基址**单一来源**：把散在设备码 / 粉丝 / 商品授权三个客户端里的
 //! 硬编码地址收口，彻底解决「后端早就部署了，客户端却指着占位域名」。
 //!
-//! ## 真实链路（已核对 mox-id 与 mox-site 两个仓库）
+//! ## 真实链路（2026-11-08 线上实测复核）
 //! ```text
-//!   终端 ──POST /device/code──► https://mox-site.pages.dev   （官网 Pages）
+//!   终端 ──POST /device/code──► https://mox-site.pages.dev   （官网 Pages，客户端唯一入口）
 //!                                    │ functions/[[path]].js 同域反代
 //!                                    ▼
-//!                              https://mox-id.moxsh.app      （Worker 真实域）
-//!                                    │ 兜底
+//!              mox-id.moxsh.app（拟启用中性域；NS 未切到 CF 账号前公网 DNS 仍 NXDOMAIN）
+//!                                    │ 自动回落
 //!                                    ▼
-//!                        https://mox-id.codecloud.workers.dev
+//!                      https://mox-id.3042980037.workers.dev
 //! ```
+//! 客户端只使用 `PUBLIC_BASE`：走官网同域可绕开 `moxsh.app` 的 DNS 与
+//! `workers.dev` 的国内直连不稳，且 SSO 与官网会话同源不断链。
+//! `UPSTREAM_BASE` / `WORKERS_FALLBACK` 仅用于**记录 Pages 反代候选**，
+//! 不参与任何请求拼装——不要拿它们当请求目标。
 //! Pages Functions 的 `onRequestPost` 一律转发 Worker；`onRequestGet` 对
 //! 未命中静态 html 的动态路径同样反代。因此 `/device/code`、`/device/token`、
 //! `/fan/verify`、`/entitlement/check`、`/activate` 走**官网同域**即可。
-//! 走同域还有两个额外好处：国内可达（workers.dev 直连不稳），且 SSO 与
-//! 官网 localStorage 的 mox_token 同源不断链。
 //!
 //! 旧的 `https://mox-id.mox-proot.app` 是**从未部署的占位域名**，
 //! `https://codecloud-dev.github.io/mox-site` 是已废弃的 Pages 地址。
@@ -27,10 +29,11 @@
 
 /// 对外统一入口：官网 Pages（同域反代 + 国内可达 + SSO 同源）。
 pub const PUBLIC_BASE: &str = "https://mox-site.pages.dev";
-/// mox-id Worker 的真实上游域名（Pages Functions 的 `UPSTREAM`）。
+/// Pages Functions 首选上游（拟启用中性域）。2026-11-08 实测公网 DNS 仍 NXDOMAIN，
+/// 反代会自动回落；**客户端一律走 `PUBLIC_BASE`，不得用本常量发请求**。
 pub const UPSTREAM_BASE: &str = "https://mox-id.moxsh.app";
-/// Worker 兜底域（Pages Functions 的 `LEGACY_UPSTREAM`）。
-pub const WORKERS_FALLBACK: &str = "https://mox-id.codecloud.workers.dev";
+/// Pages Functions 当前实际兜底域（与 mox-site/functions/[[path]].js 的 LEGACY_UPSTREAM 逐字一致）。
+pub const WORKERS_FALLBACK: &str = "https://mox-id.3042980037.workers.dev";
 
 /// 兼容常量：mox-id 侧端点基址（即对外入口）。
 pub const ID_BASE: &str = PUBLIC_BASE;
@@ -88,10 +91,15 @@ mod tests {
     fn uses_real_deployed_hosts_only() {
         assert_eq!(PUBLIC_BASE, "https://mox-site.pages.dev");
         assert_eq!(UPSTREAM_BASE, "https://mox-id.moxsh.app");
+        // 兜底域必须与官网反代里的 LEGACY_UPSTREAM 逐字一致，防文档漂移
+        assert_eq!(WORKERS_FALLBACK, "https://mox-id.3042980037.workers.dev");
         // 占位域名与废弃 Pages 地址不得回流
         assert!(!PUBLIC_BASE.contains("mox-proot.app"));
         assert!(!PUBLIC_BASE.contains("github.io"));
         assert!(!UPSTREAM_BASE.contains("mox-proot.app"));
+        // 客户端请求目标只能是官网同域，绝不落到不解析的 moxsh.app
+        assert!(!id_base().contains("moxsh.app"));
+        assert!(!endpoint("/device/code").contains("moxsh.app"));
     }
 
     #[test]

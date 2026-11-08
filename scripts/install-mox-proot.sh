@@ -338,6 +338,27 @@ fetch_asset "mox-proot-distro-${ASSET_SUFFIX}"
 install_bin "mox-proot-distro-${ASSET_SUFFIX}" "mox-proot-distro"
 log "安装完成：${BINDIR}/mox-proot-distro"
 
+# ---------------------------------------------------------------- TUI 控制台（可选资产）
+# 2026-11-08 真机实测：Release 目前只为 linux-amd64 / linux-amd64-musl 发布 TUI 资产，
+# Android / arm64 尚无。绝不能因为缺 TUI 让整个安装 die（那比没有 TUI 更糟）。
+# 先用 HEAD 快速探活，存在才下载 + 校验 sha256；任何失败仅警告，命令版照常可用。
+TUI_ASSET="mox-proot-tui-${ASSET_SUFFIX}"
+TUI_READY=0
+if curl -fsSIL --connect-timeout 6 --max-time 12 "${BASE_URL}/${TUI_ASSET}.sha256" >/dev/null 2>&1; then
+  if fetch_asset_file "$TUI_ASSET" "${TMP}/${TUI_ASSET}" && \
+     fetch_asset_file "${TUI_ASSET}.sha256" "${TMP}/${TUI_ASSET}.sha256" && \
+     ( cd "$TMP" && sha256sum -c "${TUI_ASSET}.sha256" ) >/dev/null 2>&1; then
+    if install -m 0755 "${TMP}/${TUI_ASSET}" "${BINDIR}/mox-proot-tui"; then
+      TUI_READY=1
+    fi
+  fi
+fi
+if [ "$TUI_READY" = 1 ]; then
+  log "TUI 控制台就绪：${BINDIR}/mox-proot-tui（无参 mox / mox-proot tui 可进）"
+else
+  warn "本平台暂无 TUI 控制台资产（${TUI_ASSET}），已跳过；命令版不受影响"
+fi
+
 # ---------------------------------------------------------------- 控制台入口
 # 容器内固定命令 mox（roadmap §3：不开放自定义；与引擎 console::CONSOLE_SCRIPT
 # 同源——bind-mount 反穿透到宿主 MOX_ROOT 执行管理子命令）。
@@ -411,6 +432,11 @@ _  _ ____ _  _
   mox-proot
 MOX_BANNER
   __mox_greet
+  # 装了 TUI 且当前是交互终端 → 无参 mox 直接进图形控制台。
+  # 无 TTY（脚本 / CI / ssh -c）时回退命令版，绝不硬崩、绝不 os error 11。
+  if [ -x "$(dirname "$0")/mox-proot-tui" ] && [ -t 0 ] && [ -t 1 ]; then
+    exec "$(dirname "$0")/mox-proot-tui" "$@"
+  fi
 fi
 exec env MOX_ROOT="$ROOT" "$(dirname "$0")/mox-proot-distro" "$@"
 MOXEOF
@@ -489,6 +515,16 @@ for chk in mox-proot mox-proot-distro mox; do
     SELF_OK=0
   fi
 done
+# TUI 可选：装了就必须能跑 --version（旧的动态 musl 资产启动即 SIGSEGV，
+# 这条自检会在安装当场拦住坏二进制，而不是等用户敲 mox 才发现）。
+if [ -x "${BINDIR}/mox-proot-tui" ]; then
+  if TUI_VER="$("${BINDIR}/mox-proot-tui" --version 2>&1)" && [ -n "$TUI_VER" ]; then
+    ok "mox-proot-tui 就绪（${TUI_VER}）"
+  else
+    warn "mox-proot-tui --version 自检失败，TUI 资产可能损坏"
+    SELF_OK=0
+  fi
+fi
 if [ "$SELF_OK" = 1 ]; then
   # 【P1 修复】引擎主程序现已实现 --version/-V 且 rc=0；旧实现用 `|| true`
   # 吞掉退出码，rc=2 也会报「自检通过」，安装收尾一直挂假绿警告。

@@ -14,10 +14,14 @@
 //! **明确不收集**：主机名、用户名、MAC/IMEI/序列号、精确 OS 版本串、磁盘路径、
 //! IP、地理位置、浏览器 UA 原文、任何文件内容。
 //!
-//! 载体：固定字段顺序的 canonical JSON → base64url → `X-Mox-Device-Claim` 请求头
+//! 载体：固定字段顺序的 canonical JSON **原文** → `X-Mox-Device-Claim` 请求头
 //! （同时放进 JSON body 作为反代剥离 header 时的兜底）。后端强制校验：
 //! 缺失、字段非法、含未知字段/隐私字段，一律拒绝签发登录码。
 //! 轮询换 token 时带同一声明，服务端比对哈希，防止设备码被别的设备截获冒领。
+//!
+//! 2026-11-08 真机实测：旧版 header_value() 发 base64url，而后端只做 JSON.parse，
+//! `mox-proot login` 恒 400 invalid_device_claim。现在头值统一为原始 JSON；
+//! 后端仍兼容 base64url（新旧客户端都能用），双端都不再互相锁死。
 
 use std::fs;
 use std::io::Read;
@@ -96,9 +100,10 @@ pub fn label(&self) -> String {
     format!("{} · {} · {} {}", self.platform, self.arch, self.client, self.client_version)
 }
 
-/// base64url（无 padding）编码的 canonical JSON，用作 `X-Mox-Device-Claim` 头值。
+/// `X-Mox-Device-Claim` 头值：canonical JSON **原文**（不再 base64url）。
+/// 后端直接 JSON.parse 该头；同时兼容旧版 base64url，但新客户端一律发原文。
 pub fn header_value(&self) -> String {
-    b64url_encode(self.canonical_json().as_bytes())
+    self.canonical_json()
 }
 }
 
@@ -114,32 +119,6 @@ fn esc(s: &str) -> String {
             c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
             c => out.push(c),
         }
-    }
-    out
-}
-
-fn b64url_encode(data: &[u8]) -> String {
-    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
-    let mut i = 0;
-    while i + 3 <= data.len() {
-        let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8) | data[i + 2] as u32;
-        out.push(T[((n >> 18) & 63) as usize] as char);
-        out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(T[((n >> 6) & 63) as usize] as char);
-        out.push(T[(n & 63) as usize] as char);
-        i += 3;
-    }
-    let rem = data.len() - i;
-    if rem == 1 {
-        let n = (data[i] as u32) << 16;
-        out.push(T[((n >> 18) & 63) as usize] as char);
-        out.push(T[((n >> 12) & 63) as usize] as char);
-    } else if rem == 2 {
-        let n = ((data[i] as u32) << 16) | ((data[i + 1] as u32) << 8);
-        out.push(T[((n >> 18) & 63) as usize] as char);
-        out.push(T[((n >> 12) & 63) as usize] as char);
-        out.push(T[((n >> 6) & 63) as usize] as char);
     }
     out
 }
@@ -242,29 +221,14 @@ mod tests {
     }
 
     #[test]
-    fn header_value_roundtrips() {
+    fn header_value_is_raw_canonical_json() {
         let c = claim();
-        let enc = c.header_value();
-        assert!(!enc.contains('=') && !enc.contains('+') && !enc.contains('/'), "必须是 base64url");
-        // 反解：补齐 padding 再按标准表还原
-        let padded = format!("{}{}", enc, "=".repeat((4 - enc.len() % 4) % 4));
-        let table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-        let mut bytes = Vec::new();
-        let mut acc: u32 = 0;
-        let mut bits = 0;
-        for ch in padded.bytes() {
-            if ch == b'=' {
-                break;
-            }
-            let v = table.iter().position(|&x| x == ch).expect("非法 base64url 字符") as u32;
-            acc = (acc << 6) | v;
-            bits += 6;
-            if bits >= 8 {
-                bits -= 8;
-                bytes.push(((acc >> bits) & 0xff) as u8);
-            }
-        }
-        assert_eq!(String::from_utf8(bytes).unwrap(), c.canonical_json());
+        let h = c.header_value();
+        // 必须是原始 JSON 头，不是 base64url（旧版与后端 JSON.parse 不匹配）
+        assert_eq!(h, c.canonical_json());
+        assert!(h.starts_with('{') && h.ends_with('}'), "头值应为 JSON 对象");
+        assert!(!h.contains('=') || h.contains("\""), "不得退化为裸 base64");
+        assert!(h.contains("\"device_id\"") && h.contains("\"client_version\""));
     }
 
     #[test]

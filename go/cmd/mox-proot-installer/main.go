@@ -145,6 +145,21 @@ func cmdInstall() error {
 	staged := filepath.Join(os.TempDir(), "mox-proot-installer-staged")
 	os.MkdirAll(staged, 0o755)
 
+	// TUI 控制台为可选资产：仅 x86_64 Linux 有发布，其它平台缺失不能让
+	// 整个安装失败。先单独试下载，成功才加入资产映射（Place 会跳过缺件）。
+	tuiAsset := strings.Replace(rep.AssetName(), "mox-proot-", "mox-proot-tui-", 1)
+	if err := fetch.Download(fetch.Options{
+		Channels: channels(),
+		Asset:    tuiAsset,
+		Dest:     filepath.Join(staged, tuiAsset),
+	}); err == nil {
+		assets[tuiAsset] = "mox-proot-tui"
+	} else {
+		fmt.Println(s.pick(
+			"提示：本平台暂无 TUI 控制台资产，已跳过（命令版不受影响）。",
+			"Note: no TUI asset for this platform; skipped (CLI still works)."))
+	}
+
 	fmt.Println(s.pick("下载引擎二进制…", "Downloading engine binaries…"))
 	var downloaded []string
 	for asset := range assets {

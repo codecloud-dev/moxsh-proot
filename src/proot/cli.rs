@@ -55,13 +55,21 @@ pub fn run_native(args: &[String]) -> i32 {
     // 拉起 ratatui 控制台。原版 Termux 无此子命令（App 内自有原生 UI）。
     // 【P1】与 mox-proot-distro 对齐：--version / -V 是纯文本路径，rc=0，
     // 不触网、不进引擎。安装脚本收尾自检依赖此语义（不再用 `|| true` 吞退出码）。
-    if args.len() == 1 && matches!(args[0].as_str(), "--version" | "-V") {
+    // 【2026-11-08 真机实测】旧版只认「唯一参数」，`mox-proot -v --version`
+    // 被当成非法选项 rc=2。改为 -- 之前任意位置出现版本标志即返回版本；
+    // `--` 之后是容器内命令，绝不吞。
+    if args.iter().take_while(|a| a.as_str() != "--")
+        .any(|a| matches!(a.as_str(), "--version" | "-V")) {
         println!("{}", engine_version_line());
         return 0;
     }
-    #[cfg(feature = "tui")]
+    // 发布构建默认不带 tui feature（NDK/引擎零额外依赖），但安装器会一并落盘
+    // 独立 mox-proot-tui——这里 exec 同目录二进制，让 tui 子命令在所有平台可用。
     if args.first().map(|s| s.as_str() == "tui").unwrap_or(false) {
-        return crate::proot::tui::run_tui();
+        #[cfg(feature = "tui")]
+        { return crate::proot::tui::run_tui(); }
+        #[cfg(not(feature = "tui"))]
+        { return launch_sibling_tui(); }
     }
     // login（设备码授权扫码绑定，后端 mox-id Workers）：**默认构建即提供**。
     // 设备码模块只依赖 curl，不再被 tui feature 门禁挡在发布产物之外。
@@ -685,6 +693,77 @@ pub fn is_unknown_subcommand(args: &[&str]) -> bool {
 }
 
 /// 【P1】`--version` / `-V` 的版本串（二进制入口与文本路由共用）。
+/// 启动同目录下的独立 TUI 控制台二进制。
+/// 2026-11-08 真机实测：发布版 `mox-proot tui` 回「缺少 -r」、`mox-proot-distro tui`
+/// 回「本构建未启用 tui feature」——子命令对所有人都是死的。现在统一 exec 外部资产。
+pub fn launch_sibling_tui() -> i32 {
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("mox-proot-tui")));
+    let Some(path) = sibling.filter(|p| p.is_file()) else {
+        eprintln!("mox-proot: 未找到 TUI 控制台（mox-proot-tui）。");
+        eprintln!("  请重新运行一键安装脚本，或把 mox-proot-tui 放到同一目录。");
+        eprintln!("  当前可用命令版：mox-proot-distro list / install <id> / login <id>");
+        return 2;
+    };
+    match std::process::Command::new(&path).status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("mox-proot: 启动 TUI 控制台失败 {}: {}", path.display(), e);
+            2
+        }
+    }
+}
+
+/// 子命令级帮助（`list -h` / `install --help` 等）。
+/// 2026-11-08 真机实测：旧版 `install --help` 输出「未知发行版: --help」、
+/// `login -h` 输出「发行版未安装: -h」，help 标志被当成参数吃掉了。
+pub fn subcommand_help(sub: &str) -> Option<String> {
+    let usage = match sub {
+        "list" => "用法: proot-distro list [--json|--plain]",
+        "versions" => "用法: proot-distro versions <id>",
+        "install" => "用法: proot-distro install <id> [--cache <tar>] [--version <v>]",
+        "login" => "用法: proot-distro login <id|mx:名字> [-- 命令...]",
+        "shell" => "用法: proot-distro shell <id> [-- 命令...]",
+        "remove" => "用法: proot-distro remove <id>",
+        "backup" => "用法: proot-distro backup <id> <out.tar.gz>",
+        "restore" => "用法: proot-distro restore <id> <tar.tar.gz>",
+        "net" => "用法: proot-distro net <id>",
+        "env" => "用法: proot-distro env <id>",
+        "recipe" => "用法: proot-distro recipe list|show <id>|apply <id> <distro>",
+        "fan" => "用法: proot-distro fan login|status|redeem <code>",
+        "redeem" => "用法: proot-distro redeem login|<code>",
+        "access" => "用法: proot-distro access status|sync",
+        "time" => "用法: proot-distro time",
+        "egg" => "用法: proot-distro egg",
+        "wizard" => "用法: proot-distro wizard [--root <目录>] [--distro <id>]",
+        "launch" => "用法: proot-distro launch <mx:名字|id> [-- 命令...]",
+        "tui" => "用法: proot-distro tui（打开图形控制台，需交互终端）",
+        _ => return None,
+    };
+    Some(format!(
+        "{}\n\n完整命令清单：{}",
+        paint(usage, C_CYAN),
+        paint("proot-distro help", C_BOLD)
+    ))
+}
+
+/// 文本路由是否返回了「用法/报错」而非正常结果。
+/// 2026-11-08 真机实测：`install` / `backup` / `restore` 缺参数都打印用法却 rc=0，
+/// 脚本与 CI 会把「参数写错」误判为成功。二进制入口据此返回 2。
+pub fn is_error_output(s: &str) -> bool {
+    let mut t = s.trim_start();
+    // 彩色模式下错误文本可能带 ANSI 前缀，先剥掉再判定
+    while t.starts_with("\x1b[") {
+        if let Some(i) = t.find('m') { t = &t[i + 1..]; } else { break; }
+    }
+    t.starts_with("用法:")
+        || t.starts_with("✗")
+        || t.starts_with("proot-distro: 未知发行版")
+        || t.starts_with("proot-distro: 安装失败")
+        || t.starts_with("proot-distro net: ")
+}
+
 pub fn version_line() -> String {
     format!("mox-proot-distro {}（mox-proot 兼容实现）", env!("CARGO_PKG_VERSION"))
 }
@@ -697,12 +776,14 @@ pub fn engine_version_line() -> String {
 
 /// 空参数时的精简首屏：只给「装 → 自证 → 进管理台」三步，细节留给 `help`。
 fn quick_start() -> String {
-    "mox-proot-distro —— 三步开始：\n\
-       mox-proot-distro install alpine\n\
-       mox-proot-distro login alpine -- cat /etc/os-release   # 能输出系统信息即装好了\n\
-       mox                                                    # 进容器后打开管理台\n\n\
-     完整命令清单：mox-proot-distro help"
-        .to_string()
+    format!(
+        "{}\n  {}\n  {}\n  {}\n\n{}",
+        paint("mox-proot-distro —— 三步开始：", C_BOLD),
+        paint("mox-proot-distro install alpine", C_GREEN),
+        paint("mox-proot-distro login alpine -- cat /etc/os-release", C_GREEN),
+        paint("mox                                    # 进容器后打开管理台", C_CYAN),
+        paint("完整命令清单：mox-proot-distro help", C_CYAN),
+    )
 }
 
 /// `proot-distro` 主路由（对齐上游子命令集）。
@@ -726,6 +807,10 @@ pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
     // guard 只覆盖本次调用，返回时恢复旧值，不会污染后续命令。
     let _plain_guard = (plain_mode || json_mode).then(|| PlainModeGuard::apply(true));
     let (sub, rest) = filtered.split_first().map_or(("", &[][..]), |(s, r)| (*s, r));
+    // 子命令级 -h/--help 统一拦下，避免被当成发行版 id / 被静默忽略。
+    if rest.iter().any(|a| matches!(*a, "-h" | "--help" | "help")) {
+        if let Some(h) = subcommand_help(sub) { return h; }
+    }
     match sub {
         "list" => if json_mode { cmd_list_json(&mgr) } else { cmd_list(&mgr) },
         "versions" => if json_mode { cmd_versions_json(rest) } else { cmd_versions(rest) },
@@ -762,8 +847,9 @@ pub fn proot_distro(args: &[&str], mox_proot_root: &Path) -> String {
             let lower = other.to_lowercase();
             let guess = known.iter().find(|k| !lower.is_empty() && (k.starts_with(&lower) || lower.starts_with(**k)));
             let mut out = format!(
-                "✗ 未知子命令「{}」，没找到这条命令。\n  怎么办：先跑 `proot-distro list` 看可用发行版，或 `help` 看全部命令。",
-                other
+                "{} 未知子命令「{}」，没找到这条命令。\n  怎么办：先跑 {} 看可用发行版，或 {} 看全部命令。",
+                paint("✗", C_RED), other,
+                paint("proot-distro list", C_GREEN), paint("help", C_GREEN)
             );
             if let Some(g) = guess {
                 out.push_str(&format!("\n  你是不是想输入：{} ？", g));
@@ -1183,7 +1269,7 @@ fn exp_text(exp: u64) -> String {
 /// `list`：已装/可装一览。
 fn cmd_list(mgr: &DistroManager) -> String {
     let installed = mgr.list_installed().unwrap_or_default();
-    let mut out = String::from("已安装发行版：\n");
+    let mut out = format!("{}\n", paint("已安装发行版：", C_BOLD));
     if installed.is_empty() {
         out.push_str("  （无）\n");
     }
@@ -1194,7 +1280,7 @@ fn cmd_list(mgr: &DistroManager) -> String {
             d.rootfs.display()
         ));
     }
-    out.push_str("\n可安装（proot-distro install <id>）：\n");
+    out.push_str(&format!("\n{}\n", paint("可安装（proot-distro install <id>）：", C_BOLD)));
     for s in crate::proot::distro::builtin_specs() {
         let mark = if installed.iter().any(|d| d.id == s.id) { "（已安装）" } else { "" };
         out.push_str(&format!(

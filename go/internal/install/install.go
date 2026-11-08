@@ -22,7 +22,7 @@ type Result struct {
 }
 
 // BinNames 引擎产出的可执行文件（与 Rust bin 目标对应）。
-var BinNames = []string{"mox-proot", "mox-proot-distro"}
+var BinNames = []string{"mox-proot", "mox-proot-distro", "mox-proot-tui"}
 
 // Place 把已下载的二进制（staged 目录内，文件名即资产名）安装到
 // installRoot：staged/<asset> → installRoot/bin/<binname>。

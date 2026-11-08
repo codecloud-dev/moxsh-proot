@@ -259,11 +259,31 @@ jobs:
       - name: cargo build --release --features tui
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: ${{ matrix.cc }}
+          # 2026-11-08 真机实测：build-tui 单独 job 曾产出「动态链接 musl」的 TUI
+          # （interpreter /lib/ld-musl-x86_64.so.1），启动期 TLS 初始化即 SIGSEGV，
+          # 连 --version 都跑不了。显式 +crt-static 与 build-engine 对齐。
+          RUSTFLAGS: ${{ contains(matrix.target, 'musl') && '-C target-feature=+crt-static' || '' }}
         run: cargo build --release --target ${{ matrix.target }} --features tui --bin mox-proot-tui
-      - name: 收集 TUI 产物
+      - name: 收集 TUI 产物（含静态链接与 CLI 自检）
         run: |
+          set -e
+          BIN="target/${{ matrix.target }}/release/mox-proot-tui"
+          if [[ "${{ matrix.target }}" == *musl* ]]; then
+            if ! file "$BIN" | grep -Eq 'static'; then
+              echo "::error::musl TUI 产物不是静态链接，启动期会 SIGSEGV"
+              file "$BIN"
+              exit 1
+            fi
+          fi
+          # x86_64 产物可本机直跑：--version / --help 必须在无 TTY 下 rc=0。
+          # 这一条会在 CI 里拦住「装完见不到 TUI」的坏资产。
+          if [[ "${{ matrix.target }}" == x86_64* ]]; then
+            "$BIN" --version
+            "$BIN" --help > /dev/null
+            echo "TUI CLI 自检通过"
+          fi
           mkdir -p dist
-          cp "target/${{ matrix.target }}/release/mox-proot-tui" "dist/mox-proot-tui-${{ matrix.name }}"
+          cp "$BIN" "dist/mox-proot-tui-${{ matrix.name }}"
           ls -la dist/
       - name: 上传到 Release
         uses: softprops/action-gh-release@v2

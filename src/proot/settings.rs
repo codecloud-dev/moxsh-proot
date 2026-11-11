@@ -36,6 +36,9 @@ pub struct Settings {
     /// `[containers.<id>] enter/exit`：每容器覆盖。
     container_enter: Vec<(String, String)>,
     container_exit: Vec<(String, String)>,
+    /// `[login] binds`：TUI 登录容器时自动追加的绑定，元素为 `(guest, host)`。
+    /// 配置写法沿用 CLI `-b` 的 `host:guest`，多个用逗号分隔。
+    login_binds: Vec<(String, String)>,
 }
 
 impl Settings {
@@ -78,6 +81,11 @@ impl Settings {
             return d;
         }
         default_root_dir()
+    }
+
+    /// 登录容器时要追加的绑定（`(guest, host)`，与 `ProotConfig::bind` 同序）。
+    pub fn login_binds(&self) -> Vec<(String, String)> {
+        self.login_binds.clone()
     }
 
     /// 进入某容器时容器内执行的首个命令（每容器覆盖 > 全局默认）。
@@ -134,7 +142,7 @@ pub fn expand_tilde(p: &str) -> PathBuf {
 pub fn parse_config_toml(text: &str) -> Settings {
     let mut s = Settings::default();
     // 当前段上下文：None = 段外；General；EnterDefault；ExitDefault；
-    // Container(id)。
+    // Container(id)；Login。
     #[derive(PartialEq)]
     enum Section {
         None,
@@ -142,6 +150,7 @@ pub fn parse_config_toml(text: &str) -> Settings {
         Enter,
         Exit,
         Container(String),
+        Login,
     }
     let mut section = Section::None;
     for raw in text.lines() {
@@ -155,6 +164,7 @@ pub fn parse_config_toml(text: &str) -> Settings {
                 "general" => Section::General,
                 "enter" => Section::Enter,
                 "exit" => Section::Exit,
+                "login" => Section::Login,
                 other => {
                     if let Some(id) = other.strip_prefix("containers.") {
                         Section::Container(id.trim().to_string())
@@ -182,6 +192,25 @@ pub fn parse_config_toml(text: &str) -> Settings {
             }
             Section::Container(id) if key == "exit" => {
                 s.container_exit.push((id.clone(), val))
+            }
+            // [login] binds = "/sdcard:/sdcard,/data/data/x:/rf"
+            // 复用 CLI -b 的 host:guest 语义，解析成 (guest, host) 后交给
+            // DistroManager::login_cmd_with_binds，TUI 登录时自动带上。
+            Section::Login if key == "binds" => {
+                for spec in val.split(',') {
+                    let spec = spec.trim();
+                    if spec.is_empty() {
+                        continue;
+                    }
+                    let (host, guest) = match spec.split_once(':') {
+                        Some((h, g)) => (h.trim(), g.trim()),
+                        None => (spec, spec),
+                    };
+                    if !host.is_empty() && !guest.is_empty() {
+                        s.login_binds
+                            .push((guest.to_string(), host.to_string()));
+                    }
+                }
             }
             _ => {}
         }
@@ -402,4 +431,28 @@ mod tests {
             "[enter]\ndefault = \"x\"\n[general]\nroot_dir = \"/data/mox-proot\"\n"
         );
     }
+
+    /// 2026-11-11 审计回归：[login] binds 必须按 host:guest 解析成 (guest, host)。
+    #[test]
+    fn audit_login_binds_parsed_host_first() {
+        let s = parse_config_toml(
+            "[login]\nbinds = \"/sdcard:/sdcard, /data/data/x:/rf, /proc\"\n",
+        );
+        assert_eq!(
+            s.login_binds(),
+            vec![
+                ("/sdcard".to_string(), "/sdcard".to_string()),
+                ("/rf".to_string(), "/data/data/x".to_string()),
+                ("/proc".to_string(), "/proc".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn audit_login_binds_empty_by_default() {
+        assert!(parse_config_toml("[general]\nroot_dir = \"/tmp\"\n")
+            .login_binds()
+            .is_empty());
+    }
+
 }

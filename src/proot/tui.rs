@@ -156,6 +156,8 @@ struct App {
     show_help: bool,
     /// 安装进度历史（Sparkline 数据源，每帧采样一次）。
     rates: Vec<u64>,
+    /// `config.toml [login] binds`：登录容器时自动追加的绑定 `(guest, host)`。
+    login_binds: Vec<(String, String)>,
 }
 
 impl App {
@@ -190,6 +192,9 @@ impl App {
             confirm_remove: false,
             show_help: false,
             rates: Vec::new(),
+            login_binds: crate::proot::settings::Settings::load_user()
+                .map(|s| s.login_binds())
+                .unwrap_or_default(),
         };
         app.refresh_account();
         app.rebuild_rows(&installed, &specs);
@@ -449,7 +454,12 @@ impl App {
     }
 
     fn login(&mut self, id: &str) {
-        match self.mgr.login_cmd(id, Some("/bin/sh")) {
+        // 2026-11-11 审计修复：TUI 登录原先无法带上任何 -b 绑定，用户在
+        // config.toml 配了也没用。现在统一从 [login] binds 读取并透传。
+        match self
+            .mgr
+            .login_cmd_with_binds(id, Some("/bin/sh"), &self.login_binds)
+        {
             Ok(cmd) => {
                 // 退出 TUI 进入容器；容器退出后自动恢复 TUI。
                 throw_to_shell(&cmd);

@@ -880,6 +880,20 @@ impl DistroManager {
     /// `shell_override` 非空时（如 `shell` 子命令要非登录 `/bin/sh`）优先使用它，
     /// 避免调用方再做脆弱的字符串 `rfind` 手术。
     pub fn login_cmd(&self, id: &str, shell_override: Option<&str>) -> ProotResult<String> {
+        self.login_cmd_with_binds(id, shell_override, &[])
+    }
+
+    /// 【2026-11-11 审计修复】支持调用方透传 `-b/--bind` 追加绑定。
+    ///
+    /// 旧实现只有 `login_cmd(id, shell)`，CLI / TUI 拿不到任何绑定入口，用户写
+    /// `login <id> -b /sdcard:/sdcard` 里的绑定被静默丢弃（以为挂上了其实没有）。
+    /// `extra_binds` 元素为 `(guest, host)`，与 [`ProotConfig::bind`] 参数顺序一致。
+    pub fn login_cmd_with_binds(
+        &self,
+        id: &str,
+        shell_override: Option<&str>,
+        extra_binds: &[(String, String)],
+    ) -> ProotResult<String> {
         self.check_id(id)?; // P1：id 路径白名单
         let rootfs = self.distro_rootfs(id);
         if !rootfs.is_dir() {
@@ -898,6 +912,10 @@ impl DistroManager {
         // 与 exec_into 同源：注入容器内控制台（mox 固定命令 + 反穿透挂载/环境变量），
         // 否则 App 终端会话产出的命令串会缺少 mox 控制台，与二进制 login 行为漂移。
         console::bind_console(&mut cfg, &self.root, &console::host_bin_dir());
+        // 调用方透传的 -b/--bind 追加到默认绑定之后（后加优先，与 ProotConfig::bind 语义一致）。
+        for (guest, host) in extra_binds {
+            cfg.bind(guest, host);
+        }
         let mut cmd: Vec<String> = Vec::new();
         // 输出**绝对路径**的引擎兄弟二进制：调用方（含 App 终端会话）无需依赖 PATH，
         // 也避免下载模型下引擎位于独立目录（$filesDir/proot/bin）时裸名 `proot` 解析不到。
@@ -1529,4 +1547,19 @@ deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  other-rootfs.t
         assert_eq!(fs::read(rootfs.join("marker")).unwrap(), b"KEEP");
         let _ = fs::remove_dir_all(&root);
     }
+
+    /// 2026-11-11 审计回归：透传的 -b 必须真的出现在生成的命令串里。
+    #[test]
+    fn audit_login_cmd_with_binds_emits_bind_flag() {
+        let root = std::env::temp_dir().join(format!("mox-audit-binds-{}", std::process::id()));
+        let m = DistroManager::new(&root);
+        fs::create_dir_all(m.distro_rootfs("ubuntu")).unwrap();
+        let extra = vec![("/sdcard".to_string(), "/data/data/x".to_string())];
+        let cmd = m.login_cmd_with_binds("ubuntu", None, &extra).unwrap();
+        assert!(cmd.contains("--bind=/data/data/x:/sdcard"), "绑定未进入命令串: {}", cmd);
+        let plain = m.login_cmd("ubuntu", None).unwrap();
+        assert!(!plain.contains("--bind=/data/data/x"), "旧入口不应凭空多出绑定");
+        let _ = fs::remove_dir_all(&root);
+    }
+
 }

@@ -1636,10 +1636,67 @@ fn cmd_login(mgr: &DistroManager, args: &[&str]) -> String {
     } else {
         (*spec).to_string()
     };
-    match mgr.login_cmd(&id, None) {
+    // 【2026-11-11 审计修复】`--` 之前的 -b/--bind 不再静默丢弃：
+    // 解析成结构化绑定真正注入命令串；不支持的选项明确报错，绝不假装生效。
+    let (binds, err) = parse_login_binds(&args[1..]);
+    if let Some(e) = err {
+        return format!("proot-distro: {}", e);
+    }
+    match mgr.login_cmd_with_binds(&id, None, &binds) {
         Ok(cmd) => cmd,
         Err(e) => format!("proot-distro: {}", e),
     }
+}
+
+/// 解析 `login`/`shell` 命令串生成路径上的绑定选项。
+///
+/// 复用 [`parse_binding`]（返回 `(guest, host)`），与 exec_into 的 -b 语义一致。
+/// 命令串生成不支持 -w/-e/-v/-0 与 `--` 之后的容器内命令——明确报错，
+/// 而不是像旧实现那样静默忽略造成「以为挂上了其实没挂」的认知错觉。
+fn parse_login_binds(args: &[&str]) -> (Vec<(String, String)>, Option<String>) {
+    let mut binds: Vec<(String, String)> = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        match a {
+            "-b" | "--bind" | "-m" | "--mount" => {
+                i += 1;
+                let Some(v) = args.get(i) else {
+                    return (binds, Some("-b 缺少参数（期望 host:guest）".to_string()));
+                };
+                match parse_binding(v) {
+                    Ok(b) => binds.push(b),
+                    Err(e) => return (binds, Some(e)),
+                }
+            }
+            "--" => {
+                if i + 1 < args.len() {
+                    return (
+                        binds,
+                        Some("login/shell 命令串生成不支持 `--` 之后的容器内命令，请用 `mox login` 直接进容器".to_string()),
+                    );
+                }
+            }
+            other if other.starts_with("--bind=") || other.starts_with("--mount=") => {
+                let v = other.split_once('=').map(|(_, x)| x).unwrap_or("");
+                match parse_binding(v) {
+                    Ok(b) => binds.push(b),
+                    Err(e) => return (binds, Some(e)),
+                }
+            }
+            other => {
+                return (
+                    binds,
+                    Some(format!(
+                        "login/shell 不支持参数 `{}`（可用 -b/--bind host:guest，或改用 `mox login` 直接进容器）",
+                        other
+                    )),
+                )
+            }
+        }
+        i += 1;
+    }
+    (binds, None)
 }
 
 /// `shell <id|mx:名字>`：非登录 shell 快捷方式（等价 login 但用 /bin/sh）。
@@ -1662,7 +1719,11 @@ fn cmd_shell(mgr: &DistroManager, args: &[&str]) -> String {
     };
     // 与 login 相同骨架，仅 shell 换成非登录 /bin/sh（通过 shell_override 传参，
     // 不再用 rfind 字符串手术，避免 /usr/bin/zsh、--bind 含 /bin/ 等场景错位）。
-    match mgr.login_cmd(&id, Some("/bin/sh")) {
+    let (binds, err) = parse_login_binds(&args[1..]);
+    if let Some(e) = err {
+        return format!("proot-distro: {}", e);
+    }
+    match mgr.login_cmd_with_binds(&id, Some("/bin/sh"), &binds) {
         Ok(cmd) => cmd,
         Err(e) => format!("proot-distro: {}", e),
     }
@@ -2723,4 +2784,43 @@ mod launch_tests {
         match old_dbg { Some(v) => std::env::set_var("MOX_DBG", v), None => std::env::remove_var("MOX_DBG") }
         match old_sec { Some(v) => std::env::set_var("MOX_SECCOMP", v), None => std::env::remove_var("MOX_SECCOMP") }
     }
+
+    // ===== 2026-11-11 全仓审计回归：login/shell 的 -b 绑定不再被静默吞掉 =====
+
+    #[test]
+    fn audit_login_bind_args_are_parsed() {
+        let (b, e) = parse_login_binds(&["-b", "/sdcard:/sdcard"]);
+        assert!(e.is_none(), "{:?}", e);
+        assert_eq!(b, vec![("/sdcard".to_string(), "/sdcard".to_string())]);
+
+        let (b, e) = parse_login_binds(&["--bind", "/data/data/x:/rf", "-m", "/proc"]);
+        assert!(e.is_none(), "{:?}", e);
+        assert_eq!(b.len(), 2);
+        assert_eq!(b[0], ("/rf".to_string(), "/data/data/x".to_string()));
+        assert_eq!(b[1], ("/proc".to_string(), "/proc".to_string()));
+
+        let (b, e) = parse_login_binds(&["--bind=/tmp:/mnt"]);
+        assert!(e.is_none(), "{:?}", e);
+        assert_eq!(b, vec![("/mnt".to_string(), "/tmp".to_string())]);
+    }
+
+    #[test]
+    fn audit_login_rejects_unsupported_args_instead_of_swallowing() {
+        assert!(parse_login_binds(&["-w", "/root"]).1.is_some());
+        assert!(parse_login_binds(&["--", "vim"]).1.is_some());
+        assert!(parse_login_binds(&["-b"]).1.is_some());
+        assert!(parse_login_binds(&["-b", ":"]).1.is_some());
+        assert!(parse_login_binds(&["stray"]).1.is_some());
+        assert!(parse_login_binds(&[]).1.is_none());
+    }
+
+    #[test]
+    fn audit_cmd_login_surfaces_bind_error() {
+        let mgr = DistroManager::new(Path::new("/nonexistent-mox-proot"));
+        let out = cmd_login(&mgr, &["ubuntu", "-b"]);
+        assert!(out.contains("-b 缺少参数"), "{}", out);
+        let out2 = cmd_shell(&mgr, &["ubuntu", "-w", "/root"]);
+        assert!(out2.contains("不支持参数"), "{}", out2);
+    }
+
 }

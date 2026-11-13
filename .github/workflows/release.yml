@@ -204,7 +204,7 @@ jobs:
           ls -la dist/
 
       - name: 上传到 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
@@ -278,7 +278,7 @@ jobs:
           cp "$BIN" "dist/mox-proot-tui-${{ matrix.name }}"
           ls -la dist/
       - name: 上传到 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
@@ -314,7 +314,7 @@ jobs:
             -o "../dist/mox-proot-installer-${{ matrix.goos }}-${{ matrix.goarch }}" \
             ./cmd/mox-proot-installer
       - name: 上传到 Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
           files: dist/*
@@ -350,7 +350,7 @@ jobs:
           echo "---- SHA256SUMS ----"
           cat SHA256SUMS
       - name: 上传校验文件
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
           # 2026-10-25 事故修复：原先只传 dist/SHA256SUMS，漏传逐资产 <asset>.sha256——

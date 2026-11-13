@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        感谢反馈！请先搜索已有 issue，避免重复。
-        提交前建议先跑一遍复现命令确认现象稳定，日志越全越好定位。
-        **安全漏洞请不要在这里提**，改走 SECURITY.md 的私密渠道。
+        > ⚠️ **安全漏洞请勿公开提交**：越权、注入、凭据泄露、供应链篡改等不要贴细节或 PoC 到公开 Issue。
+        > 请走 https://mox-site.pages.dev/security （支持完全匿名），或各仓 `Security → Report a vulnerability`。
+        > 行为准则投诉走独立通道：https://mox-site.pages.dev/report 。
 
   - type: input
     id: version

@@ -302,7 +302,7 @@ jobs:
             goarch: amd64
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.21"
       - name: 构建（纯标准库，CGO 关闭可交叉）

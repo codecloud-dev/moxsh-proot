@@ -16,11 +16,11 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 # 只依赖 libc：所有内存安全敏感逻辑均在 Rust 内自研，避免外部 crate 在 NDK target 下的编译不确定性。
 # 版本全部用 "=x.y.z" 精确锁定（与 Cargo.lock 双保险）：上游小版本更新不会意外改变 CI 构建输入。
-libc = "=0.2.189"
+libc = "=0.2.191"
 # rootfs 归档解压/备份打包。两 crate 均纯 Rust（flate2 默认 miniz_oxide 后端），NDK target 可编。
 # ProotError 为手写展开风格（不引 thiserror/reqwest/sha2 等，校验复用 crypto::sha256）。
 tar = "=0.4.46"
-flate2 = "=1.1.10"
+flate2 = "=1.1.11"
 
 # TUI 控制台（0.4.0，roadmap §6）：仅 `tui` feature 启用，桌面二进制 mox-proot-tui 专用。
 # 不污染 Android NDK 构建——cdylib 在 feature 关闭时不编入 ratatui/crossterm。
@@ -35,7 +35,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["alloc"] 
 
 # 构建脚本依赖：cc 用于在 Android 目标下把 c/proot_bridge.c 编入 cdylib（见 build.rs）。
 [build-dependencies]
-cc = "=1.5.1"
+cc = "=1.11.1"
 
 [features]
 # 默认不含 TUI：引擎 cdylib 与 `mox-proot`/`mox-proot-distro` 保持零额外依赖。

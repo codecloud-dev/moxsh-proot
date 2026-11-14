@@ -14,8 +14,9 @@
 //! ```
 //!
 //! 效果：二维码纵向压缩一半高度，终端/SSH 下扫得又快又稳。
-
-#![cfg(feature = "tui")]
+//!
+//! 本模块由 `src/proot/mod.rs` 的 `#[cfg(feature = "tui")] pub mod qrcode_term;`
+//! 整体门控，无需再写模块级 `cfg` 属性。
 
 use qrcode::Color;
 use qrcode::EcLevel;
@@ -98,9 +99,9 @@ mod tests {
         assert_eq!(lines.len(), 3, "6 行模块应压成 3 行终端字符");
         // 内侧 4 列（去掉左右安静区）逐行应是：顶 ▄ / 中 █ / 底 ▀。
         let inner = |s: &str| s.chars().skip(1).take(4).collect::<String>();
-        assert_eq!(inner(&lines[0]), "▄▄▄▄", "顶行内侧应为全 ▄（上亮下暗）: {:?}", lines[0]);
-        assert_eq!(inner(&lines[1]), "████", "中行内侧应为全 █: {:?}", lines[1]);
-        assert_eq!(inner(&lines[2]), "▀▀▀▀", "底行内侧应为全 ▀（上暗下亮）: {:?}", lines[2]);
+        assert_eq!(inner(lines[0]), "▄▄▄▄", "顶行内侧应为全 ▄（上亮下暗）: {:?}", lines[0]);
+        assert_eq!(inner(lines[1]), "████", "中行内侧应为全 █: {:?}", lines[1]);
+        assert_eq!(inner(lines[2]), "▀▀▀▀", "底行内侧应为全 ▀（上暗下亮）: {:?}", lines[2]);
         // 安静区列（首尾）应为亮（空格）。
         assert_eq!(lines[0].chars().next(), Some(' '));
         assert_eq!(lines[0].chars().last(), Some(' '));

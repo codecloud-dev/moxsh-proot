@@ -7,13 +7,12 @@
 //! 全部复用 [`crate::proot::distro::DistroManager`] / [`crate::proot::links`] /
 //! [`crate::proot::recipe`] / [`crate::proot::settings`] 既有逻辑，不重写容器引擎。
 //!
-//! 本模块整体受 `tui` feature 门控（见 `Cargo.toml`）：引擎 cdylib 与 Android 构建
+//! 本模块整体受 `tui` feature 门控（见 `Cargo.toml` 与 `src/proot/mod.rs` 的
+//! `#[cfg(feature = "tui")] pub mod tui;`）：引擎 cdylib 与 Android 构建
 //! 不引入 crossterm/ratatui，避免 NDK target 的编译与体积不确定性。
 
-#![cfg(feature = "tui")]
-
 use std::io::{self, Stdout, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -161,7 +160,7 @@ struct App {
 }
 
 impl App {
-    fn new(root: &PathBuf) -> Result<App, String> {
+    fn new(root: &Path) -> Result<App, String> {
         let mgr = DistroManager::new(root);
         let installed = mgr
             .list_installed()
@@ -171,7 +170,7 @@ impl App {
             .map(|t| t.names().map(|s| s.to_string()).collect::<Vec<_>>())
             .unwrap_or_default();
         let mut app = App {
-            root: root.clone(),
+            root: root.to_path_buf(),
             mgr,
             rows: Vec::new(),
             links: user_links,
@@ -444,7 +443,7 @@ impl App {
     }
 
     fn run_login_binding(&mut self) {
-        let rc = leave_tui_for(|| crate::proot::device_code::run_login_flow());
+        let rc = leave_tui_for(crate::proot::device_code::run_login_flow);
         self.refresh_account();
         if rc == 0 {
             self.status = "✅ 设备已绑定（device_token 已保存）".into();
@@ -952,7 +951,7 @@ fn render_confirm(f: &mut ratatui::Frame, area: Rect, app: &App) {
         Line::from(""),
         Line::from(Span::styled(format!("  ⚠ 确认删除 {} ？", id), Style::default().fg(Color::Yellow))),
         Line::from(""),
-        Line::from(format!("  将删除该发行版的 rootfs 与完成标记，不可恢复。")),
+        Line::from("  将删除该发行版的 rootfs 与完成标记，不可恢复。"),
         Line::from(""),
         Line::from(Span::styled("  [y] 删除        [n / Esc] 取消", Style::default().fg(Color::Green))),
     ];
@@ -1335,7 +1334,6 @@ mod tests {
 
     #[test]
     fn palette_commands_are_indexable_and_unique() {
-        assert!(!PALETTE_COMMANDS.is_empty());
         assert!(PALETTE_COMMANDS.len() <= 10, "数字键 0-9 要能直达");
         let mut ids: Vec<&str> = PALETTE_COMMANDS.iter().map(|(c, _)| *c).collect();
         ids.sort_unstable();

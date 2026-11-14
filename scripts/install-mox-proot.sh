@@ -42,6 +42,25 @@ warn() { printf "${C_YELLOW}警告:${C_RST} %s\n" "$*" >&2; }
 die()  { printf "${C_RED}错误:${C_RST} %s\n" "$*" >&2; exit 1; }
 ok()   { printf "${C_CYAN}✔${C_RST} %s\n" "$*"; }
 
+# 解压依赖自检（手册 §6.3）：rootfs 多为 .tar.xz，解压需要 tar + xz。
+# 旧实现只查 curl/sha256sum，缺 xz 时不会立刻崩，而是等到「解压阶段」才报
+# `xz: Cannot exec: No such file or directory`，新手一脸懵。这里提前在自检阶段拦下，
+# 并给各平台的安装命令（对齐 §6.3 的「怎么办」）。unxz 是 xz 包提供的等价入口。
+check_runtime_deps() {
+  command -v curl >/dev/null 2>&1 || die "未找到 curl（pkg install curl）"
+  command -v sha256sum >/dev/null 2>&1 || die "未找到 sha256sum（pkg install coreutils）"
+  command -v tar >/dev/null 2>&1 || \
+    die "未找到 tar（Debian/Ubuntu: sudo apt install tar；Alpine: sudo apk add tar；Termux: pkg install tar）"
+  command -v xz >/dev/null 2>&1 || command -v unxz >/dev/null 2>&1 || \
+    die "未找到 xz（解压 .tar.xz rootfs 必需：Debian/Ubuntu: sudo apt install xz-utils；Alpine: sudo apk add xz；Termux: pkg install xz-utils）"
+}
+
+# 单元测试钩子：source 本脚本且设 MOX_PROOT_UNIT=1 时只暴露函数（die / check_runtime_deps），
+# 不跑横幅与主流程（主流程含 GitHub/Gitee 网络探测，不应在单测里触发）。
+if [ "${MOX_PROOT_UNIT:-}" = "1" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
+  return 0
+fi
+
 # 紧凑品牌字标（与 src/proot/brand.rs 的 BANNER 一致，4 行 / 手机端不折行）。
 printf '\n'
 printf "${C_BOLD}"
@@ -202,8 +221,8 @@ BINDIR="${PREFIX}/bin"
 [ -d "$BINDIR" ] || mkdir -p "$BINDIR"
 [ -w "$BINDIR" ] || die "${BINDIR} 不可写（PREFIX 是否正确？）"
 
-command -v curl >/dev/null 2>&1 || die "未找到 curl（pkg install curl）"
-command -v sha256sum >/dev/null 2>&1 || die "未找到 sha256sum（pkg install coreutils）"
+# 解压依赖自检（curl / sha256sum / tar / xz；含 .tar.xz 解压必需的 xz，手册 §6.3）。
+check_runtime_deps
 
 # 选源（探测 GitHub/Gitee 延迟；需 curl 就位后执行）。
 pick_source

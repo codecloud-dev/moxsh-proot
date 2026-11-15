@@ -121,6 +121,37 @@ pub fn run_native(args: &[String]) -> i32 {
     run_config(&cfg.config, &cmd, &cfg.env)
 }
 
+/// 上游 proot 的三个环境变量，本引擎一律不读取（审计 B4）。
+const STALE_PROOT_ENV_KEYS: [&str; 3] = ["PROOT_LOADER", "PROOT_TMP_DIR", "PROOT_L2S_DIR"];
+
+/// 剔除注入子进程环境里的上游 PROOT_* 残留变量，返回
+/// `(过滤后环境, 被剔除的变量名)`。
+///
+/// 【审计 B4】这些变量是上游 C 版 proot 的配置项，mox-proot 完全不用；
+/// 若用户环境里残留却被原样带进容器，会让人误以为「已配置」而产生行为
+/// 歧义。这里在启动时把它们从**注入 spawn 的环境列表**中移除并记日志。
+///
+/// 采用「过滤列表」而非 `std::env::remove_var`：后者改的是进程全局状态、
+/// 与并行单测互相干扰，且 `parse_native_args` 早已把 env 快照成列表，
+/// 光清全局对这份列表无效（等于没清）。过滤列表对所有启动入口都真实
+/// 生效。抽成纯函数便于单测（无副作用、不碰全局 env）。
+fn strip_stale_proot_env(env: &[String]) -> (Vec<String>, Vec<String>) {
+    let mut kept = Vec::with_capacity(env.len());
+    let mut dropped = Vec::new();
+    for entry in env {
+        let key = entry
+            .split_once('=')
+            .map(|(k, _)| k)
+            .unwrap_or(entry.as_str());
+        if STALE_PROOT_ENV_KEYS.contains(&key) {
+            dropped.push(key.to_string());
+        } else {
+            kept.push(entry.clone());
+        }
+    }
+    (kept, dropped)
+}
+
 /// 用结构化配置直接起引擎跑目标命令（login/shell 与 [`run_native`] 共用）。
 ///
 /// 与 `run_native` 的分工：后者解析上游风格 CLI 参数面；本函数服务
@@ -137,6 +168,11 @@ pub fn run_config(
     // tracer 侧开了 seccomp、子进程侧也装了过滤器，但诊断日志走双停路径，
     // 状态机交错导致 SIGABRT。提前设置后 seccomp_active() 两侧一致地让位。
     crate::proot::ptrace::set_verbose(config.verbose);
+    // 【审计 A1/A2】诊断级别落地后再报告 seccomp 门控：非法值告警、诊断
+    // 模式让位时明确提示（必须在 set_verbose 之后，diag_enabled 才读得到 -v）。
+    // run_config 是所有启动入口（run_native / login / shell / script）的
+    // 唯一汇聚点，在这里打一次即可，不进 fork 后的子进程。
+    crate::proot::ptrace::report_seccomp_gate();
     let rules = config.to_rules();
     let initial_cwd = initial_cwd_for(config, &rules);
     // 初始 execve 宿主侧预解析（见 prepare_initial_exec 文档）：
@@ -148,7 +184,17 @@ pub fn run_config(
         tracer.set_initial_guest_prog(p);
     }
     let cmd_refs: Vec<&str> = plan.argv.iter().map(String::as_str).collect();
-    let env_refs: Vec<&str> = env.iter().map(String::as_str).collect();
+    // 【审计 B4】从注入子进程的环境列表里剔除上游 PROOT_* 残留变量并逐项
+    // 记日志（详见 strip_stale_proot_env 文档）。所有启动入口都经此处，
+    // 过滤对子进程真实生效。
+    let (sanitized_env, dropped_keys) = strip_stale_proot_env(env);
+    for key in &dropped_keys {
+        eprintln!(
+            "mox-proot: 忽略不生效的环境变量 {}（本引擎不使用上游 PROOT_* 变量）",
+            key
+        );
+    }
+    let env_refs: Vec<&str> = sanitized_env.iter().map(String::as_str).collect();
     let child = match Tracer::spawn_traced_with_cwd(
         &cmd_refs,
         &env_refs,
@@ -436,6 +482,17 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
                 // 接受：绝对符号链接规范化由 symlink_fix 模块在落盘/运行时处理
                 // （proot-distro link2symlink 的升级解法），无需运行时 flag。
             }
+            // 【审计 B1】dsh-Go / proot-distro 的启动前缀会带 `--sysvipc` 与
+            // `-L`，二者在 termux/proot 里都是**无参数**开关（extension 选项表
+            // `.value=NULL`）：前者启用 System V IPC 拦截，后者修正符号链接
+            // lstat 返回的大小。本引擎当前**未实现**这两种语义，这里显式
+            // 接受为 no-op，避免前缀直接撞进下方「不支持的选项」兜底导致
+            // 启动退出；绝不在 help/文档里把它们写成「已支持」，详见
+            // docs/usage.md「已接受未实现」清单。因是无参数开关，不会吞掉
+            // 其后紧邻的 `--rootfs=...` 等选项。
+            "--sysvipc" | "-L" => {
+                // 已接受，未实现（no-op）。
+            }
             other if other.starts_with("--change-id=") => {
                 // --change-id=uid:gid：对齐上游 fake_id0。本引擎仅实现 0:0（fake root）。
                 let v = &other["--change-id=".len()..];
@@ -474,8 +531,22 @@ fn parse_native_args(args: &[String]) -> Result<NativeArgs, String> {
     let Some(rf) = rootfs else {
         return Err("缺少 -r/--rootfs（或用 -R/-S 简写）".into());
     };
+    // 【审计 A4】启动前把 rootfs 规范化为绝对路径：相对路径（如
+    // `-r ./rootfs`）会在子进程 chdir / 后续路径翻译时按「当前工作目录」
+    // 重新解析，落点漂移 → 初始 exec 找不到 guest shell → 子进程
+    // `_exit(127)`（误导性的 "command not found"）。canonicalize 一次完成
+    // 「存在性校验 + 绝对化 + 解符号链接」；失败时给出含原始输入与底层
+    // io 错误的可读提示，让调用方以退出码 2 结束，不再把 127 当替罪羊。
+    let rf = rf.canonicalize().map_err(|e| {
+        format!(
+            "rootfs 目录不存在或无法访问: {}（{}）。请传入存在的绝对路径（如 -r /data/.../rootfs）。",
+            rf.display(),
+            e
+        )
+    })?;
+    // canonicalize 对「路径指向普通文件」也会成功，补一道目录校验。
     if !rf.is_dir() {
-        return Err(format!("rootfs 目录不存在: {}", rf.display()));
+        return Err(format!("rootfs 不是目录: {}", rf.display()));
     }
 
     let mut config = if recommended {
@@ -2572,6 +2643,94 @@ mod tests {
         assert!(!na2.config.fake_root);
         assert_eq!(na2.config.cwd, "/");
         std::fs::remove_dir_all(&rf).ok();
+    }
+
+    /// 【审计 A4 回归】`-r` 相对路径启动前被 canonicalize 成绝对路径；
+    /// 不存在的路径给出含原始输入的可读错误，不再落到子进程 _exit(127)。
+    #[test]
+    fn parse_native_args_canonicalizes_rootfs() {
+        // 相对路径 "." 必存在：规范后应是绝对路径且等于当前目录。
+        let na = parse_native_args(&["-r".to_string(), ".".to_string()]).unwrap();
+        assert!(
+            na.config.rootfs.is_absolute(),
+            "相对 rootfs 必须规范成绝对路径"
+        );
+        assert_eq!(
+            na.config.rootfs,
+            std::env::current_dir().unwrap().canonicalize().unwrap()
+        );
+        // 不存在的路径：错误文案含原始输入，且明确「目录不存在/无法访问」。
+        let err = parse_native_args(&[
+            "-r".to_string(),
+            "./definitely-no-such-rootfs-xyz".to_string(),
+        ])
+        .unwrap_err();
+        assert!(err.contains("rootfs 目录不存在"), "{}", err);
+        assert!(err.contains("./definitely-no-such-rootfs-xyz"), "{}", err);
+    }
+
+    /// 【审计 B1 回归】dsh-Go 启动前缀里的 `--sysvipc` / `-L` 应被接受
+    /// （no-op，已接受未实现），不再撞「不支持的选项」兜底直接退出；
+    /// 且作为无参数开关不得吞掉其后紧邻的 `--rootfs=...` 与命令。
+    #[test]
+    fn parse_native_args_accepts_dsh_prefix_flags() {
+        let rf = std::env::temp_dir().join("mox-proot-test-dsh-rf");
+        std::fs::create_dir_all(&rf).unwrap();
+        let rootfs_eq = format!("--rootfs={}", rf.display());
+        let na = parse_native_args(&[
+            "--kill-on-exit".to_string(),
+            "--link2symlink".to_string(),
+            "--sysvipc".to_string(),
+            "-L".to_string(),
+            "-0".to_string(),
+            rootfs_eq,
+            "--cwd=/root".to_string(),
+            "-b".to_string(),
+            "/dev".to_string(),
+            "--".to_string(),
+            "/usr/bin/env".to_string(),
+            "-i".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(na.config.cwd, "/root");
+        assert!(na.config.fake_root, "-0 应生效");
+        assert_eq!(na.config.rootfs, rf.canonicalize().unwrap());
+        assert_eq!(
+            na.command,
+            vec!["/usr/bin/env".to_string(), "-i".to_string()]
+        );
+        std::fs::remove_dir_all(&rf).ok();
+    }
+
+    /// 【审计 B4 回归】注入环境里剔除上游 PROOT_* 残留变量，其余原样保留。
+    #[test]
+    fn strip_stale_proot_env_drops_upstream_vars() {
+        let env: Vec<String> = [
+            "PATH=/usr/bin".to_string(),
+            "PROOT_LOADER=/tmp/ld.so".to_string(),
+            "PROOT_TMP_DIR=/tmp".to_string(),
+            "HOME=/root".to_string(),
+            "PROOT_L2S_DIR=/x".to_string(),
+            "NOEQUALS".to_string(),
+        ]
+        .to_vec();
+        let (kept, dropped) = strip_stale_proot_env(&env);
+        assert_eq!(
+            kept,
+            vec![
+                "PATH=/usr/bin".to_string(),
+                "HOME=/root".to_string(),
+                "NOEQUALS".to_string(),
+            ]
+        );
+        assert_eq!(
+            dropped,
+            vec![
+                "PROOT_LOADER".to_string(),
+                "PROOT_TMP_DIR".to_string(),
+                "PROOT_L2S_DIR".to_string(),
+            ]
+        );
     }
 
     /// 初始 cwd 语义（M5.2）四种组合：显式 -w 绝对 / 显式 -w 相对 /

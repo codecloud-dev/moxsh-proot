@@ -203,6 +203,34 @@ jobs:
           done
           ls -la dist/
 
+      # 【审计 A6 / S14 复核】链接参数改了二进制布局，必须对最终 android 产物
+      # 逐个核对 PT_LOAD 的 p_align ≥ 0x4000（16KB）。任一不足即让 job 变红，
+      # 防止 -Wl,-z,max-page-size=16384 被回退而无人察觉。debug/release 用
+      # 同一套 rustflags，这里校验的就是实际发布出去的二进制。
+      - name: 校验 16KB 页对齐（android 产物 p_align ≥ 0x4000）
+        if: matrix.ndk == 'true'
+        run: |
+          set -e
+          for name in "${{ matrix.name }}" "${{ matrix.legacy_name }}"; do
+            for bin in mox-proot mox-proot-distro; do
+              f="dist/${bin}-${name}"
+              [ -f "$f" ] || { echo "::error::缺产物 $f"; exit 1; }
+              aligns="$(readelf -lW "$f" | awk '$1=="LOAD" {print $NF}')"
+              echo "=== $f PT_LOAD Align ==="
+              echo "$aligns"
+              [ -n "$aligns" ] || { echo "::error::$f 未找到 LOAD 段"; exit 1; }
+              while read -r a; do
+                [ -z "$a" ] && continue
+                v=$((16#${a#0x}))
+                if [ "$v" -lt 16384 ]; then
+                  echo "::error::$f 段 p_align=$a < 0x4000，16KB 页设备 exec 会失败"
+                  exit 1
+                fi
+              done <<< "$aligns"
+            done
+          done
+          echo "16KB 页对齐校验通过"
+
       - name: 上传到 Release
         uses: softprops/action-gh-release@v2
         with:

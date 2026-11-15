@@ -57,6 +57,23 @@ pub fn diag_enabled() -> bool {
     VERBOSE.load(Ordering::Relaxed) > 0 || std::env::var("MOX_DBG").is_ok()
 }
 
+/// 纯判定：给定 `MOX_SECCOMP` 的取值，是否算「显式请求开启加速」。
+///
+/// 【审计 A1】旧实现用 `var_os(...).is_some()`：只要变量存在就算开启，
+/// 于是 `MOX_SECCOMP=0`（用户想关）也照样启用，关不掉。这里改为只认
+/// 精确值 `"1"`；`"0"`、空串、其它任意值、未设置一律不启用。
+/// 抽成纯函数便于单测逐个取值覆盖，且不触碰进程级 env（避免并行测试竞态）。
+fn seccomp_enabled_value(v: Option<&str>) -> bool {
+    matches!(v, Some("1"))
+}
+
+/// 用户是否显式请求 seccomp 加速（读当前进程 env）。
+fn seccomp_requested() -> bool {
+    // `var` 遇到非 UTF-8 取值返回 Err，按未启用处理（告警由
+    // `report_seccomp_gate` 负责，这里只管布尔判定）。
+    seccomp_enabled_value(std::env::var("MOX_SECCOMP").ok().as_deref())
+}
+
 /// seccomp 加速器是否真正启用。
 ///
 /// 【渗透复测 P1 修复】`-v`/`MOX_DBG` 诊断模式与 seccomp 加速器**语义互斥**：
@@ -69,8 +86,44 @@ pub fn diag_enabled() -> bool {
 /// **共用本函数**，否则会出现「子进程装了过滤器 + SIGSTOP 握手，tracer
 /// 却不认 seccomp」的挂死。配合 `run_native` 把 `set_verbose` 提前到 spawn
 /// 之前，保证两侧判定一致。
+///
+/// 保持纯判定、无副作用：告警/让位日志不放在这里（会被 fork 后子进程与
+/// 大量单测重复触发），统一由启动链路的 `report_seccomp_gate()` 打一次。
 pub fn seccomp_active() -> bool {
-    std::env::var_os("MOX_SECCOMP").is_some() && !diag_enabled()
+    seccomp_requested() && !diag_enabled()
+}
+
+/// 启动时报告 seccomp 门控状态（仅在主进程启动链路调用一次）。
+///
+/// 覆盖两处「静默」问题：
+/// - 【审计 A1】`MOX_SECCOMP` 取值非法（既非 `"1"` 也非 `"0"`）时明确
+///   告警，避免用户以为开关生效；
+/// - 【审计 A2】用户请求了加速（`=1`）却叠加诊断模式（`-v`/`MOX_DBG`），
+///   旧实现静默关闭加速，且诊断走全量双停 + 日志，比默认还慢，用户
+///   无从得知。这里打一行明确日志，说清「未启用加速 + 原因 + 如何恢复」。
+///
+/// 不放进 `seccomp_active()`：该函数被 fork 后子进程与大量单测调用，在其中
+/// `eprintln!` 会重复打印、污染 guest stderr 与测试输出。调用方须在
+/// `set_verbose` **之后**调用，确保 `diag_enabled()` 已读到 CLI 的 `-v`。
+pub fn report_seccomp_gate() {
+    match std::env::var("MOX_SECCOMP") {
+        Ok(v) if v == "1" => {
+            if diag_enabled() {
+                eprintln!(
+                    "mox-proot: 已设 MOX_SECCOMP=1，但诊断模式（-v / MOX_DBG）下 seccomp 加速自动让位，本次【未启用加速】；诊断走全量 syscall 双停并输出日志，性能低于默认。如需加速请去掉 -v / MOX_DBG。"
+                );
+            }
+        }
+        Ok(v) if v == "0" => {} // 显式关闭，符合预期，静默
+        Ok(v) => eprintln!(
+            "mox-proot: MOX_SECCOMP 取值 {:?} 非法（仅 \"1\"=开启 / \"0\"=关闭），已按未启用处理。",
+            v
+        ),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            eprintln!("mox-proot: MOX_SECCOMP 含非 UTF-8 取值，已按未启用处理。")
+        }
+        Err(std::env::VarError::NotPresent) => {} // 未设置，静默
+    }
 }
 
 /// 引擎内部诊断日志（`-v` 或 env `MOX_DBG=1` 开启，默认零开销）。
@@ -3511,7 +3564,30 @@ mod tests {
         assert_eq!(t2.strip_host_rootfs_for_guest("/any/host/path"), "/");
     }
 
-    /// seccomp 与诊断模式互斥：仅 MOX_SECCOMP 时启用，叠加 -v / MOX_DBG 让位。
+    /// 【审计 A1 回归】加速开关只认精确值 "1"：其余取值/未设置一律不启用。
+    /// 用纯函数覆盖各取值，不改进程级 env，避免与并行测试互相干扰。
+    #[test]
+    fn seccomp_only_explicit_one_enables() {
+        assert!(seccomp_enabled_value(Some("1")));
+        for v in [
+            Some("0"),
+            Some(""),
+            Some("yes"),
+            Some("true"),
+            Some("2"),
+            Some("01"),
+            None,
+        ] {
+            assert!(
+                !seccomp_enabled_value(v),
+                "MOX_SECCOMP={:?} 不应算作开启加速",
+                v
+            );
+        }
+    }
+
+    /// seccomp 与诊断模式互斥：仅 MOX_SECCOMP=1 时启用，叠加 -v / MOX_DBG 让位。
+    /// 同时钉死 A1 端到端：显式 "0" 必须能关掉加速（旧 is_some() 关不掉）。
     #[test]
     fn seccomp_active_honours_diag_mode() {
         static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -3519,10 +3595,14 @@ mod tests {
         let old_dbg = std::env::var_os("MOX_DBG");
         let old_sec = std::env::var_os("MOX_SECCOMP");
         let old_v = diag_enabled();
-        std::env::set_var("MOX_SECCOMP", "1");
         std::env::remove_var("MOX_DBG");
         set_verbose(0);
+        std::env::set_var("MOX_SECCOMP", "1");
         assert!(seccomp_active());
+        // A1 端到端：显式关闭必须真的关掉。
+        std::env::set_var("MOX_SECCOMP", "0");
+        assert!(!seccomp_active(), "MOX_SECCOMP=0 必须关闭加速");
+        std::env::set_var("MOX_SECCOMP", "1");
         set_verbose(1);
         assert!(!seccomp_active(), "诊断模式必须让位");
         set_verbose(0);

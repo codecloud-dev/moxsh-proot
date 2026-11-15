@@ -41,7 +41,24 @@ mox-proot -r ~/rootfs -0 -- /bin/sh
 - **符号链接**：rootfs 内绝对 target 的符号链接（Alpine minirootfs 的
   applet 链接形态）在 exec / stat / openat 全链路自动解析，tar 直接
   解包未规范化的 rootfs 也能跑。
-- **`-q/-k/-v` 等上游选项未实现**：不支持时明确报错，不假装支持。
+- **`-q/-k` 等上游选项未实现**：不支持时明确报错，不假装支持（`-v` 已实现为诊断日志级别）。
+- **`--sysvipc` / `-L` 已接受、未实现**：为兼容 dsh-Go / proot-distro 的
+  启动前缀（`--kill-on-exit --link2symlink --sysvipc -L -0 --rootfs=...`），
+  这两个**无参数开关**会被解析接受，但当前引擎**不实现**其语义——
+  `--sysvipc` 的 System V IPC 拦截、`-L` 修正符号链接 lstat 大小均为
+  no-op。这里如实写明「已接受未实现」，绝不把它们算作已支持的功能。
+
+### 1.4 启动行为（2026-11-15 审计收口）
+
+- **seccomp 加速开关**：仅 `MOX_SECCOMP=1` 开启；`MOX_SECCOMP=0`、空串、
+  其它值均按未启用处理，非法值会明确告警。`-v` / `MOX_DBG` 诊断模式下
+  加速自动让位，并打印明确提示（不再静默关闭、不再比默认还慢却无从得知）。
+- **rootfs 路径**：`-r/-R/-S/--rootfs=` 在启动前 canonicalize 成绝对路径；
+  路径不存在 / 非目录时给出含原始输入与 io 错误的可读提示并以退出码 2
+  结束，不再落到子进程 `_exit(127)` 的误导性 "command not found"。
+- **PROOT_* 残留变量**：`PROOT_LOADER` / `PROOT_TMP_DIR` / `PROOT_L2S_DIR`
+  本引擎不读取，启动时会从注入容器的环境列表中剔除并逐项记日志，避免
+  误以为生效。
 
 ## 2. mox-proot-distro（发行版管理）
 
@@ -146,6 +163,12 @@ python3 py/verify/verify_engine.py   # 三层验证（单测 + 钩子直跑 + �
 ```
 
 e2e 验证会自动下载 Alpine minirootfs（约 4MB）到临时目录。
+
+Android 产物（`aarch64-linux-android` / `x86_64-linux-android`）在
+`.cargo/config.toml` 里通过 `-Wl,-z,max-page-size=16384` 把 PT_LOAD 的
+`p_align` 提升到 `0x4000`，满足 16KB 页机型（Android 15+ / targetSdk 35+，
+Google Play 自 2025-11-01 强制）。发布工作流会用 `readelf` 对每个 android
+产物复核 `p_align ≥ 0x4000`，任一不足即让 CI 变红。
 
 ## 5. 支持与反馈
 

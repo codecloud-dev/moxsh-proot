@@ -13,3 +13,17 @@ rustflags = ["-C", "target-feature=+crt-static"]
 
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# 【审计 A6 / S14：16KB 页对齐】Android 15+ 起设备内存页可为 16KB，
+# Google Play 自 2025-11-01 对 targetSdk 35+ 强制要求支持。ELF 的 PT_LOAD
+# 段 p_align 必须 ≥ 0x4000，否则 16KB 页机型上 mmap/exec 直接失败；NDK
+# 链接器默认按 4KB（0x1000）对齐（审计实机取证 p_align=0x1000）。
+# 显式把 max-page-size 提到 16384，让 android 产物（cdylib + 两个 bin）
+# 的 LOAD 段对齐到 0x4000。仅作用于 android target，不影响 host 的
+# cargo test/clippy，也不影响上面的 musl 目标。发布与 CI 会对最终二进制
+# 逐个 readelf 复核（见 .github/workflows/release.yml）。
+[target.aarch64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]
+
+[target.x86_64-linux-android]
+rustflags = ["-C", "link-arg=-Wl,-z,max-page-size=16384"]

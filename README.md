@@ -7,16 +7,21 @@
 <h1 align="center">mox-proot</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/moxsh-proot/rust-check.yml?branch=main&label=CI%20Build&color=8a7bff" alt="CI Build">
-  <img src="https://img.shields.io/github/v/release/codecloud-dev/moxsh-proot?label=Latest&color=37d5d3" alt="Latest">
-  <img src="https://img.shields.io/github/stars/codecloud-dev/moxsh-proot?style=social" alt="GitHub Stars">
-  <img src="https://img.shields.io/badge/version-0.9.1-8a7bff" alt="version">
-  <img src="https://img.shields.io/badge/license-GPL--3.0-37d5d3" alt="license">
-  <img src="https://img.shields.io/badge/Core-Rust-000?logo=rust&logoColor=white" alt="Rust 内核">
-  <img src="https://img.shields.io/badge/Installer-Go-00ADD8?logo=go&logoColor=white" alt="Go 安装器">
-  <img src="https://img.shields.io/badge/Hooks-Python%20%2F%20Lua-3776AB?logo=python&logoColor=white" alt="钩子脚本">
-  <img src="https://img.shields.io/badge/Bridge-C-A8B9CC?logo=c&logoColor=white" alt="C 桥">
-  <img src="https://img.shields.io/badge/Platform-Linux%20%2F%20Termux(Android)-3DDC84?logo=android&logoColor=white" alt="桌面 Linux / Termux(Android)">
+  <a href="https://github.com/codecloud-dev/moxsh-proot"><img src="https://img.shields.io/badge/MoX_Series-%E5%85%8D_root_%E5%AE%B9%E5%99%A8-8a7bff?style=for-the-badge&logo=github&logoColor=white" alt="MoX Series: 免 root 容器"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/blob/main/README.md"><img src="https://img.shields.io/badge/Rust-ptrace_%E5%86%85%E6%A0%B8-14181A?style=for-the-badge&logo=rust&logoColor=CE412B" alt="Rust: ptrace 内核"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/blob/main/README.md"><img src="https://img.shields.io/badge/Go-%E5%AE%89%E8%A3%85%E5%99%A8-14181A?style=for-the-badge&logo=go&logoColor=00ADD8" alt="Go: 安装器"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/blob/main/README.md"><img src="https://img.shields.io/badge/Python-%E8%BF%90%E8%A1%8C%E6%97%B6-14181A?style=for-the-badge&logo=python&logoColor=3776AB" alt="Python: 运行时"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/blob/main/README.md"><img src="https://img.shields.io/badge/Android-Termux_%2F_Linux-14181A?style=for-the-badge&logo=android&logoColor=3DDC84" alt="Android: Termux / Linux"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/codecloud-dev/moxsh-proot/actions/workflows/rust-check.yml"><img src="https://img.shields.io/github/actions/workflow/status/codecloud-dev/moxsh-proot/rust-check.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/releases"><img src="https://img.shields.io/github/v/release/codecloud-dev/moxsh-proot?style=flat-square&label=release&color=37d5d3" alt="Latest release"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/blob/main/LICENSE"><img src="https://img.shields.io/github/license/codecloud-dev/moxsh-proot?style=flat-square&color=37d5d3" alt="License"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/stargazers"><img src="https://img.shields.io/github/stars/codecloud-dev/moxsh-proot?style=flat-square&color=ff7ac3" alt="Stars"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/commits/main"><img src="https://img.shields.io/github/last-commit/codecloud-dev/moxsh-proot?style=flat-square&color=8a7bff" alt="Last commit"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot"><img src="https://img.shields.io/badge/platform-Linux_%2F_Termux-3DDC84?style=flat-square" alt="platform: Linux / Termux"></a>
+  <a href="https://github.com/codecloud-dev/moxsh-proot/pulls"><img src="https://img.shields.io/badge/PRs-welcome-8a7bff?style=flat-square&logo=github&logoColor=white" alt="PRs welcome"></a>
 </p>
 
 

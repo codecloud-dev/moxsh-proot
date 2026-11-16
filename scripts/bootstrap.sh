@@ -17,7 +17,7 @@ set -u
 
 # 镜像源（标签 + URL）。国内 gitee 优先，海外 github，jsdelivr 作 CDN 兜底。
 GH="https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-mox-proot.sh"
-GT="https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-mox-proot.sh"
+GT="https://gitee.com/codecloud-dev/moxsh-proot/raw/main/scripts/install-mox-proot.sh"
 JS="https://cdn.jsdelivr.net/gh/codecloud-dev/moxsh-proot@main/scripts/install-mox-proot.sh"
 
 say() { printf '\033[1;36m==>\033[0m %s\n' "$*"; }

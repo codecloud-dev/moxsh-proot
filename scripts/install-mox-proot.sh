@@ -8,7 +8,7 @@
 #
 # 安装方式（原版 Termux，二选一，脚本自动探测国内外线路）：
 #   curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scripts/install-mox-proot.sh | bash
-#   curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
+#   curl -fsSL https://gitee.com/codecloud-dev/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
 #
 # 本脚本是安装体系的 **bash 探测层**（零依赖、可 curl|bash）；
 # richer 安装/更新体验走 Go 安装器（仓库 go/ 目录，Release 资产
@@ -28,7 +28,7 @@
 set -euo pipefail
 
 GITHUB_REPO="${MOX_PROOT_REPO:-codecloud-dev/moxsh-proot}"
-GITEE_REPO="${MOX_GITEE_REPO:-thousand-code-crafts/moxsh-proot}"
+GITEE_REPO="${MOX_GITEE_REPO:-codecloud-dev/moxsh-proot}"
 RELEASE="${MOX_PROOT_RELEASE:-proot-latest}"
 
 # NO_COLOR 约定（no-color.org）：设了任意值即关色；非 TTY（curl|bash 重定向）也关色。

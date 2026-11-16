@@ -1,4 +1,4 @@
-> **🌐 Canonical repository is on GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go?r=moxsh-proot) is the single source of truth: please file all issues and pull requests there. The [Gitee mirror](https://gitee.com/thousand-code-crafts/moxsh-proot) is a read-only copy synced hourly for faster access in mainland China.
+> **🌐 Canonical repository is on GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go?r=moxsh-proot) is the single source of truth: please file all issues and pull requests there. The [Gitee mirror](https://gitee.com/codecloud-dev/moxsh-proot) is a read-only copy synced hourly for faster access in mainland China.
 
 <p align="center">
   <img src="assets/logo.svg" width="128" alt="mox-proot liquid-glass logo">
@@ -194,7 +194,7 @@ curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scri
 **China-friendly mirror** (Gitee raw, direct connection):
 
 ```bash
-curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
+curl -fsSL https://gitee.com/codecloud-dev/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
 ```
 
 Zero dependencies (just curl + coreutils). The binary source is auto-probed

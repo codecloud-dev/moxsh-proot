@@ -391,10 +391,10 @@ jobs:
           fail_on_unmatched_files: true
 
   # 国内镜像：把全部 Release 资产（引擎 + distro + Go 安装器 + 校验文件）同步到
-  # Gitee（thousand-code-crafts/moxsh-proot release 1217672）。Gitee 是 GitHub 的
+  # Gitee（codecloud-dev/moxsh-proot release 1217672）。Gitee 是 GitHub 的
   # 源码镜像，但「不自动同步二进制资产」——所以国内用户此前选 Gitee 源会 404。
   # 本步用 GITEE_TOKEN 把二进制也推上去，Gitee 路径对国内用户真正可用。
-  # 前置：仓库 Secrets 配置 GITEE_TOKEN（thousand-code-crafts 满权限写令牌）。
+  # 前置：仓库 Secrets 配置 GITEE_TOKEN（codecloud-dev 满权限写令牌）。
   mirror-gitee:
     name: 镜像到 Gitee（国内线路）
     needs: [checksums]
@@ -404,7 +404,7 @@ jobs:
     # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
     timeout-minutes: 120
     env:
-      GITEE_OWNER: thousand-code-crafts
+      GITEE_OWNER: codecloud-dev
       GITEE_REPO: moxsh-proot
       GITEE_RID: "1217672"
     steps:

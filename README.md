@@ -1,4 +1,4 @@
-> **🌐 主仓库在 GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go?r=moxsh-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/thousand-code-crafts/moxsh-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
+> **🌐 主仓库在 GitHub** — [`codecloud-dev/moxsh-proot`](https://mox-site.pages.dev/go?r=moxsh-proot) 是唯一主源：Issue、Pull Request、功能讨论请统一提交到 GitHub。[Gitee 镜像](https://gitee.com/codecloud-dev/moxsh-proot) 仅供国内高速只读访问，每小时从 GitHub 自动同步。
 
 <p align="center">
   <img src="assets/logo.svg" width="128" alt="mox-proot 液态玻璃标志">
@@ -194,7 +194,7 @@ curl -fsSL https://raw.githubusercontent.com/codecloud-dev/moxsh-proot/main/scri
 **国内备援**（Gitee raw，直连）：
 
 ```bash
-curl -fsSL https://gitee.com/thousand-code-crafts/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
+curl -fsSL https://gitee.com/codecloud-dev/moxsh-proot/raw/main/scripts/install-mox-proot.sh | bash
 ```
 
 零依赖（只要 curl + coreutils）。脚本**全平台自适应**：桌面 Linux

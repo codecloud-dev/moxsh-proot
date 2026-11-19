@@ -197,24 +197,24 @@ pub fn translate_selftest() -> usize {
 
     // 3) 默认绑定：/dev 命中。
     let r = TranslateRules::with_distro_defaults(rf);
-    pass += (r.guest_to_host("/dev") == PathBuf::from("/dev")) as usize;
+    pass += (r.guest_to_host("/dev") == Path::new("/dev")) as usize;
 
     // 4) 绑定子路径。
-    pass += (r.guest_to_host("/dev/null") == PathBuf::from("/dev/null")) as usize;
+    pass += (r.guest_to_host("/dev/null") == Path::new("/dev/null")) as usize;
 
     // 5) /proc 绑定直通（loader 依赖 /proc/self/exe 的真实 procfs 路径）。
-    pass += (r.guest_to_host("/proc/self/exe") == PathBuf::from("/proc/self/exe")) as usize;
+    pass += (r.guest_to_host("/proc/self/exe") == Path::new("/proc/self/exe")) as usize;
 
     // 6) 嵌套绑定最长前缀。
     let mut r = TranslateRules::with_distro_defaults(rf);
     r.add_binding("/dev/urandom", "/data/local/tmp/urandom");
-    pass += (r.guest_to_host("/dev/urandom") == PathBuf::from("/data/local/tmp/urandom")) as usize;
+    pass += (r.guest_to_host("/dev/urandom") == Path::new("/data/local/tmp/urandom")) as usize;
 
     // 7) 后绑定覆盖先绑定。
     let mut r = TranslateRules::new(rf);
     r.add_binding("/etc/hosts", "/a");
     r.add_binding("/etc/hosts", "/b");
-    pass += (r.guest_to_host("/etc/hosts") == PathBuf::from("/b")) as usize;
+    pass += (r.guest_to_host("/etc/hosts") == Path::new("/b")) as usize;
 
     // 8) 幂等（host 路径回环翻译不变）。
     let once = r.guest_to_host("/usr/lib");
@@ -223,7 +223,7 @@ pub fn translate_selftest() -> usize {
     // 9) 相对路径原样直通（M5.2：内核按已翻译的 cwd/dirfd 解析，
     //    tracer 自行绝对化必然用错 cwd 快照）。
     let r = TranslateRules::new(rf);
-    pass += (r.guest_to_host("notes") == PathBuf::from("notes")) as usize;
+    pass += (r.guest_to_host("notes") == Path::new("notes")) as usize;
 
     // 10) fake root /proc 身份文件标记。
     let r = TranslateRules::with_distro_defaults(rf);
@@ -242,7 +242,7 @@ pub fn translate_selftest() -> usize {
     // 14) `!` 不隔离：正向生效、反向不还原。
     let mut r = TranslateRules::new(rf);
     r.add_binding_no_isolate("/sdcard", "/storage/emulated/0");
-    let fwd = r.guest_to_host("/sdcard/x") == PathBuf::from("/storage/emulated/0/x");
+    let fwd = r.guest_to_host("/sdcard/x") == Path::new("/storage/emulated/0/x");
     let back = r.host_to_guest(Path::new("/storage/emulated/0/x")).is_none();
     pass += (fwd && back) as usize;
 

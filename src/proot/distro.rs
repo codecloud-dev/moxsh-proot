@@ -1011,6 +1011,11 @@ pub fn parse_sha256sums(text: &str, filename: &str) -> Option<String> {
         let (Some(hex), Some(name)) = (it.next(), it.next()) else {
             continue;
         };
+        // sha256sum 二进制模式输出 `hex *filename`：split_whitespace 后
+        // 星号粘在文件名 token 上，去掉它才能与 filename 匹配（本函数文档
+        // 声明支持"空格|星号"，旧实现漏了对星号的处理，导致 -b 模式清单
+        // 拿不到校验值 → 静默跳过校验）。
+        let name = name.strip_prefix('*').unwrap_or(name);
         let hit = name == filename || name.ends_with(&format!("/{}", filename));
         if hit && hex.len() == 64 && hex.chars().all(|c| c.is_ascii_hexdigit()) {
             return Some(hex.to_ascii_lowercase());
@@ -1406,6 +1411,18 @@ deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  other-rootfs.t
         assert_eq!(got, "1".repeat(64));
     }
 
+    /// sha256sum 二进制模式（`sha256sum -b` → `hex *filename`）：文档声明支持
+    /// 星号分隔，但 split_whitespace 会把 `*` 粘在文件名上导致匹配失败，
+    /// 进而拿不到校验值。回归测试锁死两种模式（含子目录前缀）。
+    #[test]
+    fn sha256sums_accepts_binary_star_format() {
+        let hex = "2".repeat(64);
+        let sums = format!("{} *rootfs.tar.gz\n", hex);
+        assert_eq!(parse_sha256sums(&sums, "rootfs.tar.gz"), Some(hex.clone()));
+        let nested = format!("{} *aarch64/rootfs.tar.gz\n", hex);
+        assert_eq!(parse_sha256sums(&nested, "rootfs.tar.gz"), Some(hex));
+    }
+
     /// sha256 机制-2：文件名不匹配（含近似名）返回 None；非 64 位 hex 不算有效行。
     #[test]
     fn sha256sums_no_match_returns_none() {
@@ -1419,14 +1436,21 @@ deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef  other-rootfs.t
         assert_eq!(parse_sha256sums(short, "rootfs.tar.xz"), None);
     }
 
-    /// sha256 机制-3：四个内置 checksum_url 均为 https——纯手写 GET 无 TLS，
-    /// `fetch_expected_sha256` 确定性返回 None（不联网可断言）；
-    /// 真实校验走 Kotlin 层（见模块内 TLS 边界注释）。
+    /// sha256 机制-3：所有内置 checksum_url 必须是 https（明文清单经 curl 层
+    /// 被拒，防 MITM 投毒）。此断言纯本地、不联网。
+    ///
+    /// 旧实现用"联网后 fetch_expected_sha256 必返回 None"做断言——既是
+    /// 网络依赖（CI/沙箱出口不通就假绿，通了却因 Ubuntu 的 `hex *file`
+    /// 二进制清单被解析出校验值而误判失败），又与当前"curl 支持 HTTPS、
+    /// 校验真正生效"的实现自相矛盾。真实拉取能力由 curl 提供，解析正确性
+    /// 由 parse_sha256sums 单测覆盖，这里只锁死安全契约。
     #[test]
-    fn fetch_expected_sha256_https_returns_none() {
+    fn builtin_checksum_urls_are_https() {
         for spec in builtin_specs() {
             assert!(spec.checksum_url.starts_with("https://"), "{}", spec.id);
-            assert_eq!(fetch_expected_sha256(&spec), None);
+            if let Some((_, _, checksum)) = spec.urls_for(std::env::consts::ARCH) {
+                assert!(checksum.starts_with("https://"), "{} -> {}", spec.id, checksum);
+            }
         }
     }
 

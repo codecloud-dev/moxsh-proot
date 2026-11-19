@@ -15,7 +15,7 @@ const K: [u32; 64] = [
 ];
 
 fn rotr(x: u32, n: u32) -> u32 {
-    (x >> n) | (x << (32 - n))
+    x.rotate_right(n)
 }
 
 /// 计算 SHA-256 摘要。
@@ -26,7 +26,8 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut msg = data.to_vec();
     let bit_len = (data.len() as u64) * 8;
     msg.push(0x80);
-    while (msg.len() + 8) % 64 != 0 {
+    // 64 是 2 的幂，位掩码与 is_multiple_of(64) 等价且不抬高 MSRV。
+    while (msg.len() + 8) & 63 != 0 {
         msg.push(0);
     }
     msg.extend_from_slice(&bit_len.to_be_bytes());

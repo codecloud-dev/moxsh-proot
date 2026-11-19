@@ -2682,7 +2682,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_GETREGSET,
                     pid,
-                    1usize as *mut libc::c_void, // NT_PRSTATUS
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(), // NT_PRSTATUS
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2726,7 +2726,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_GETREGSET,
                     pid,
-                    1usize as *mut libc::c_void, // NT_PRSTATUS
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(), // NT_PRSTATUS
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2773,7 +2773,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_GETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut giov as *mut libc::iovec,
                 )
             };
@@ -2792,7 +2792,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_SETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2833,7 +2833,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_GETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2852,7 +2852,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_SETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2877,7 +2877,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_GETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2896,7 +2896,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_SETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2922,7 +2922,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_GETREGSET,
                     pid,
-                    1usize as *mut libc::c_void,
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(),
                     &mut giov as *mut libc::iovec,
                 )
             };
@@ -2960,7 +2960,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_SETREGSET,
                     pid,
-                    1usize as *mut libc::c_void, // NT_PRSTATUS
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(), // NT_PRSTATUS
                     &mut iov as *mut libc::iovec,
                 )
             };
@@ -2985,7 +2985,7 @@ impl Tracer {
                 libc::ptrace(
                     libc::PTRACE_SETREGSET,
                     pid,
-                    1usize as *mut libc::c_void, // NT_PRSTATUS
+                    std::ptr::NonNull::<libc::c_void>::dangling().as_ptr(), // NT_PRSTATUS
                     &mut iov as *mut libc::iovec,
                 )
             };

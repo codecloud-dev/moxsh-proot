@@ -12,6 +12,54 @@
 
 - _（暂无待发布条目）_
 
+## [0.9.2] - 2026-11-19
+
+> 本轮为自研仓库深度升级：真跑+读代码挖出 5 个真实问题（含 1 个 CI 长期红、
+> 3 个静默失效/错误处理的真 bug、1 个网络依赖假绿测试），全部带回归测试。
+> 发版/推送由主流程统一执行，本版本号为源码声明版本。
+
+### 修复
+
+- **docs-check CI 长期红：README 内嵌安装短命令与 bootstrap 失同步**。上一笔提交把
+  `scripts/bootstrap.sh` 的 Gitee 路径从作废的 `thousand-code-crafts` 改成 `codecloud-dev`，
+  却没重生成 README 里的 base64 短命令——`scripts/gen-shortcmd.sh --check` 解码后逐字节
+  比对失败，CI 的 docs-check job 一直红，用户从 README 复制的短命令仍走旧路径。
+  已重新生成并替换 `README.md`/`README.en.md` 两处短命令，解码结果与 bootstrap 完全一致。
+- **Go 安装器断点续传永久卡在 HTTP 416**（可靠性）。`.part` 已是完整文件（或同长度
+  陈旧文件）时服务器对 `Range` 回 416，旧实现在打开目标文件前就直接返回错误重试，
+  所有通道永久失败——与代码注释「含 200 覆盖 416 场景」自相矛盾。现 416 时去掉
+  `Range` 重新完整 GET 并做全量 SHA-256 校验。新增 `TestDownloadRecoversFrom416`
+  （修复前 FAIL：HTTP 416；修复后 PASS）。
+- **Go 安装器校验 fail-open**（供应链安全）。主通道 `<asset>.sha256` 暂时 404/不可达时，
+  旧实现把期望值置空，对后续任意通道「零校验」放行——被污染镜像可静默装进系统。
+  现改为逐通道获取本通道校验值，拿不到的通道直接跳过（fail-closed）。新增
+  `TestDownloadFailsClosedWithoutChecksum`（修复前 FAIL：静默接受污染内容；修复后 PASS）。
+- **Rust `parse_sha256sums` 不支持 sha256sum 二进制模式**（rootfs 校验静默跳过）。
+  文档声明支持 `<hex> *filename`，但 `split_whitespace` 把 `*` 粘在文件名 token 上导致
+  匹配失败；Ubuntu 官方 `SHA256SUMS` 正是 `hex *file` 格式，其校验值长期取不到。
+  现剥离文件名前导 `*`。新增 `sha256sums_accepts_binary_star_format`（修复前 FAIL，修复后 PASS）。
+- **网络依赖假绿测试**：`fetch_expected_sha256_https_returns_none` 用「联网后必返回 None」
+  做断言，既依赖外网（出口可达时 Ubuntu 二进制清单被正确解析出校验值，测试反而误判失败），
+  又与「curl 支持 HTTPS、校验真正生效」的实现矛盾。改为纯本地断言所有内置 checksum URL
+  均为 https，不联网、不假绿。
+- **当前 stable Rust（1.93）`clippy -D warnings` 新增 17 条错误会让 CI 红**：手写位循环、取模判倍
+  数、`iter().any` 代替 `contains`、`1usize as *mut c_void` 造悬垂指针、`PathBuf::from()` 临时对象
+  比较。全部按语义等价且兼容项目 MSRV 的方式改写（位旋转用 `rotate_right`、64 的倍数用位掩码、
+  `NonNull::dangling()`、`Path::new()` 比较），不用 `#[allow]` 遮羞。
+
+### 新增（基准）
+
+- 新增 `go/internal/fetch/fetch_bench_test.go` 真实基准（本机环回，非公网，仅看量级）：
+  - `BenchmarkParseChecksumText`：**136.1 ns/op（683.56 MB/s）**；
+  - `BenchmarkDownloadLocal`（4 MiB 端到端，含流式 SHA-256）：**3.62 ms/op（1160.02 MB/s）**。
+  - 数值随机器负载波动（`AMD EPYC 9K65`），仅用于回归性能量级，`go test ./...` 不执行基准。
+
+> 验证（CI 钉死的 Rust 1.86.0 + Go 1.21.4）：`cargo test` 303 passed / 0 failed（含 lib 295 +
+> 集成 2+1+5），`cargo clippy --all-targets -- -D warnings` RC=0；`go vet ./...` RC=0、
+> `gofmt -l` 空、`go test ./...` RC=0；`gen-shortcmd.sh --check` / `test-source-pick.sh` /
+> `test-console-sync.sh` / 两个 `sh -n` 全部 RC=0。主流程另用当前 stable Rust 1.93 复跑：
+> `cargo test` RC=0、`cargo clippy --all-targets -- -D warnings` RC=0（修清 17 条新 lint 后）。
+
 ## [0.9.1] - 2026-11-14
 
 ### 变更

@@ -118,8 +118,9 @@ func Download(opts Options) error {
 		client.Timeout = opts.Timeout
 	}
 
-	// 期望校验值：显式指定优先，否则从第一通道拉取（失败不致命，
-	// 后续下载成功后再补拉——镜像可能只有部分通道挂了校验文件）。
+	// 期望校验值：显式指定优先；未指定时尝试从首选通道拉取一次作为快速路径。
+	// 真正保证 fail-closed 的是下方"逐通道获取本通道校验值"——拿不到校验值
+	// 的通道一律跳过，绝不静默放行未校验的二进制（镜像污染 = 供应链攻击）。
 	expected := strings.ToLower(strings.TrimSpace(opts.ExpectedSHA256))
 	if expected == "" {
 		if cs, err := FetchChecksum(client, opts.Channels[0], opts.Asset); err == nil {
@@ -129,8 +130,20 @@ func Download(opts Options) error {
 
 	var lastErr error
 	for _, base := range opts.Channels {
+		// 每个通道下载前都要求"本通道可获取校验值"：显式值优先，否则
+		// 从本通道拉取 <asset>.sha256。任一通道缺校验文件即跳过该通道，
+		// 避免首通道 .sha256 暂时 404 时从被污染的镜像零校验下载。
+		chanExpected := expected
+		if chanExpected == "" {
+			cs, cerr := FetchChecksum(client, base, opts.Asset)
+			if cerr != nil {
+				lastErr = fmt.Errorf("通道 %s 校验文件不可用: %w", base, cerr)
+				continue
+			}
+			chanExpected = cs
+		}
 		for attempt := 0; attempt < retries; attempt++ {
-			err := downloadOnce(client, base, opts, expected)
+			err := downloadOnce(client, base, opts, chanExpected)
 			if err == nil {
 				return nil
 			}
@@ -167,6 +180,21 @@ func downloadOnce(client *http.Client, base string, opts Options, expected strin
 	resp, err := client.Do(req)
 	if err != nil {
 		return err
+	}
+	// 416 Range Not Satisfiable：续传起点已到/超 EOF（.part 已是完整文件或
+	// 同长度的陈旧文件）。去掉 Range 从头完整下载并做全量校验，否则会永久
+	// 卡在 416——这与下面 O_TRUNC 分支注释里"含 200 覆盖 416 场景"的意图一致，
+	// 但旧实现在打开目标文件之前就对 416 直接返回错误，注释与行为不符。
+	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable && have > 0 {
+		resp.Body.Close()
+		req, err = http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err = client.Do(req)
+		if err != nil {
+			return err
+		}
 	}
 	defer resp.Body.Close()
 

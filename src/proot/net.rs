@@ -284,7 +284,7 @@ pub fn merge_hosts_into_rootfs(host_hosts: &str, rootfs_etc_hosts: &Path) -> std
         .collect();
     let mut to_add: Vec<&String> = Vec::new();
     for e in &entries {
-        if !existing_lines.iter().any(|l| *l == e.as_str()) {
+        if !existing_lines.contains(&e.as_str()) {
             to_add.push(e);
         }
     }

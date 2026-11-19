@@ -1,14 +1,17 @@
 name: 镜像到 Gitee（单向，GitHub 为唯一主源）
 on:
-  push:
-    branches: [main]
+  # GitHub-hosted runner 到 gitee.com 的 git 连接实测会地域性挂死：
+  # 2026-11-19 同一提交连续两次 push 触发的镜像 job 卡住 10+ 分钟无日志更新。
+  # 和 moxsh-suite 采取同一策略：去掉 push 触发，保留定时 + 手动补同步；
+  # 失败仍真实 exit 1，不改成假绿。紧急补推走 /workspace/scripts/gitee-mirror.sh。
   schedule:
-    - cron: '23 */6 * * *'   # 每 6 小时兜底，防 push 触发的同步失败漏同步
+    - cron: '23 */6 * * *'   # 每 6 小时兜底同步
   workflow_dispatch:        # 允许手动触发补同步
 
 jobs:
   mirror:
     runs-on: ubuntu-latest
+    timeout-minutes: 10     # Gitee 地域性阻断时别无限挂死
     steps:
       - uses: actions/checkout@v4
         with:

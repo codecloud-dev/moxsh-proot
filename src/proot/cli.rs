@@ -644,6 +644,18 @@ fn print_usage(w: &mut dyn std::io::Write) {
            -e, --env <K=V>      注入环境变量（给了则清空继承环境）\n\
            --                   其后按原样视为命令\n\
          \n\
+         其他命令：\n\
+           help | -h | --help   打印本帮助（stdout，退出 0）\n\
+           --version | -V       打印引擎版本（stdout，退出 0）\n\
+           login                设备码扫码绑定（需网络）\n\
+           tui                  打开图形控制台\n\
+           mx:<名字> [-- 命令]  从短链解析 rootfs，未装自动装后启动\n\
+         \n\
+         示例：\n\
+           mox-proot -r ~/ubuntu -- bash\n\
+           mox-proot mx:ubuntu -- bash\n\
+           mox-proot help\n\
+         \n\
          未给命令时默认 /bin/sh；未给 -e 时继承当前环境。\n"
     )
     .ok();
@@ -2265,6 +2277,17 @@ mod tests {
         let out = proot_distro(&["--plain", "list"], Path::new("/nonexistent"));
         assert!(out.contains("（无）"));
         assert!(out.contains("ubuntu"));
+    }
+
+    #[test]
+    fn help_lists_every_user_facing_entry_point() {
+        let mut buf = Vec::new();
+        print_usage(&mut buf);
+        let text = String::from_utf8(buf).unwrap();
+        for frag in ["help | -h | --help", "--version | -V", "login", "tui", "mx:<名字>"] {
+            assert!(text.contains(frag), "帮助缺少 {frag}：\n{text}");
+        }
+        assert!(text.contains("mox-proot -r ~/ubuntu -- bash"));
     }
 
     #[test]

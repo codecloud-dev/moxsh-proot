@@ -3,7 +3,7 @@
 on:
   workflow_call:
   push:
-    tags: ["proot-v*"]
+    tags: ["proot-v*", "v*"]
   workflow_dispatch:
 
 permissions:

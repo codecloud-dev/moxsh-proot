@@ -44,7 +44,7 @@
   - 伪造兑换码、批量爆破兑换码、复用已核销订单号、绕过 `/products/redeem` 的登录态与设备归属校验；
   - 伪造 / 篡改 HS256 粉丝码或绕过 `/fan/verify` 在线校验、规避 `verify_count` 审计与 `revoked` 吊销；
   - 修改客户端使订阅型授权（`exp>0`）在到期后仍继续生效、绕过 7 天缓存 TTL 与服务端吊销刷新；
-  - 以任何方式规避本系列（moxsh-terminal / mox-id / Fenestra / mox-site）已有的商业授权或付费门禁。
+  - 以任何方式规避本系列（moxsh-terminal / 账号服务 / Fenestra / 官网）已有的商业授权或付费门禁。
 - 上述禁止不扩张为「禁止一切逆向」：GPL-3.0 授予的研究、修改、再分发权利完整保留；被禁止的是**用于绕过授权、侵犯他人或规避付费**的具体滥用行为。
 
 ## 五、兑换码、设备绑定与授权条款
@@ -71,7 +71,7 @@
 | GitHub | 设备码确认页 OAuth 登录、主仓与 Issues | `https://docs.github.com/en/site-policy/github-terms/github-terms-of-service` · `https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement` |
 | Gitee | 平行 OAuth 入口、国内只读镜像、引擎二进制下载 | `https://gitee.com/`（以其站内公布条款为准） |
 | 爱发电 | 赞助、订单号查证与核销 | `https://afdian.com/`（以其站内公布条款为准；备用域 `afdian.net` / `ifdian.net`） |
-| Cloudflare | `mox-id` Workers / D1、官网 Pages | `https://www.cloudflare.com/privacypolicy/`（及其站内公布的 Terms） |
+| Cloudflare | 账号服务 Workers / D1、官网 Pages | `https://www.cloudflare.com/privacypolicy/`（及其站内公布的 Terms） |
 | 发行版源站 / 镜像 | rootfs 与 `SHA256SUMS` 下载 | Ubuntu cdimage、Canonical LXD images、kali.download、Alpine CDN、清华 TUNA —— 见各站公布条款 |
 
 以各站最新公布条款为准；我们**不代替它们解释、不担保可用性、不对其行为负责、不为其背书**。第三方中断、改版、限流、域名切换（如爱发电主域备案变化）或条款变化，我们不承担责任。
@@ -142,7 +142,7 @@ The **core PRoot runtime capability itself is free and open source (GPL-3.0)**. 
   - Forging redeem codes, brute-forcing them, reusing an already-reconciled order number, or bypassing `/products/redeem`'s login state and device-ownership checks;
   - Forging / tampering with HS256 fan codes, bypassing `/fan/verify` online verification, or evading `verify_count` auditing and `revoked` revocation;
   - Modifying the client so a subscription entitlement (`exp>0`) remains effective after expiry, or bypassing the 7-day cache TTL and server-side revocation refresh;
-  - In any way evading existing commercial-licensing or paywall gates of this series (moxsh-terminal / mox-id / Fenestra / mox-site).
+  - In any way evading existing commercial-licensing or paywall gates of this series (moxsh-terminal / 账号服务 / Fenestra / 官网).
 - This does **not** expand into "all reverse engineering is forbidden": the research, modification and redistribution rights granted by GPL-3.0 remain intact; what is prohibited is the specific abusive conduct of bypassing authorisation, infringing others, or evading payment.
 
 ## 5. Redeem codes, device binding and entitlements
@@ -169,7 +169,7 @@ The **core PRoot runtime capability itself is free and open source (GPL-3.0)**. 
 | GitHub | OAuth login on the device-code confirmation page, canonical repo and Issues | `https://docs.github.com/en/site-policy/github-terms/github-terms-of-service` · `https://docs.github.com/en/site-policy/privacy-policies/github-privacy-statement` |
 | Gitee | Parallel OAuth entry, mainland-China read-only mirror, engine binary download | `https://gitee.com/` (see its published terms) |
 | Afdian | Sponsorship, order-number verification and reconciliation | `https://afdian.com/` (see its published terms; fallback domains `afdian.net` / `ifdian.net`) |
-| Cloudflare | `mox-id` Workers / D1, website Pages | `https://www.cloudflare.com/privacypolicy/` (and its published Terms) |
+| Cloudflare | account service Workers / D1, website Pages | `https://www.cloudflare.com/privacypolicy/` (and its published Terms) |
 | Distro sources / mirrors | rootfs and `SHA256SUMS` downloads | Ubuntu cdimage, Canonical LXD images, kali.download, Alpine CDN, TUNA — see each site's published terms |
 
 The latest published terms govern; we **do not interpret them, guarantee availability, take responsibility for them, or endorse them**. We are not liable for third-party outages, changes, rate limits, domain switches (e.g. Afdian's main-domain filing changes), or term changes.

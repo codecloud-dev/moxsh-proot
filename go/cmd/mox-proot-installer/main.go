@@ -74,7 +74,7 @@ func usage() {
 `)
 }
 
-// ===== 双语文案（用户口径：中英双语；LANG 含 zh 用中文） =====
+// ===== 双语文案（LANG 含 zh 用中文） =====
 
 type strings_ struct {
 	zh bool
@@ -263,7 +263,7 @@ func cmdUpdate() error {
 			fmt.Sprintf("up to date (local %s, remote %s)", current, latest)))
 		return nil
 	}
-	// 征求是否更新（用户口径：更新征求，不强制不静默）
+	// 更新前征求用户确认，不强制、不静默
 	fmt.Printf("%s\n", s.pick(
 		fmt.Sprintf("发现新版本：%s → %s", current, latest),
 		fmt.Sprintf("new version: %s -> %s", current, latest)))

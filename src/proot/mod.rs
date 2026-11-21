@@ -26,8 +26,7 @@
 
 pub mod cli;
 pub mod access;
-/// 后端基址单一来源（mox-id Workers / mox-site Pages）。设备码、粉丝、商品授权
-/// 三个客户端共用，避免各自硬编码占位域名造成「后端没接上」。
+/// 后端基址单一来源。设备码、粉丝、商品授权等客户端共用，避免各自硬编码地址。
 pub mod backend;
 pub mod brand;
 pub mod console;
@@ -46,7 +45,7 @@ pub mod net;
 pub mod ptrace;
 pub mod seccomp;
 pub mod recipe;
-/// 付费配方脚本内嵌（混淆）存储——不在磁盘落明文，防直接 `sh`（渗透测试路径③）。
+/// 付费配方脚本的内嵌混淆存储，磁盘不留明文。
 /// 仅在门禁通过后由 [`recipe`] 在内存解码使用。
 pub mod recipe_paid;
 pub mod redeem;

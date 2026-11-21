@@ -15,14 +15,14 @@
 | 行为 | 端点 / 目标 | 是否携带用户数据 |
 | --- | --- | --- |
 | 下载 rootfs / 发行版包与校验清单 | 官方源：`cdimage.ubuntu.com`、`us.lxd.images.canonical.com`、`kali.download`、`dl-cdn.alpinelinux.org`；国内清华 TUNA 镜像（`mirrors.tuna.tsinghua.edu.cn`）；`SHA256SUMS` | 纯文件下载，不携带账号/设备标识 |
-| 设备码登录（RFC 8628） | `POST /device/code`、`POST /device/token`，经官网 `https://mox-site.pages.dev` 进入 `mox-id` | 设备声明 5 字段（见 2.2） |
+| 设备码登录（RFC 8628） | `POST /device/code`、`POST /device/token`，经官网 `https://mox-site.pages.dev` 进入账号服务 | 设备声明 5 字段（见 2.2） |
 | 设备绑定 | 本机 `127.0.0.1` 一次性回环 + 官网 `bind.html`（URL 带 `redirect` / `state` / `device_token` / `name` / `platform`）→ GitHub 登录 → `POST /devices/register` | 设备令牌与粗粒度设备描述 |
 | 兑换码 / 爱发电订单核销 | `POST /products/redeem`（登录态）、`GET /entitlement/check?device_token=...` | 兑换码或订单号 + 设备令牌 |
 | 粉丝码在线校验 | `POST /fan/verify` | HS256 签发的粉丝码 |
 | 容器网络探测 | 阿里公共 DNS `223.5.5.5:443`（TCP connect）、IPv6 `[2400:3200::1]:53`（UDP connect 建路由，**不发包**） | 无，仅连通性判定 |
-| 后端候选域 | 客户端唯一入口 `https://mox-site.pages.dev`；上游 `https://mox-id.moxsh.app`；兜底 `https://mox-id.3042980037.workers.dev`（`backend.rs`） | — |
+| 后端入口 | 客户端统一从 `backend.rs` 读取入口地址，环境变量可覆盖；文档不列具体候选域 | — |
 
-> `backend.rs` 注释明确：旧的 `https://mox-id.mox-proot.app` 是**从未部署的占位域名**，`codecloud-dev.github.io/mox-site` 是已废弃的 Pages 地址。
+> 客户端只使用统一入口，不保留已废弃或占位地址。
 
 ---
 
@@ -56,7 +56,7 @@
 
 `mox-proot login` → `POST /device/code` 拿 `device_code` + `user_code` + `verification_uri_complete`（`<publicBase>/activate?code=<user_code>`）→ 终端渲染**半块二维码** → 手机扫码在 `/activate` 用 **GitHub / Gitee 登录**并点「确认绑定」→ worker 标记已授权并注册/复用一台 `device` 行、下发 `device_token` → 终端轮询 `POST /device/token` 拿到令牌。状态：`pending → authorized → consumed / expired`；换 token 后即 `consumed`。
 
-登录身份由 GitHub / Gitee OAuth 提供（资料字段见 mox-id 政策）；本引擎只保存最终的 `device_token` 到本机 `device.toml`。
+登录身份由 GitHub / Gitee OAuth 提供（资料字段见账号服务政策）；本引擎只保存最终的 `device_token` 到本机 `device.toml`。
 
 ### 2.4 设备绑定（`redeem.rs` 流程第 1–2 步）
 
@@ -94,7 +94,7 @@ PRoot **不做 network namespace 隔离**，guest 直接走宿主内核网络栈
 - 设备声明明确拒绝：主机名、用户名、MAC/IMEI/序列号、精确 OS 版本、磁盘路径、IP、UA 原文、文件内容（见 2.2）。
 - 不持有：支付卡号、支付密码、爱发电账号密码、GitHub client_secret、授权签名私钥。
 - 不植入：广告 SDK、统计/埋点 SDK、崩溃自动上报、遥测、用户画像、跨站追踪、自动化决策。
-- **未实现**：实名认证、年龄核验、云同步（本引擎无此能力）、账号体系（身份在 mox-id）、行为分析、对外数据出售。
+- **未实现**：实名认证、年龄核验、云同步（本引擎无此能力）、账号体系（身份由账号服务管理）、行为分析、对外数据出售。
 
 ---
 
@@ -106,16 +106,16 @@ PRoot **不做 network namespace 隔离**，guest 直接走宿主内核网络栈
 | `entitlements.toml`（授权缓存 + `fetched_at`） | 本机 `$MOX_ROOT` | 由你控制；`ENTS_TTL_DAYS` 后视为陈旧，联网 `mox redeem status` 刷新；删文件即清 |
 | `fan.toml`（粉丝档位） | 本机 `$MOX_ROOT` | 由你控制 |
 | rootfs / 包缓存 | 本机 | 由你控制，`mox-proot-distro remove` / 删目录 |
-| 设备声明、设备码、订单、授权、粉丝码台账 | `mox-id` Cloudflare D1 | 按 **mox-id 隐私政策**：会话 30 天、访客上报 90 天、账号/订单/授权至注销；财务流水注销后匿名化保留 |
-| 兑换码 / 订单号 | 提交 `mox-id` 校验并入账 | 随订单台账保留 |
+| 设备声明、设备码、订单、授权、粉丝码台账 | 账号服务 Cloudflare D1 | 按 **账号服务隐私政策**：会话 30 天、访客上报 90 天、账号/订单/授权至注销；财务流水注销后匿名化保留 |
+| 兑换码 / 订单号 | 提交账号服务校验并入账 | 随订单台账保留 |
 
 **共享方**（各自独立按其条款处理）：
 
-- **Cloudflare**：`mox-id` 运行于 Workers / D1；官网 Pages 为客户端唯一入口。
+- **Cloudflare**：账号服务运行于 Workers / D1；官网 Pages 为客户端唯一入口。
 - **GitHub / Gitee**：设备码确认页的 OAuth 登录身份；Gitee 亦为国内只读镜像与引擎二进制下载源。
 - **爱发电**：按订单号查证已付订单；只传订单号，不传支付凭据。
 - **发行版源站与镜像**：Ubuntu cdimage、Canonical LXD images、kali.download、Alpine CDN、清华 TUNA —— 纯文件下载，其访问日志由各自记录。
-- **mox-id / mox-site**：同属 `codecloud-dev`，是设备绑定、兑换、授权的实际处理者。
+- **账号服务 / 官网**：同属 `codecloud-dev`，是设备绑定、兑换、授权的实际处理者。
 
 我们**不出售、不出租、不用于广告、不向数据经纪人提供**任何数据。
 
@@ -127,20 +127,20 @@ PRoot **不做 network namespace 隔离**，guest 直接走宿主内核网络栈
 - **重置设备身份**：删除 `$MOX_ROOT/device.toml`（或整个 `$MOX_ROOT`），重新 `mox redeem login` 绑定；旧设备令牌随之作废。
 - **清除授权缓存 / 粉丝状态**：删 `entitlements.toml` / `fan.toml`。
 - **删除容器数据**：`mox-proot-distro remove <id>` 或删除容器目录；清 `~/.mox` 可移除全部引擎侧身份与缓存。
-- **注销账号 / 删除服务端数据**：在官网个人中心 `DELETE /me`（硬删身份、财务流水匿名化、身份墓碑），**不可恢复**；或按 mox-id 政策的渠道申请按 `device_token` 清理授权。
+- **注销账号 / 删除服务端数据**：在官网个人中心 `DELETE /me`（硬删身份、财务流水匿名化、身份墓碑），**不可恢复**；或按账号服务政策的渠道申请按 `device_token` 清理授权。
 - **撤销 OAuth 授权**：GitHub 在 `github.com/settings/connections/applications/<client_id>`；Gitee 在其账号设置。
-- **撤销设备**：官网 `GET /devices` / 设备绑定页可管理；`mox-id` 侧授权吊销在下次 `redeem status` 刷新时即时生效。
+- **撤销设备**：官网 `GET /devices` / 设备绑定页可管理；账号服务侧授权吊销在下次 `redeem status` 刷新时即时生效。
 - **阻止联网**：当前版本**未提供细粒度联网开关**；不执行 `login` / `redeem status` / `fan` 与不安装发行版即可完全离线运行已有 rootfs。
 
 ---
 
 ## 六、儿童
 
-不面向未满 14 周岁的儿童；当前版本**未实现年龄核验**，不有意收集儿童信息。若监护人发现儿童绑定过设备或兑换过授权，请通过 GitHub Issues 联系我们，我们会指导清除本机文件并按 mox-id 政策处理服务端记录。
+不面向未满 14 周岁的儿童；当前版本**未实现年龄核验**，不有意收集儿童信息。若监护人发现儿童绑定过设备或兑换过授权，请通过 GitHub Issues 联系我们，我们会指导清除本机文件并按账号服务政策处理服务端记录。
 
 ## 七、跨境
 
-rootfs 下载源站与国内镜像可能位于不同国家/地区；`mox-id` / `mox-site` 运行在 Cloudflare 全球边缘网络，D1 数据可能在你所在国家/地区之外处理；GitHub / Gitee / 爱发电亦按各自条款在其所在地处理收到的数据。本引擎本身只做文件下载与必要握手，不自建跨境通道，不对第三方留存地作承诺。
+rootfs 下载源站与国内镜像可能位于不同国家/地区；账号服务 / 官网 运行在 Cloudflare 全球边缘网络，D1 数据可能在你所在国家/地区之外处理；GitHub / Gitee / 爱发电亦按各自条款在其所在地处理收到的数据。本引擎本身只做文件下载与必要握手，不自建跨境通道，不对第三方留存地作承诺。
 
 ## 八、第三方服务条款入口（不为其背书）
 
@@ -178,14 +178,14 @@ rootfs 下载源站与国内镜像可能位于不同国家/地区；`mox-id` / `
 | Action | Endpoint / target | Carries user data? |
 | --- | --- | --- |
 | Download rootfs / distro packages and checksum manifests | Official: `cdimage.ubuntu.com`, `us.lxd.images.canonical.com`, `kali.download`, `dl-cdn.alpinelinux.org`; mainland-China TUNA mirrors (`mirrors.tuna.tsinghua.edu.cn`); `SHA256SUMS` | Pure file download, no account/device identifier |
-| Device-code login (RFC 8628) | `POST /device/code`, `POST /device/token`, via the website `https://mox-site.pages.dev` into `mox-id` | 5-field device claim (§2.2) |
+| Device-code login (RFC 8628) | `POST /device/code`, `POST /device/token`, via the website `https://mox-site.pages.dev` into the account service | 5-field device claim (§2.2) |
 | Device binding | One-shot `127.0.0.1` loopback + website `bind.html` (URL carries `redirect` / `state` / `device_token` / `name` / `platform`) → GitHub login → `POST /devices/register` | Device token and coarse device description |
 | Redeem code / Afdian order reconciliation | `POST /products/redeem` (logged in), `GET /entitlement/check?device_token=...` | Redeem code or order number + device token |
 | Fan-code online verification | `POST /fan/verify` | HS256-signed fan code |
 | Container network probes | Ali DNS `223.5.5.5:443` (TCP connect), IPv6 `[2400:3200::1]:53` (UDP connect to establish a route, **no packet sent**) | None; connectivity only |
-| Backend candidate domains | Sole client entry `https://mox-site.pages.dev`; upstream `https://mox-id.moxsh.app`; fallback `https://mox-id.3042980037.workers.dev` (`backend.rs`) | — |
+| Backend entry | The client reads one entry from `backend.rs`, overridable by environment variables; candidate domains are not listed here | — |
 
-> `backend.rs` notes explicitly: the old `https://mox-id.mox-proot.app` is a **never-deployed placeholder domain**, and `codecloud-dev.github.io/mox-site` is a deprecated Pages address.
+> The client uses only the unified entry; deprecated and placeholder addresses are not retained.
 
 ## 2. Field-by-field data inventory
 
@@ -217,7 +217,7 @@ The backend's `validateDeviceClaim()` accepts only these 5 keys; any extra/priva
 
 `mox-proot login` → `POST /device/code` returns `device_code` + `user_code` + `verification_uri_complete` (`<publicBase>/activate?code=<user_code>`) → the terminal renders a **half-block QR code** → the phone scans it, signs in with **GitHub / Gitee** at `/activate` and taps "Bind this device" → the worker marks it authorised, registers/reuses a `device` row and issues a `device_token` → the terminal polls `POST /device/token`. States: `pending → authorized → consumed / expired`; it becomes `consumed` after token exchange.
 
-Login identity comes from GitHub / Gitee OAuth (profile fields per the mox-id policy); this engine only stores the final `device_token` locally in `device.toml`.
+Login identity comes from GitHub / Gitee OAuth (profile fields per the account service policy); this engine only stores the final `device_token` locally in `device.toml`.
 
 ### 2.4 Device binding (`redeem.rs`, steps 1–2)
 
@@ -253,7 +253,7 @@ These are **local network configuration and connectivity probes**; no probe resu
 - Device claims explicitly reject: hostname, username, MAC/IMEI/serial, exact OS version, disk paths, IP, raw UA, file contents (§2.2).
 - Not held: card numbers, payment passwords, Afdian account passwords, GitHub client_secret, entitlement-signing private key.
 - Not embedded: ad SDKs, analytics/tracking SDKs, automatic crash reporting, telemetry, profiling, cross-site tracking, automated decision-making.
-- **Not implemented**: real-name verification, age verification, cloud sync (this engine has no such feature), an account system (identity lives in mox-id), behaviour analysis, sale of data abroad.
+- **Not implemented**: real-name verification, age verification, cloud sync (this engine has no such feature), an account system (identity is managed by the account service), behaviour analysis, sale of data abroad.
 
 ## 4. Retention, location, and sharing
 
@@ -263,16 +263,16 @@ These are **local network configuration and connectivity probes**; no probe resu
 | `entitlements.toml` (cache + `fetched_at`) | On-device `$MOX_ROOT` | User-controlled; stale after `ENTS_TTL_DAYS`, refreshed by `mox redeem status`; delete the file to clear |
 | `fan.toml` (fan tier) | On-device `$MOX_ROOT` | User-controlled |
 | rootfs / package caches | On-device | User-controlled; `mox-proot-distro remove` / delete the directory |
-| Device claims, device codes, orders, entitlements, fan-code ledger | `mox-id` Cloudflare D1 | Per the **mox-id privacy policy**: sessions 30 days, visitor reporting 90 days, accounts/orders/entitlements until deletion; financial records anonymised after deletion |
-| Redeem codes / order numbers | Submitted to `mox-id` for verification and ledgering | Retained with the order ledger |
+| Device claims, device codes, orders, entitlements, fan-code ledger | account service Cloudflare D1 | Per the **account service privacy policy**: sessions 30 days, visitor reporting 90 days, accounts/orders/entitlements until deletion; financial records anonymised after deletion |
+| Redeem codes / order numbers | Submitted to the account service for verification and ledgering | Retained with the order ledger |
 
 **Recipients** (each acts under its own terms):
 
-- **Cloudflare**: `mox-id` runs on Workers / D1; the website's Pages is the sole client entry point.
+- **Cloudflare**: the account service runs on Workers / D1; the website's Pages is the sole client entry point.
 - **GitHub / Gitee**: OAuth identity on the device-code confirmation page; Gitee is also the mainland-China read-only mirror and engine-binary download source.
 - **Afdian**: verifies a paid order by order number; only the order number is sent, never payment credentials.
 - **Distro sources and mirrors**: Ubuntu cdimage, Canonical LXD images, kali.download, Alpine CDN, TUNA — pure file downloads; each logs requests under its own policy.
-- **mox-id / mox-site**: also under `codecloud-dev`, the actual processors of device binding, redemption and entitlements.
+- **Account service / website**: also under `codecloud-dev`, the actual processors of device binding, redemption and entitlements.
 
 We **do not sell, rent, use for advertising, or provide to data brokers** any data.
 
@@ -282,18 +282,18 @@ We **do not sell, rent, use for advertising, or provide to data brokers** any da
 - **Reset device identity**: delete `$MOX_ROOT/device.toml` (or the whole `$MOX_ROOT`) and re-run `mox redeem login`; the old device token becomes invalid.
 - **Clear entitlement cache / fan state**: delete `entitlements.toml` / `fan.toml`.
 - **Delete container data**: `mox-proot-distro remove <id>` or delete the container directory; clearing `~/.mox` removes all engine-side identity and caches.
-- **Delete account / server-side data**: `DELETE /me` in the website account centre (hard-delete identity, anonymised financial records, identity tombstone), **irreversible**; or use the mox-id policy channels to request entitlement cleanup by `device_token`.
+- **Delete account / server-side data**: `DELETE /me` in the website account centre (hard-delete identity, anonymised financial records, identity tombstone), **irreversible**; or use the account service policy channels to request entitlement cleanup by `device_token`.
 - **Revoke OAuth grants**: GitHub at `github.com/settings/connections/applications/<client_id>`; Gitee in its account settings.
 - **Revoke a device**: manage via website `GET /devices` / the device-binding page; server-side revocation takes effect on the next `redeem status` refresh.
 - **Blocking network access**: **no fine-grained network toggle in the current version**; simply not running `login` / `redeem status` / `fan` and not installing a distro lets an existing rootfs run fully offline.
 
 ## 6. Children
 
-Not directed at children under 14. The current version **has no age verification** and does not knowingly collect children's data. If a guardian finds a child bound a device or redeemed an entitlement, contact us via GitHub Issues; we will advise on clearing local files and on handling server-side records under the mox-id policy.
+Not directed at children under 14. The current version **has no age verification** and does not knowingly collect children's data. If a guardian finds a child bound a device or redeemed an entitlement, contact us via GitHub Issues; we will advise on clearing local files and on handling server-side records under the account service policy.
 
 ## 7. Cross-border transfers
 
-Distro source sites and mainland-China mirrors may be in different countries; `mox-id` / `mox-site` run on Cloudflare's global edge and D1 data may be processed outside your country; GitHub / Gitee / Afdian process the data they receive under their own terms and in their own locations. This engine only performs file downloads and the necessary handshakes; it builds no bespoke cross-border channel and makes no promise about third-party data locations.
+Distro source sites and mainland-China mirrors may be in different countries; the account service and website run on Cloudflare's global edge and D1 data may be processed outside your country; GitHub / Gitee / Afdian process the data they receive under their own terms and in their own locations. This engine only performs file downloads and the necessary handshakes; it builds no bespoke cross-border channel and makes no promise about third-party data locations.
 
 ## 8. Third-party terms (we do not endorse them)
 

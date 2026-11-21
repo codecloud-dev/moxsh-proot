@@ -1,40 +1,6 @@
-//! 通用商品授权客户端（与 fan 灰度系统**并列互不影响**）——「脚本 ↔ 官网」握手，
-//! **设备绑定（回环）+ 授权校验（在线）**。
+//! 商品授权客户端：设备绑定与授权校验分离，授权判定完全在服务端。
 //!
-//! 定位：付费商品（proot 引擎增值版等，后台可加）的设备级授权。fan 是**账号级**
-//! 粉丝福利（`mox fan`，`$MOX_ROOT/fan.toml`）；本模块是**设备级**商品授权
-//! （`mox redeem`，`$MOX_ROOT/device.toml` + `entitlements.toml`），两套文件、
-//! 两条命令、互不覆盖（项目主人拍板：粉丝系统不许被吃掉）。
-//!
-//! 流程（手机 / Termux）：
-//!   1. `mox redeem login`（手动触发，不自动跳）→ 引擎在 `127.0.0.1` 起一次性回环
-//!      → 唤起浏览器打开官网绑定页 `bind.html`，URL 带
-//!      `redirect=<回环>&state=<随机>&device_token=<本机令牌>&name=&platform=`；
-//!   2. 页内 **GitHub 登录** → 点「绑定此设备」= 后端 `POST /devices/register`
-//!      把令牌挂到账号 → 页面带 `ok=1&state` 跳回回环 → 脚本**自动收到确认**；
-//!   3. 买家在官网兑换页（redeem.html）用**兑换码或爱发电订单号**把授权赋予
-//!      这台设备（后端 `/products/redeem`，设备归属已校验）；
-//!   4. `mox redeem status` → `GET /entitlement/check?device_token=..` **联网拉取**
-//!      全部授权（纯文本，一行一个 `ok <product_id> <tier> <exp>`）→ 落盘
-//!      `entitlements.toml` 缓存 → 增值配方（`requires = "<product_id>"`）按缓存门控。
-//!
-//! 设计约束（与全仓库一致）：
-//! - **零外部依赖**：不做任何客户端加解密——授权判定完全在服务端，手机只 `curl`
-//!   转发（Rust 不引 reqwest）。设备令牌是本地随机串（URL 安全），泄漏=换个设备，
-//!   不含任何可伪造材料。
-//! - **缓存 + TTL**：`entitlements.toml` 带 `fetched_at`，超过 [`ENTS_TTL_DAYS`] 天
-//!   视为陈旧（永久授权门控显示 🔒 并提示 `mox redeem status` 刷新；吊销在 TTL 内生效）。
-//!   **有限期订阅**（`exp>0`，如 `proot-pro` 月度）例外：即便缓存陈旧也按 `exp` 判定，
-//!   离线 30 天仍能用到到期当天，过后立即失效（服务端已承诺该到期时间）。
-//! - **无灰度开关**：商品是正式商业功能（不像 fan 有 canary），随时可用。
-//!
-//! 与后端（mox-id）的契约（实现/改动任一侧必须同步另一侧）：
-//!   `POST /devices/register`（登录态）body `{"device_token":"..","name":"..","platform":".."}`
-//!     成功 → 200 `{ok:true, device_id, device_token}`；他人已占用 → 403
-//!   `GET  /entitlement/check?device_token=<hex>`（无登录，token 即凭据）
-//!     成功 → 200 纯文本，一行一个 `ok <product_id> <tier> <exp_unix秒>`（exp 0=永久）
-//!     无授权 → 404 `err not_found`；缺 token → 400 `err missing_device_token`
-//!   绑定页回跳脚本回环时带 `ok=1&state=<原样回传>`（state 须一致，防伪造）。
+//! 缓存带签名与设备绑定双重校验，防止伪造或跨设备拷贝。
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -45,11 +11,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use crate::proot::backend;
 use crate::proot::{ProotError, ProotResult};
 
-/// 授权缓存签名验证公钥（Ed25519，32 字节）。
-///
-/// 对应服务端私钥仅在 mox-id 后端持有（环境变量 `ED25519_ENTITLEMENT_SECRET`），
-/// 客户端只嵌公钥、只验签——私钥永不落客户端，攻击者无法伪造授权缓存
-/// （渗透测试报告·路径①彻底关闭）。公钥公开，无保密需求。
+/// 授权缓存签名验证公钥（Ed25519）。私钥仅在服务端，客户端只验签。
 const ENTITLEMENT_VERIFY_KEY: [u8; 32] = [
     0x6c, 0x82, 0xf5, 0xd1, 0x75, 0x3c, 0x2c, 0x7e, 0x12, 0x06, 0x89, 0x60, 0x67, 0x9e, 0xcc, 0xe9,
     0x50, 0xbf, 0x60, 0xd0, 0x4d, 0x71, 0xf9, 0xb8, 0x9a, 0x50, 0x38, 0xd9, 0x06, 0xfe, 0x72, 0x29,
@@ -81,7 +43,7 @@ fn b64_decode(s: &str) -> Option<Vec<u8>> {
 }
 
 /// 重建服务端签名所用的规范消息：每条授权一行 `ok <pid> <tier> <exp>\n`。
-/// 必须与 mox-id `/entitlement/check` 的签名输入逐字节一致。
+/// 必须与服务端 `/entitlement/check` 的签名输入逐字节一致。
 fn canonical_entitlement_blob(ents: &[Entitlement]) -> String {
     let mut s = String::new();
     for e in ents {
@@ -151,9 +113,7 @@ pub struct EntCache {
     pub ents: Vec<Entitlement>,
     /// 拉取时间（unix 秒）；0 = 从未成功拉取。
     pub fetched_at: u64,
-    /// 写入缓存时的本机设备令牌：**防跨设备拷贝**——把别人机器的
-    /// `entitlements.toml` 拷过来会因 `device_token` 不匹配而失效
-    /// （渗透测试报告·次要问题#1）。无设备身份时为空。
+    /// 写入缓存时的本机设备令牌，用于防止跨设备拷贝。无设备身份时为空。
     pub device_token: String,
     /// 服务端 Ed25519 签名（base64）。存在且有效时门禁完全信任缓存；
     /// 缺失则回退旧行为（设备绑定 + TTL）；无效则视为篡改直接拒绝。
@@ -323,9 +283,7 @@ pub fn ensure_device(root: &Path) -> ProotResult<DeviceInfo> {
 
 // ============================ 在线校验（curl 转发，零 Rust 加密） ============================
 
-/// 绑定页 URL（`MOX_BIND_PAGE` 覆盖）。
-/// 默认指向官网 pages.dev 的隐藏页 bind.html——导航里没有入口，
-/// 只能由本命令带 redirect/state/device_token 唤起（与 fan 页同思路）。
+/// 绑定页 URL（`MOX_BIND_PAGE` 覆盖，基址由 [`backend`] 统一提供）。
 pub fn bind_page_url() -> String {
     std::env::var(BIND_PAGE_ENV)
         .ok()
@@ -335,14 +293,8 @@ pub fn bind_page_url() -> String {
         .to_string()
 }
 
-/// 授权校验端点（`MOX_ENTITLEMENT_API` 覆盖）。
-/// 默认走**官网同域反代**（pages.dev/entitlement/check）——Worker 标准域
-/// workers.dev 国内不可达（爱发电 webhook 443 同款坑），pages.dev 实测可达。
-/// 域名由 [`backend`] 单一来源派生，避免与设备码 / 粉丝客户端各自漂移。
-///
-/// 安全：环境覆盖值仅接受 `https://` 或**本机** `http://`（测试 / 本地自托管，
-/// 无网络 MITM）；拒绝 `http://` 公网主机，防中间人把授权查询劫持到攻击者
-/// 服务器投毒（渗透测试报告·MOXSH_REDEEM_API 劫持）。不合法覆盖值回退官方反代。
+/// 授权校验端点（`MOX_ENTITLEMENT_API` 覆盖，基址由 [`backend`] 派生）。
+/// 安全：覆盖值仅接受 https 或本机 http，其余回退官方地址，防止中间人劫持。
 fn entitlement_api() -> String {
     safe_override_url(
         &std::env::var(ENTITLEMENT_API_ENV).unwrap_or_default(),
@@ -564,18 +516,8 @@ pub fn has_entitlement(root: &Path, product_id: &str) -> bool {
         Some(c) => c,
         None => return false,
     };
-    // 【渗透测试复测 P0-1】字段缺失一律按"拒绝"处理。
-    //
-    // 旧实现的两个致命漏洞（真机实测可 5 行 toml 解锁全部付费配方）：
-    //   · 验签写在 `if let Some(sig)` 里 → 不写 `sig` 行即整段跳过；
-    //   · 设备绑定在 `device_token` 为空 / 本机无 device.toml 时跳过。
-    // 攻击者只要伪造 entitlements.toml 时同时省略这两个可选字段，就回落到
-    // "无签名降级"分支，`exp > now` 直接放行。故此处改为**强制三连校验**：
-    //   1) 本机设备身份必须存在（合法缓存必经 refresh_ents → ensure_device）；
-    //   2) 缓存 device_token 必须存在且等于本机 token；
-    //   3) 缓存 sig 必须存在且 Ed25519 验签通过（无私钥无法伪造）。
-    // 任一不满足立即拒绝，绝不回落。代价：升级后旧缓存需联网刷新一次
-    //（`mox redeem status`），换取付费门禁不可伪造。
+    // 强制三连校验：本机设备身份存在、缓存设备令牌匹配、签名有效。
+    // 任一不满足立即拒绝，不回落；升级后旧缓存需联网刷新一次。
     let dev = match load_device(root) {
         Some(d) => d,
         None => return false,
@@ -783,13 +725,8 @@ pub fn open_browser(url: &str) -> Opened {
     Opened::Failed
 }
 
-/// 测试夹具（仅 cfg(test) 编译）：供 cli/recipe 等跨模块门禁测试构造
-/// 「服务端已签名 + 绑定本机设备」的合法授权缓存。P0-1 之后门禁为
-/// fail-closed（缺 sig 或缺 device.toml 一律拒绝），各测试不能再自行
-/// 用 `save_ents(root, ents, None)` 伪造缓存，必须经此夹具落盘。
-///
-/// 签名样本是公钥验签数据（对应内嵌 ENTITLEMENT_VERIFY_KEY），非机密；
-/// 私钥仅在 mox-id 后端，客户端代码里绝不出现。
+/// 测试夹具（仅 cfg(test) 编译）：构造「已签名 + 已绑定设备」的合法授权缓存，
+/// 供 cli/recipe 等门禁测试使用；签名样本为公钥验签数据，非机密。
 #[cfg(test)]
 pub(crate) mod testkit {
     use super::*;
@@ -903,8 +840,7 @@ mod tests {
     }
 
     // ---- 授权缓存 ----
-    // 预生成的有效签名（对应真实服务端私钥派生公钥；私钥只在 mox-id 后端，
-    // 客户端代码里绝不出现）。用于离线构造「服务端亲笔签发」的缓存做测试。
+    // 预生成的有效签名样本，用于离线构造合法缓存做测试。
     const SIG_SINGLE: &str = "OE3p5GJx2hi82OjOlRxN2bC2shpOPjYlohl8SZXCSiR2soCYa8AZbRAXMoKSMOpyn/1+M13a/D3LihZaF8QCCg=="; // ok proot-pro pro 0
     const SIG_TWO: &str = "hl5hEmw7LkvzK8q3xTkFnqL9krYwvmKQYj4S7EQf58CqeCZGm4HjI5sFfqGMLIYA0DYvhi6ABJzpdIwKqKpXAw=="; // 上面 + ok mox-proot-plus plus 4102444800
     const SIG_EMPTY: &str = "efGAaXXpFmzW5T8OMWKGwTsh1saDaHRkO7zL27QBlhWuu6diaae/+Pkf/sdiXrGYeIXVMCMV9WDR2QKEmn2oCQ=="; // 空清单
@@ -975,9 +911,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    /// 【P0-1 回归】渗透测试真机复现的攻击：伪造 toml 同时省略 `sig` 与
-    /// `device_token` 两个可选字段，旧实现会跳过验签 + 跳过设备绑定，回落到
-    /// 无签名分支把 `exp > now` 直接放行。现在必须一律拒绝。
+    /// 回归：伪造缓存省略 sig 与 device_token 字段时必须拒绝。
     #[test]
     fn forged_cache_omitting_sig_and_device_token_is_rejected() {
         let root = tmp("entsforge");

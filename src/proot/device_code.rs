@@ -1,18 +1,6 @@
-//! 设备码授权客户端（RFC 8628）。
+//! 设备码授权客户端（RFC 8628）：申请码 → 展示二维码 → 轮询换取令牌。
 //!
-//! 流程（与 mox-id 后端 `/device/code` `/device/token` `/activate` 对齐）：
-//!   ① [`request_code`] → device_code + user_code + verification_uri_complete
-//!   ② 把 verification_uri_complete 渲染成终端二维码（或降级为纯文本 URL）
-//!   ③ 手机扫码打开 /activate，用 GitHub / Gitee 登录并确认绑定
-//!   ④ [`poll_token`] 轮询：pending 返回 `None`，authorized 返回 device_token 并落盘
-//!
-//! HTTP 走系统 `curl`（CLI 工具本就依赖 curl，零 TLS 依赖）。
-//! JSON 解析为手写最小提取器（响应为扁平字段，无需 serde），且**与网络调用分离**便于单测。
-//!
-//! **接线说明**：本模块不依赖任何可选 crate，因此**不对 `tui` feature 设门禁**——
-//! 默认发布的 `mox-proot` / `mox-proot-distro` 同样具备 `login` 子命令。此前整个模块
-//! 被 `#[cfg(feature = "tui")]` 挡在发布产物之外，后端虽已部署却等于没接上。
-//! 二维码只是可选增强：无 tui 时降级为「链接 + 验证码」文本，绑定流程照样走得通。
+//! HTTP 走系统 curl，JSON 解析为手写最小提取器并与网络调用分离，便于单测。
 
 use std::io::Write;
 use std::path::PathBuf;
@@ -21,7 +9,7 @@ use std::process::Command;
 use crate::proot::backend;
 use crate::proot::device_claim::{self, DeviceClaim};
 
-/// 后端基址默认常量：取 [`backend::ID_BASE`] 的真实部署地址。
+/// 后端基址默认常量：取 [`backend::ID_BASE`] 的统一入口。
 /// 可用环境变量 `MOX_ID_BASE` 覆盖（自托管 / 联调）。
 pub const DEFAULT_BASE: &str = backend::ID_BASE;
 
@@ -281,7 +269,7 @@ fn print_binding_hint(uri: &str, user_code: &str) {
 /// 人眼区，符合文档「人眼区/数据流分离」军规）。返回进程退出码：0 成功，非 0 失败。
 pub fn run_login_flow() -> i32 {
     let base = base_url();
-    eprintln!("==> 正在向 mox-id 申请设备码…");
+    eprintln!("==> 正在申请设备码…");
     let resp = match request_code(&base) {
         Ok(r) => r,
         Err(e) => {

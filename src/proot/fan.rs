@@ -1,30 +1,6 @@
-//! 专属解锁客户端（0.6.0）——「脚本 ↔ 官网」握手，**在线校验 + localhost 回环自动收码**。
+//! 激活码解锁客户端：通过本地回环接收激活码，联网校验后落盘解锁。
 //!
-//! 流程（手机 / Termux，灰度首发于 mox-proot 脚本，旗舰 mox-proot 后上）：
-//!   1. 在终端敲 `mox fan login`（入口命令由运营渠道自动回复告知，**手动触发，
-//!      不自动跳**）→ 脚本在 `127.0.0.1` 起一个一次性回环监听 → 唤起手机浏览器打开
-//!      专属页面（官网导航不可见），URL 带上 `redirect=<回环地址>&state=<随机>`；
-//!   2. 页面内 **GitHub 登录**（`/auth/github/start?redirect=<页面>`，登录后回到页面）；
-//!   3. 点「确认领取」= 后端 `POST /fan/issue` 用**服务端密钥**签发一个激活码，
-//!      页面带 `code` 跳回 `redirect`（回环）→ 脚本**自动收到**码；
-//!   4. 脚本 `POST /fan/verify {code}` **联网经服务端真实校验**（服务端持密钥、可吊销）
-//!      → 通过则把档位/到期落盘 `$MOX_ROOT/fan.toml` → 解锁 fan_only 配方。
-//!
-//! 桌面 Linux（没浏览器可调）：页面手动取激活码 → `mox fan redeem <code>`（同样联网验）。
-//!
-//! 设计约束（与全仓库一致）：
-//! - **零外部依赖**：不做任何客户端加解密——激活码由服务端签发、服务端校验，手机只
-//!   `curl` 转发（网络层用 curl，Rust 不引 reqwest）。这比"客户端 HMAC 自带密钥"更硬：
-//!   密钥只在服务端，手机二进制里没有可伪造材料。
-//! - **灰度开关**：`MOX_FAN_ENABLE=1` 才启用（默认关）；后端 `/fan/issue` 另有
-//!   GitHub 白名单，双保险（见 cli.rs `cmd_fan`）。
-//! - **不做设备绑定/自动恢复**：删了本地 `fan.toml` 就重新登录领取（项目主人拍板）。
-//!
-//! 与后端（mox-id）的验签契约（实现后端时按此对齐）：
-//!   `POST <MOX_REDEEM_API>`  body `{"code":"<激活码>"}`
-//!     成功 → HTTP 200，body 为一行：`ok <tier> <exp_unix_秒>`
-//!     失败 → 非 200 或 body 非 `ok` 开头（如 `err not_in_canary` / `err bad_code` / `err expired`）
-//!   激活码本身由后端 HS256（服务端 `JWT_SECRET`/`FAN_SECRET`）签发，手机不解析、只转发。
+//! 激活码由服务端签发与校验，客户端只负责转发，不内置任何密钥。
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -40,7 +16,7 @@ pub const FAN_FILE_REL: &str = "fan.toml";
 
 /// 灰度总开关：`MOX_FAN_ENABLE=1` 才启用登录/兑换（默认关）。
 pub const FAN_ENABLE_ENV: &str = "MOX_FAN_ENABLE";
-/// 专属页面 URL（`MOX_FAN_PAGE` 覆盖；默认占位，部署后改或设环境变量）。
+/// 激活页面 URL（可由环境变量覆盖）。
 pub const FAN_PAGE_ENV: &str = "MOX_FAN_PAGE";
 /// 后端验签端点（`MOX_REDEEM_API` 覆盖；默认占位）。
 pub const REDEEM_API_ENV: &str = "MOX_REDEEM_API";
@@ -74,10 +50,7 @@ pub fn verify_mode() -> &'static str {
     "online"
 }
 
-/// 专属页面 URL（`MOX_FAN_PAGE` 覆盖）。
-/// 默认指向官网 `mox-site.pages.dev` 的隐藏页 fan.html——导航里没有入口，
-/// 只能由本命令带 redirect/state 唤起（项目主人拍板：不给密钥 URL）。
-/// 基址由 [`backend`] 统一提供，旧的 github.io 地址已废弃。
+/// 激活页面 URL（`MOX_FAN_PAGE` 覆盖，基址由 [`backend`] 统一提供）。
 pub fn fan_page_url() -> String {
     std::env::var(FAN_PAGE_ENV)
         .ok()
@@ -87,13 +60,8 @@ pub fn fan_page_url() -> String {
         .to_string()
 }
 
-/// 后端验签端点（`MOX_REDEEM_API` 覆盖）。
-/// 默认走**官网同域反代**（pages.dev/fan/verify），不再直连 workers.dev：
-/// 后者国内不可达，且同域能保住 SSO 会话。
-///
-/// 安全：环境覆盖值仅接受 `https://` 或**本机** `http://`（测试 / 本地自托管，
-/// 无网络 MITM）；拒绝 `http://` 公网主机，防中间人把激活码验签劫持到攻击者
-/// 服务器（渗透测试报告·MOXSH_REDEEM_API 劫持）。不合法覆盖值回退官方反代。
+/// 验签端点（`MOX_REDEEM_API` 覆盖）。
+/// 安全：覆盖值仅接受 https 或本机 http，其余回退官方地址，防止中间人劫持。
 fn redeem_api() -> String {
     let env_val = std::env::var(REDEEM_API_ENV).unwrap_or_default();
     if env_val.is_empty() {

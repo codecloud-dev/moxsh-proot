@@ -1,5 +1,5 @@
 // Package install 实现引擎二进制的落盘安装：路径决策、权限、PATH 提示、
-// shell rc 挂载、更新征求（用户口径：安装脚本带更新策略、可征求是否更新）。
+// shell rc 挂载、更新征求。
 package install
 
 import (

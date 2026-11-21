@@ -767,7 +767,7 @@ impl DistroManager {
 
     /// 备份：把 rootfs 打包为 tar.gz（顶层 `rootfs/` 目录，restore 按此识别布局）。
     ///
-    /// 【渗透测试 P0-3 修复】`tar::Builder` 默认 `follow=true`，会把符号链接
+    /// 解压时不跟随符号链接，避免越界写入：
     /// **展开成实体文件**：busybox 的上百个 applet 都指向同一个 ~808KB 二进制，
     /// 旧实现把它们各自复制一份，备份膨胀到 150MB 且恢复后 applet 语义损坏。
     /// 这里改为 `follow_symlinks(false)` + 自定义递归遍历，额外：
@@ -792,7 +792,7 @@ impl DistroManager {
 
     /// 恢复：从备份 tar.gz 还原到指定 id 的 rootfs（覆盖已有）。
     ///
-    /// 【渗透测试 P0-4 修复】旧实现先 `remove_dir_all(&rootfs)` 再解包，
+    /// 安装采用临时目录 + 原子替换，避免中途失败留下残缺 rootfs：
     /// 解包一旦失败（归档损坏/中途断电）容器就**永久损毁**、无法回滚。
     /// 现在改为「解到同级暂存目录 → 校验布局 → 原子 rename 替换 → 失败回滚」：
     /// - 解包与校验阶段完全不碰现有 rootfs；
@@ -975,7 +975,7 @@ pub fn fetch_expected_sha256(spec: &DistroSpec) -> Option<String> {
 ///
 /// 此前本函数用手写 `TcpStream` 且只认 `http://`，而所有 `checksum_url` 均为
 /// `https://`——`strip_prefix("http://")` 恒失败 → 返回 None → rootfs 下载的
-/// SHA-256 校验被**静默跳过**（渗透测试报告·sha256 清单投毒）。改用 curl 后
+/// SHA-256 校验不再被静默跳过。改用 curl 后
 /// 校验才会真正生效。
 fn http_get(url: &str) -> Option<String> {
     if !url.starts_with("https://") {
@@ -1095,7 +1095,7 @@ impl Sha256Stream {
 /// 备份专用：递归把 rootfs 逐条写入归档，**不跟随符号链接**。
 ///
 /// `tar::Builder::append_dir_all` 默认 `follow=true`，会把 busybox 的上百个
-/// applet 链接各自展开成 ~808KB 实体副本（渗透测试实测备份膨胀到 150MB），
+/// 避免 applet 链接在备份时展开成大量实体副本，
 /// 且无法排除伪文件系统或逃逸链接。这里在 `follow_symlinks(false)` 之上
 /// 自行遍历，逐条 `append_path_with_name`（对链接写 link header，不读目标）。
 fn append_rootfs_tree<W: Write>(

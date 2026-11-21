@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""pre-login 体检钩子（proot 引擎内嵌 Python 运行时，M8）。
-
-引擎在登录 shell 启动前于容器内执行（`mox-proot-distro login <id>`；
-`mox-proot-distro shell <id>`）。失败仅警告、不阻断登录。
-
-与 post-install/provision.py 的分工：那边管「装完时供给是否就绪」，
-这边管「每次登录时的环境快照」——网络边界报告（IPv6 可达性/DNS 状态）
-即引擎 net 模块语义的脚本侧呈现，供用户一眼判断容器网络健康度。
-"""
+"""登录前体检钩子：在登录 shell 启动前输出容器网络环境快照，失败仅警告不阻断。"""
 
 from __future__ import annotations
 

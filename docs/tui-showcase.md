@@ -221,11 +221,9 @@
   按 Enter：临时离开 TUI → 原生终端打印全尺寸二维码（不被盒子裁切），流程同上
 ```
 
-> **后端链路**：终端 → `https://mox-site.pages.dev`（官网 Pages 同域反代）
-> → `https://mox-id.moxsh.app`（Worker 真实域），`/activate` 复用
-> GitHub / Gitee 双 OAuth。旧的 `mox-id.mox-proot.app` 是**从未部署的占位域名**，
-> 已清除；设备码模块也从 `tui` feature 门禁放出，默认发布的两个二进制
-> 现在真的带 `login` 子命令（无 tui 时二维码降级为「链接 + 验证码」）。
+> **后端链路**：终端 → 官网同域入口 → 账号服务，`/activate` 复用
+> GitHub / Gitee 双 OAuth。设备码模块不受 `tui` feature 门禁限制，默认发布的
+> 两个二进制都带 `login` 子命令（无 tui 时二维码降级为「链接 + 验证码」）。
 
 ---
 
@@ -345,33 +343,18 @@ python3 -m py_compile py/runtime/*.py py/verify/*.py
 
 ---
 
-## 10. 本轮追加：真实后端接线 + 安装自检事故复盘
+## 10. 本轮追加：后端接线与安装自检复盘
 
-### 10.1 为什么「后端一直没接上」
+### 10.1 后端地址统一
 
 ```
-  【之前】后端 mox-id 早就部署了，客户端三条线却各自指着不同地方：
-
-    device_code  ──► https://mox-id.mox-proot.app      （占位域名，从未部署）
-    fan 页面     ──► https://codecloud-dev.github.io/mox-site/fan.html（旧 Pages）
-    fan 验签     ──► https://mox-id.codecloud.workers.dev/fan/verify （国内不稳）
-    redeem 校验  ──► https://mox-site.pages.dev/entitlement/check    （✅ 这个是对的）
-
-  更致命的一层：device_code / qrcode_term / tui 全被 #[cfg(feature="tui")] 门控，
-  而发布用 `cargo build --bins`（不带 tui）→ 默认两个二进制压根没有 login 命令。
-  → 后端写得再完整，正式产物里也没有一条路能走到它。
+  【之前】设备码、粉丝、商品授权各自硬编码地址，发布产物里 login 还被 feature 门禁挡住。
 
   【现在】
-    backend.rs 单一来源 ──► https://mox-site.pages.dev  （官网同域反代）
-                                │  functions/[[path]].js
-                                ▼
-                          https://mox-id.moxsh.app      （Worker 真实域）
-                                │ 兜底
-                                ▼
-                    https://mox-id.codecloud.workers.dev
+    backend.rs 单一来源 ──► 官网同域入口 ──► 账号服务
 
-    device_code 只依赖 curl + 手写 JSON → 移出 feature 门禁 → 默认二进制带 login
-    TUI 账号页按 l 申请真设备码、按 r 轮询落盘，二维码不再是「示意」
+    device_code 只依赖 curl + 手写 JSON，移出 feature 门禁；默认二进制带 login。
+    TUI 账号页按 l 申请设备码、按 r 轮询落盘，二维码展示 user_code。
 ```
 
 ### 10.2 安装自检的两个方向都是坏的

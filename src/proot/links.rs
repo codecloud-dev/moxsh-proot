@@ -1,8 +1,7 @@
 //! `mx:` 短链系统（0.2.0）。
 //!
-//! 短链 = rootfs 地址的简写，只映射地址，不携带启动配方（配方走 `recipes/`，
-//! 见 `docs/roadmap.md` §4）。内置集只四大发行版——与 `distro install` 子命令面
-//! 一一对应（项目主人明确纠正过：不造「工具链镜像」概念）：
+//! 短链 = rootfs 地址的简写，只映射地址，不携带启动配方（配方走 `recipes/`）。
+//! 内置集为四大发行版，与 `distro install` 子命令一一对应：
 //!
 //! ```text
 //! mx:alpine / mx:ubuntu / mx:debian / mx:kali

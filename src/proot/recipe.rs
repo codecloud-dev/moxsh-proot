@@ -52,7 +52,7 @@ pub struct RecipeIndex {
 impl RecipeIndex {
     /// 解析索引文本（手写 TOML 子集：`[[recipe]]` 数组表 + 简单键值）。
     ///
-    /// **安全约束（渗透测试 P0-2）**：`id` 会拼进容器内落盘文件名与执行
+    /// **安全约束**：`id` 会拼进容器内落盘文件名与执行
     /// 命令串，`script` 会用于 `dir.join(script)` 读文件——二者都来自用户
     /// 可写的 index.toml，必须过 [`DistroManager::valid_id`] 白名单：
     /// - `id` 含 shell 元字符（`;`/`#`/空格）或 `..` 等：整条配方丢弃，
@@ -123,7 +123,7 @@ impl RecipeIndex {
     /// **安全约束（防门禁绕过）**：用户可写目录 / `MOX_RECIPE_DIR` 只能*增*配方，
     /// 不能*降级或移除*内嵌付费/专属配方的门禁。任何与内嵌同 `id` 的配方，
     /// 其 `requires` / `fan_only` 强制取内嵌值——即便攻击者在磁盘索引里
-    /// `sed '/requires/d'` 删掉那一行，门禁依旧生效（见渗透测试报告·路径②）。
+    /// 即使从副本中删掉 requires 行，门禁依旧生效。
     pub fn load() -> RecipeIndex {
         let mut disk = None;
         if let Ok(d) = std::env::var("MOX_RECIPE_DIR") {
@@ -185,7 +185,7 @@ impl RecipeIndex {
     fn read_script(&self, recipe: &Recipe) -> ProotResult<String> {
         // 付费配方（requires 非空）：脚本内嵌混淆存储，不在磁盘落明文，
         // 仅在门禁（requires 判定）通过后由本函数解码使用——杜绝直接
-        // `sh recipes/pro-*.sh` 绕过门禁（渗透测试报告·路径③）。
+        // 直接执行脚本也不得绕过门禁。
         if !recipe.requires.is_empty() {
             return crate::proot::recipe_paid::decode_paid(&recipe.id).ok_or_else(|| {
                 ProotError::RootfsMissing(format!("付费配方脚本 {}", recipe.id))
@@ -258,7 +258,7 @@ impl RecipeIndex {
         std::fs::write(tmp.join("mox-proot-lib.sh"), EMBEDDED_LIB).map_err(ProotError::Io)?;
         let script_name = format!("mox-proot-recipe-{}.sh", recipe.id);
         std::fs::write(tmp.join(&script_name), &script).map_err(ProotError::Io)?;
-        // 【渗透测试 P0-2 修复】旧实现把 `recipe.id` 拼进 `sh -c` 命令串：
+        // id 不再拼进命令串，避免命令注入与路径穿越：
         //   `sh /tmp/mox-proot-recipe-{id}.sh && echo '配方 {id} 完成' ...`
         // 复测实测 `id = "zz;echo RECIPE_ID_INJECTION_PROOF;#"` 会在容器内执行
         // 注入命令。现在改为**直接 argv** 把脚本交给容器内 `/bin/sh`，任何
@@ -398,7 +398,7 @@ script = "vnc.sh"
 
     #[test]
     fn paid_scripts_embedded_not_plaintext_on_disk() {
-        // 渗透测试路径③：付费脚本内嵌混淆，磁盘 pro-*.sh 是占位桩，
+        // 付费脚本内嵌混淆，磁盘 pro-*.sh 是占位桩，
         // decode_paid 还原原文；直接 `sh` 磁盘文件无害。
         let s = crate::proot::recipe_paid::decode_paid("pro-gpu").expect("应有内嵌付费脚本");
         assert!(s.contains("WebGPU") || s.contains("GPU"), "解码后应含原脚本内容");
@@ -454,7 +454,7 @@ script = "vnc.sh"
 
     #[test]
     fn load_overlays_embedded_gating_even_if_disk_strips_requires() {
-        // 渗透测试路径②：攻击者在 MOX_RECIPE_DIR 的 index.toml 里删掉
+        // 攻击者在自定义配方目录的 index.toml 里删掉
         // `requires = "proot-pro"`，load() 仍必须报告该付费配方处于门禁后。
         let dir = std::env::temp_dir().join(format!("mox-proot-recipe-strip-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -509,7 +509,7 @@ script = "vnc.sh"
         let _ = std::fs::remove_dir_all(&root);
     }
 
-    // ---- 渗透测试 P0-2 回归：id 命令注入 / 路径穿越 ----
+    // ---- 回归：id 命令注入 / 路径穿越 ----
 
     /// 复测报告的真机载荷：`id = "zz;echo RECIPE_ID_INJECTION_PROOF;#"`。
     /// 旧实现会把它拼进 `sh -c` 执行注入命令；现在 parse 必须整条丢弃。

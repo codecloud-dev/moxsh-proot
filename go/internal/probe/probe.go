@@ -108,7 +108,7 @@ type Report struct {
 
 // InstallPath 返回引擎安装根目录。
 //
-// 规则（用户口径：root/非 root 依赖安装路径差异）：
+// 规则（root 与非 root 的安装路径不同）：
 //   - Termux：$PREFIX/opt/mox-proot（不碰 HOME，Termux 的 $PREFIX 即用户数据区）；
 //   - 正常 Linux + root：/opt/mox-proot（系统级，多用户共享）；
 //   - 正常 Linux + 非 root：~/.mox-proot（用户级，免 sudo）。

@@ -30,7 +30,7 @@ fn main() {
         process::exit(0);
     }
     // 子命令级 -h/--help：login/shell/launch 走 exec_* 分支，不进 proot_distro，
-    // 必须在这里统一拦下（真机实测旧版 `login -h` 回「发行版未安装: -h」rc=2）。
+    // 帮助/版本类参数需在分发前统一拦截。
     if args.len() >= 2 && args[1..].iter().any(|a| matches!(a.as_str(), "-h" | "--help")) {
         if let Some(h) = cli::subcommand_help(args[0].as_str()) {
             print!("{}", h);
@@ -50,7 +50,7 @@ fn main() {
         _ => {
             let refs: Vec<&str> = args.iter().map(String::as_str).collect();
             let out = cli::proot_distro(&refs, &root);
-            // 【2026-11-08 真机实测】未知子命令 + 文本路由里的「用法/报错」都必须
+            // 未知子命令与文本路由里的用法/报错统一走标准输出。
             // 返回非 0：旧实现 install/backup/restore 缺参数打印用法却 rc=0。
             let bad = cli::is_unknown_subcommand(&refs) || cli::is_error_output(&out);
             print!("{}", out);

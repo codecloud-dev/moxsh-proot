@@ -243,7 +243,7 @@ trap 'rm -rf "$TMP"' EXIT
 # 多级镜像兜底通道（国内外分流，2026-11 起）：
 #   - ghproxy 类：把 GitHub Release 完整 URL 整体前缀，国内直连 GitHub 超时时的兜底；
 #     实测 ghproxy.net 对 Release 资产返回 200。
-# 决策（2026-11-07）：官网静态 /dl 通道**不做**——站点从未部署 functions/dl，
+# 官网静态下载通道暂不启用，走 Release 直链：
 # 长期 404，留着只会让每个资产白等一次超时。相关占位代码与注释已整体移除，
 # 分发链路固定为 GitHub ↔ Gitee 双端 + 用户可选的 ghproxy 镜像 + sha256 强校验。
 # 注：jsDelivr 仅服务仓库内文件、不服务 Release 二进制资产（实测 404），

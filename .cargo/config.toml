@@ -1,4 +1,4 @@
-# 静态 musl 构建加固（渗透测试报告·#482：musl 静态版 distro 二进制 --help 段错误 139/SIGSEGV）。
+# 静态 musl 构建加固：避免静态二进制在启动期因 unwind 依赖崩溃。
 #
 # 根因：全静态可执行文件默认 panic=unwind，依赖 libunwind 在启动时解析展开表与
 # personality；在 musl 静态链接下该解析常失败 → 进程在 main 前 SIGSEGV（纯文本路径如

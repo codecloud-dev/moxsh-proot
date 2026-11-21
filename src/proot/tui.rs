@@ -141,7 +141,7 @@ struct App {
     welcome: bool,
     /// 后台安装任务（Some = 正在跑，TUI 画 Gauge + Spinner）。
     install: Option<InstallTask>,
-    /// 真实设备码（按 l 向 mox-id 后端申请；Some 时账号页渲染带 user_code 的真二维码）。
+    /// 设备码（按 l 申请；Some 时账号页渲染带 user_code 的二维码）。
     login: Option<DeviceCodeResp>,
     /// `/` 搜索输入（Some = 正在输入；过滤后的 rows 由 rows_backup 恢复）。
     search: Option<String>,
@@ -393,10 +393,9 @@ impl App {
     ///
     /// 复用 [`crate::proot::device_code::run_login_flow`]，该函数自管二维码渲染与轮询落盘；
     /// 绑定成功后 [`refresh_account`] 会从落盘 token 读到新状态。失败（如超时/网络）不留痕。
-    /// 向真实后端申请一次性设备码（RFC 8628）。此前账号页只有一枚固定
-    /// `/activate` 的「示意」二维码，扫了也没有 user_code，等于没接后端。
+    /// 申请一次性设备码（RFC 8628），展示给用户确认。
     fn start_login(&mut self) {
-        self.status = "正在向 mox-id 申请设备码…".into();
+        self.status = "正在申请设备码…".into();
         match device_code::request_code(&device_code::base_url()) {
             Ok(r) => {
                 self.status = format!(
@@ -1170,9 +1169,9 @@ fn render_wizard(f: &mut ratatui::Frame, area: Rect, _app: &App) {
     f.render_widget(p, area);
 }
 
-/// 账号页：展示设备绑定状态，并可直接连真实后端完成 RFC 8628 绑定。
+/// 账号页：展示设备绑定状态，并完成 RFC 8628 绑定。
 ///
-/// `l` 向 mox-id 申请一次性设备码 → 右侧二维码换成带 `user_code` 的真码；
+/// `l` 申请一次性设备码 → 右侧二维码换成带 `user_code` 的码；
 /// `r` 轮询换 token 落盘；`Enter` 仍可切到原生终端画全尺寸二维码（不被盒子裁切）。
 /// 后端 `/activate` 复用既有 GitHub / Gitee 双 OAuth。
 fn render_account(f: &mut ratatui::Frame, area: Rect, app: &App) {
@@ -1410,7 +1409,7 @@ mod tests {
     #[test]
     fn real_device_code_uri_carries_one_time_user_code() {
         // 接上后端后，账号页二维码内容必须是后端签发的、带 code 的一次性链接，
-        // 且与官网同域（Pages Functions 反代到 mox-id）。固定 /activate 不再算数。
+        // 且与官网同域，固定 /activate 不再算数。
         let uri = format!("{}/activate?code=A7K2-9FQ1", backend::PUBLIC_BASE);
         assert!(uri.starts_with(backend::PUBLIC_BASE));
         assert!(uri.contains("code="));

@@ -55,7 +55,7 @@ pub fn run_native(args: &[String]) -> i32 {
     // 拉起 ratatui 控制台。原版 Termux 无此子命令（App 内自有原生 UI）。
     // 【P1】与 mox-proot-distro 对齐：--version / -V 是纯文本路径，rc=0，
     // 不触网、不进引擎。安装脚本收尾自检依赖此语义（不再用 `|| true` 吞退出码）。
-    // 【2026-11-08 真机实测】旧版只认「唯一参数」，`mox-proot -v --version`
+    // 同时识别 -v / --version 等多种写法。
     // 被当成非法选项 rc=2。改为 -- 之前任意位置出现版本标志即返回版本；
     // `--` 之后是容器内命令，绝不吞。
     if args.iter().take_while(|a| a.as_str() != "--")
@@ -71,8 +71,8 @@ pub fn run_native(args: &[String]) -> i32 {
         #[cfg(not(feature = "tui"))]
         { return launch_sibling_tui(); }
     }
-    // login（设备码授权扫码绑定，后端 mox-id Workers）：**默认构建即提供**。
-    // 设备码模块只依赖 curl，不再被 tui feature 门禁挡在发布产物之外。
+    // login（设备码授权扫码绑定）默认构建即提供。
+    // 设备码模块只依赖 curl，不受 tui feature 门禁限制。
     if args.first().map(|s| s.as_str() == "login").unwrap_or(false) {
         return crate::proot::device_code::run_login_flow();
     }
@@ -777,7 +777,7 @@ pub fn is_unknown_subcommand(args: &[&str]) -> bool {
 
 /// 【P1】`--version` / `-V` 的版本串（二进制入口与文本路由共用）。
 /// 启动同目录下的独立 TUI 控制台二进制。
-/// 2026-11-08 真机实测：发布版 `mox-proot tui` 回「缺少 -r」、`mox-proot-distro tui`
+/// 修正 tui 子命令在发布版的路径判定：`mox-proot-distro tui`
 /// 回「本构建未启用 tui feature」——子命令对所有人都是死的。现在统一 exec 外部资产。
 pub fn launch_sibling_tui() -> i32 {
     let sibling = std::env::current_exe()
@@ -799,7 +799,7 @@ pub fn launch_sibling_tui() -> i32 {
 }
 
 /// 子命令级帮助（`list -h` / `install --help` 等）。
-/// 2026-11-08 真机实测：旧版 `install --help` 输出「未知发行版: --help」、
+/// 修正 install --help 的识别：
 /// `login -h` 输出「发行版未安装: -h」，help 标志被当成参数吃掉了。
 pub fn subcommand_help(sub: &str) -> Option<String> {
     let usage = match sub {
@@ -832,7 +832,7 @@ pub fn subcommand_help(sub: &str) -> Option<String> {
 }
 
 /// 文本路由是否返回了「用法/报错」而非正常结果。
-/// 2026-11-08 真机实测：`install` / `backup` / `restore` 缺参数都打印用法却 rc=0，
+/// 修正缺参数时返回非零退出码：
 /// 脚本与 CI 会把「参数写错」误判为成功。二进制入口据此返回 2。
 pub fn is_error_output(s: &str) -> bool {
     let mut t = s.trim_start();
@@ -1247,7 +1247,7 @@ fn cmd_fan(args: &[&str], mox_proot_root: &Path) -> String {
 ///   （一行一个 `ok <product_id> <tier> <exp>`）；
 /// - `check`：只读本地缓存（离线可用，不联网）——门禁判定同源。
 ///
-/// 购买/兑换在官网 redeem 页（兑换码或爱发电订单号 → 选设备赋予）；
+/// 购买/兑换在官网兑换页（兑换码或订单号 → 选设备赋予）；
 /// 换设备每月 1 次，也在官网操作。客户端零密钥，判定全在服务端。
 fn cmd_redeem(args: &[&str], mox_proot_root: &Path) -> String {
     match args.first().copied() {
@@ -1267,7 +1267,7 @@ fn cmd_redeem(args: &[&str], mox_proot_root: &Path) -> String {
                     "\n页面步骤：登录（GitHub）→ 点「绑定此设备」→ 自动回到本终端。\n\
                      ✅ 设备已绑定（{}，{}）。\n\
                      \x20 mox redeem status                  # 查看/刷新商品授权\n\
-                     \x20 购买后在官网 redeem 页选本设备兑换（兑换码或爱发电订单号）",
+                     \x20 购买后在官网兑换页选本设备兑换（兑换码或订单号）",
                     o.device.name, o.device.platform
                 ));
                 out
@@ -2946,7 +2946,7 @@ mod launch_tests {
         assert!(parse_engine_opts(&["-e".into(), "K=".into()]).is_ok());
     }
 
-    /// P1：诊断模式下 seccomp 自动让位（避免真机实测的 SIGABRT）。
+    /// 诊断模式下 seccomp 自动让位，避免 SIGABRT。
     /// 该断言依赖进程级环境，用 MUtex 串行，且完整恢复现场。
     #[test]
     fn seccomp_yields_to_diagnostics() {

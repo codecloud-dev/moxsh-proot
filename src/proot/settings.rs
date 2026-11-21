@@ -1,6 +1,6 @@
 //! mox-proot 用户配置（0.2.0）：`config.toml` 极简子集解析。
 //!
-//! 配置面（`docs/roadmap.md` §1/§5，均经项目主人确认）：
+//! 配置面：
 //!
 //! - **数据根三层**：`MOX_ROOT` 环境变量 > `config.toml` 的
 //!   `[general] root_dir` > 默认 `~/.mox-proot`；

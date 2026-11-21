@@ -1,11 +1,5 @@
-# 可复用发布工作流（worker）——被两条路径调用：
-#   1. release-latest.yml：push 到 main（源码/装器/CI 变更时）→ 滚动 proot-latest
-#   2. 本文件的 push tag `proot-v*` 触发器 → 版本发布（如 proot-v1.0.0）
-# 也可 workflow_dispatch 手动补发。
-#
-# 为什么拆调用方：`on.push` 同时写 tags 与 paths 时，paths 过滤会 AND 到
-# tag 事件上，tag 推送的 paths 匹配依赖 diff 计算，可能被意外跳过；
-# 拆开后 tag 路径无 paths 过滤，永远全量构建。
+# 可复用发布工作流：构建引擎、TUI、安装器与校验文件，并同步镜像。
+# 由滚动发布调用、版本 tag 或手动触发。
 on:
   workflow_call:
   push:
@@ -19,9 +13,6 @@ jobs:
   build-engine:
     name: 引擎（${{ matrix.name }}）
     runs-on: ${{ matrix.runner }}
-    # 2026-11-06 实测：apt 源抖动时「安装交叉 gcc」会无限挂住（正常整个 job
-    # ~70s，故障 run 挂了 16 分钟且无任何上限）。默认 job 超时是 360 分钟，
-    # 会把 checksums / mirror-gitee 一起堵死，Gitee 缺件永远补不上。加硬上限。
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -82,19 +73,13 @@ jobs:
         if: matrix.cross_pkg != ''
         timeout-minutes: 8
         run: |
-          # 预装检测不能只看 gcc 在不在：runner 可能预装了 gcc 但缺 C 启动文件
-          # （crti.o / Scrt1.o 由 libc6-dev-arm64-cross 提供），链接会报
-          # "cannot find crti.o"。用 -print-file-name 实测能否解析到文件。
+          # 同时检查编译器与 C 启动文件，避免链接阶段才失败。
           if command -v aarch64-linux-gnu-gcc >/dev/null 2>&1 && \
              [ "$(aarch64-linux-gnu-gcc -print-file-name=crti.o)" != "crti.o" ]; then
-            echo "交叉 gcc + crti.o 齐备，跳过 apt"
             exit 0
           fi
           export DEBIAN_FRONTEND=noninteractive
           APT='-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 -o Dpkg::Use-Pty=0'
-          # ⚠️ 必须显式装 libc6-dev-arm64-cross：它是 gcc-aarch64-linux-gnu 的
-          # Recommends，加 --no-install-recommends 会被砍掉 → 链接报 crti.o 缺失
-          # （2026-11-06 实测回归）。
           for i in 1 2 3; do
             if sudo apt-get $APT update -qq && \
                sudo apt-get $APT install -y --no-install-recommends \
@@ -104,12 +89,10 @@ jobs:
             echo "apt 第 $i 次失败，5 秒后重试"
             sleep 5
           done
-          echo "::error::安装 ${{ matrix.cross_pkg }} 失败（apt 源不可用）"
+          echo "::error::安装 ${{ matrix.cross_pkg }} 失败"
           exit 1
 
-      # musl 静态目标必须用 musl 链接器（musl-gcc），不能用宿主 glibc 的 cc/gcc——
-      # 否则 musl 目标对象被 glibc 启动文件/loader 链接，TLS/relro 错配，运行期
-      # 在 main 前 SIGSEGV（#482 的根因之一；TUI 的 x86_64-musl 已用 musl-gcc 正常）。
+      # musl 目标显式使用 musl 链接器。
       - name: 安装 musl 工具链（musl 目标）
         if: contains(matrix.target, 'musl')
         timeout-minutes: 8
@@ -143,15 +126,7 @@ jobs:
             echo "NDK 26.1.10909125 已预装，跳过安装"
           fi
 
-      # 链接器 / C 编译器按 target 分派：
-      #   - android：NDK clang wrapper（cc crate 1.5.1 认 <var>_<target> 横杠形式；
-      #     rustc 链接需 CARGO_TARGET_<TRIPLE>_LINKER）。API 28 起：
-      #     libc::getrandom 自 bionic API 28 才有符号（crypto.rs 直调 +
-      #     urandom 运行时兜底），README 最低要求即 Android 9 = API 28
-      #   - aarch64-gnu / aarch64-musl：apt 的 aarch64-linux-gnu-gcc。
-      #     musl 的 crt 对象由 rustup 自包含提供，但 rustc 默认仍以 `cc`
-      #     为链接驱动——跨架构会落到宿主 gcc（EM 架构不匹配），须显式指定
-      #   - x86_64-musl：宿主即 x86_64，默认 `cc` 直链即可
+      # 按目标平台设置交叉编译器与链接器。
       - name: 配置 CC / AR / LINKER
         run: |
           case "${{ matrix.target }}" in
@@ -172,16 +147,9 @@ jobs:
               echo "CC_aarch64-unknown-linux-gnu=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
               ;;
             aarch64-unknown-linux-musl)
-              # crt 对象走 rustup 自包含 musl；链接驱动必须交叉 gcc
-              # ⚠️ 已知更优解：用真正的 aarch64 musl 交叉链接器（如 rust-musl-cross
-              # 镜像的 aarch64-linux-musl-gcc）替代 gnu-gcc，可从根上消除 TLS/relro 错配；
-              # 当前 CI 无该工具链，先用 gnu-gcc + panic=abort（见 .cargo/config.toml / Cargo.toml）
-              # 规避启动期 unwinder 崩溃，后续再切 musl 交叉链接器。
               echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
               ;;
             x86_64-unknown-linux-musl)
-              # 必须与 TUI 的 x86_64-musl 一致用 musl-gcc，否则宿主 glibc cc 链接 musl 对象
-              # → TLS/relro 错配 → 启动 SIGSEGV（#482）。
               echo "CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=musl-gcc" >> "$GITHUB_ENV"
               ;;
           esac
@@ -189,9 +157,7 @@ jobs:
       - name: cargo build --release（两个 bin）
         run: cargo build --release --target ${{ matrix.target }} --bins
 
-      # 资产双命名（缺一即有一侧安装器死链）：
-      #   - <name>：Go 安装器 AssetName 约定 mox-proot-<goos>-<arch>[-musl]
-      #   - <legacy_name>：bash 一键脚本约定 mox-proot-<triple>（仅 android）
+      # 同时产出新命名与兼容命名的资产。
       - name: 收集产物
         run: |
           mkdir -p dist
@@ -203,10 +169,7 @@ jobs:
           done
           ls -la dist/
 
-      # 【审计 A6 / S14 复核】链接参数改了二进制布局，必须对最终 android 产物
-      # 逐个核对 PT_LOAD 的 p_align ≥ 0x4000（16KB）。任一不足即让 job 变红，
-      # 防止 -Wl,-z,max-page-size=16384 被回退而无人察觉。debug/release 用
-      # 同一套 rustflags，这里校验的就是实际发布出去的二进制。
+      # 校验发布产物的 16KB 页对齐要求。
       - name: 校验 16KB 页对齐（android 产物 p_align ≥ 0x4000）
         if: matrix.ndk == 'true'
         run: |
@@ -239,19 +202,7 @@ jobs:
           files: dist/*
           fail_on_unmatched_files: true
 
-  # TUI 控制台二进制：依赖 ratatui 0.29 / qrcode 0.14，依赖链要求 rustc 1.88+，
-  # 而引擎 CI 锁 1.86.0（glibc 2.35 基线）——故单独用 stable 构建，不塞进
-  # build-engine 矩阵。此前 `--bins` 不带 tui，release 里根本没有 TUI 资产。
-  #
-  # 【2026-11-08 五轮 CI 实证结论】只发布 gnu TUI，暂不发布 musl TUI：
-  #   · TUI 依赖链（darling 0.24 / image 0.25 / instability）MSRV ≥ 1.88，
-  #     而能产出「可跑 static-pie」的引擎 toolchain 是 1.86.0 —— 用 1.86 编不了
-  #     TUI，用 ≥1.88 编 musl 又退回动态链接（缺 ld-musl 的机器启动即 SIGSEGV）。
-  #   · 强行 -static 得到静态 EXEC，但 TUI 依赖仍崩在第一个 syscall 之前（strace 空）。
-  # 与其发布一个「装完一跑就段错误」的坏资产、并把整条发布链路（checksums /
-  # Gitee 镜像）一起拖红，不如只发 gnu TUI：musl 平台由安装器自动跳过 TUI 资产并
-  # 降级命令版（launch_sibling_tui 缺文件时友好提示 rc=2，不硬崩）。
-  # 待 TUI 依赖降到 MSRV 1.86 或换掉静态 musl CRT 方案后再恢复该矩阵项。
+  # TUI 使用 stable 工具链单独构建，当前只发布 gnu 资产。
   build-tui:
     name: TUI 控制台（${{ matrix.name }}）
     runs-on: ubuntu-22.04
@@ -276,22 +227,20 @@ jobs:
         run: |
           set -e
           BIN="target/${{ matrix.target }}/release/mox-proot-tui"
-          # 无条件打印链接形态：musl 启动期 SIGSEGV 反复出现，留足现场证据。
-          echo "=== 产物链接形态（诊断）==="
+          echo "=== 产物链接形态 ==="
           file "$BIN"
           readelf -h "$BIN" | grep -iE "Type:" || true
           readelf -l "$BIN" | grep -i interp || echo "NO_INTERP（静态，无动态加载器）"
           if [[ "${{ matrix.target }}" == *musl* ]]; then
             if ! file "$BIN" | grep -Eq 'static'; then
-              echo "::error::musl TUI 产物不是静态链接，启动期会 SIGSEGV"
+              echo "::error::musl TUI 产物不是静态链接"
               exit 1
             fi
           fi
-          # x86_64 产物可本机直跑：--version / --help 必须在无 TTY 下 rc=0。
-          # 这一条会在 CI 里拦住「装完见不到 TUI」的坏资产。
+          # 无 TTY 下自检版本与帮助输出。
           if [[ "${{ matrix.target }}" == x86_64* ]]; then
             if ! "$BIN" --version; then
-              echo "::error::TUI 无 TTY --version 崩溃（装完见不到 TUI），抓 syscall 现场"
+              echo "::error::TUI 无 TTY --version 自检失败，输出调用跟踪"
               command -v strace >/dev/null 2>&1 || sudo apt-get install -y -qq strace >/dev/null 2>&1 || true
               if command -v strace >/dev/null 2>&1; then
                 strace -f -o /tmp/tui.strace "$BIN" --version || true
@@ -381,27 +330,17 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'proot-latest' }}
-          # 2026-10-25 事故修复：原先只传 dist/SHA256SUMS，漏传逐资产 <asset>.sha256——
-          # bash 安装器 fetch_asset 按 <资产>.sha256 成对寻址，缺文件即「放不下就不装」
-          # 直接 die（实跑 curl|bash 复现：主二进制下载成功 → .sha256 404 → 安装中止）。
-          # 两者都要：SHA256SUMS 供人肉核对，<asset>.sha256 供安装器自动拉取。
+          # 同时上传汇总清单与逐资产校验文件。
           files: |
             dist/SHA256SUMS
             dist/*.sha256
           fail_on_unmatched_files: true
 
-  # 国内镜像：把全部 Release 资产（引擎 + distro + Go 安装器 + 校验文件）同步到
-  # Gitee（codecloud-dev/moxsh-proot release 1217672）。Gitee 是 GitHub 的
-  # 源码镜像，但「不自动同步二进制资产」——所以国内用户此前选 Gitee 源会 404。
-  # 本步用 GITEE_TOKEN 把二进制也推上去，Gitee 路径对国内用户真正可用。
-  # 前置：仓库 Secrets 配置 GITEE_TOKEN（codecloud-dev 满权限写令牌）。
+  # 将 Release 资产同步到镜像仓库。
   mirror-gitee:
-    name: 镜像到 Gitee（国内线路）
+    name: 镜像到 Gitee
     needs: [checksums]
     runs-on: ubuntu-latest
-    # 【渗透复测 P2 修复】旧 job 无任何超时/重试上限：GitHub Actions → Gitee
-    # 的 TLS 连接失败（curl exit 35/56）时，每个资产都要耗满默认重试，整条
-    # job 实测拖 1.5 小时才失败，把 release 卡死。这里加 job 级硬超时。
     timeout-minutes: 120
     env:
       GITEE_OWNER: codecloud-dev
@@ -425,25 +364,17 @@ jobs:
           set -u
           API="https://gitee.com/api/v5/repos/${GITEE_OWNER}/${GITEE_REPO}/releases/${GITEE_RID}/attach_files"
           cd dist
-          # 0) 凭据自检：attach_files 的列表接口是公开的，GET 成功**不能**证明
-          #    token 有效；DELETE/POST 才需要写权限。旧版把 DELETE 401 误判成
-          #    「线路不通」，实测连红 3 个资产却查不到根因。这里单独验一次。
+          # 单独校验写权限，避免读接口成功掩盖凭据问题。
           authcode="$(curl -sS -o /tmp/guser.json -w '%{http_code}' \
             --connect-timeout 10 --max-time 30 \
             -H "Authorization: token ${GITEE_TOKEN}" \
             "https://gitee.com/api/v5/user" 2>/dev/null || echo 000)"
           if [ "$authcode" = "401" ] || [ "$authcode" = "403" ]; then
-            echo "::error::GITEE_TOKEN 无效或权限不足（/api/v5/user HTTP ${authcode}）——这是凭据问题不是线路故障，请更新仓库 Secret"
+            echo "::error::镜像凭据无效或权限不足（HTTP ${authcode}）"
             exit 1
           fi
-          echo "GITEE_TOKEN 凭据自检：HTTP ${authcode}"
-          # 1) 拉 Gitee 资产清单（name / id / size），分页拉全量。
-          #    ⚠️ Gitee attach_files 列表默认每页仅 20 条，必须带 per_page=100 逐页拉：
-          #    只看第一页会把已存在资产误判缺失 → 重复上传 / 复核误报（实测踩过）。
-          #    ⚠️ 只按文件名跳过不够：滚动 Release 每次重建都产出新二进制，同名但
-          #    size 不同 = Gitee 上还是旧版，国内用户下载拿到修复前代码（实测 14 个）。
-          #    故同名时比对 size，不一致先 DELETE 旧附件（Gitee API 成功返回 204）再传新。
-          #    列表接口失败不致命：退化成「全部尝试上传」，仍由下面的有限重试兜住。
+          echo "镜像凭据自检：HTTP ${authcode}"
+          # 分页读取资产清单；列表失败时退化为逐项尝试上传。
           : > /tmp/gassets.tsv
           for page in 1 2 3 4 5 6 7 8 9 10; do
             if ! curl -sS --connect-timeout 10 --max-time 30 -o /tmp/glist.json \
@@ -462,8 +393,7 @@ jobs:
           has() { printf '%s\n' "$existing" | grep -Fxq "$1"; }
           # 查某资产的 "<id> <size>"；不存在则返回空
           gmeta() { awk -F'\t' -v n="$1" '$1==n {print $2" "$3; exit}' /tmp/gassets.tsv; }
-          # 同名重复自愈：上一轮若「新版已传、旧版删除失败」会留下两条同名附件，
-          # 浏览器按文件名下载时可能拿到旧二进制。保留 size 与本地一致的，其余删掉。
+          # 清理同名重复附件，保留与本地大小一致的条目。
           python3 -c 'import os; rows=[l.rstrip("\n").split("\t") for l in open("/tmp/gassets.tsv")]; d={}; [d.setdefault(r[0],[]).append((r[1],r[2])) for r in rows if len(r)>=3]; print("\n".join(aid for n,its in d.items() if len(its)>1 for aid,sz in its if aid != next((a for a,s2 in its if os.path.isfile(n) and s2==str(os.path.getsize(n))), None)))' > /tmp/gdupids.txt 2>/dev/null || true
           while read -r dupid; do
             [ -z "$dupid" ] && continue
@@ -473,14 +403,8 @@ jobs:
             echo "DEDUP 移除重复附件 id=${dupid} HTTP=${dc}"
           done < /tmp/gdupids.txt
 
-          # 并发预下载 Gitee 附件用于内容 sha256 复核。
-          # 旧实现在主循环里串行 `curl --max-time 180` 逐资产下载：44 个附件
-          # 最坏 132 分钟，实测 2026-11-06 跑满 38 分钟仍卡在 installer 段、
-          # 90 分钟 step 根本不够，最后只能取消 job 由本地收口。改为 8 路并发
-          # 预取后固定 ~2 分钟，主循环只读本地文件算 sha256，零网络等待。
+          # 并发预取远端资产用于内容校验；下载失败则保守重传。
           mkdir -p /tmp/gcheck
-          # 只传直链：文件名取 URL 末段（Gitee 的 browser_download_url 末段即资产名）。
-          # 下载失败就不留文件 → 主循环按「无法证明一致」保守重传，绝不静默 SKIP。
           awk -F'\t' '$1 ~ /^mox-proot-/ && $4 != "" {print $4}' /tmp/gassets.tsv \
             | xargs -r -P 8 -I URL bash -c '
                 u="URL"; n="${u##*/}"
@@ -493,25 +417,13 @@ jobs:
           ok=0; fail=0; consecutive=0; uploads=0
           : > /tmp/g_failed.tsv
           : > /tmp/g_still_failed.txt
-          # 【2026-11-08 真机复测修复】记录本轮「已确认与本地一致」的二进制。
-          # 旧版按文件名字母序遍历，5MB 级 installer POST 超时失败时，同名
-          # `.sha256` 却已刷新成新 hash → 国内镜像「校验文件指向新二进制、
-          # 文件仍是旧的」，用户 sha256sum -c 必挂，比 job 变红更隐蔽。
-          # 现在二进制没确认同步就不许动它的 .sha256，保证任何时刻国内镜像
-          # 都是自洽的一套（要么全旧、要么全新）。
+          # 只在本轮确认二进制一致后才刷新对应校验文件。
           : > /tmp/g_synced.txt
-          # 【2026-11-15 真修】把「POST + 有限重试 + 先传后删」抽成函数，
-          # 主循环与补传轮共用同一条路径，避免两份逻辑漂移。
-          # 关键变化：重试 2→3 次（退避 5/10s）、单次超时按体积收紧到
-          # 420s/180s、curl 失败只记一次 000（旧写法 -w 输出 000 又
-          # `|| echo 000`，日志里出现误导排障的 HTTP 000000）、失败资产
-          # 统一记入 /tmp/g_failed.tsv 交给补传轮再试。
+          # 上传与有限重试共用同一路径；先传新后删旧。
           post_asset() {
             local f="$1" fsz="$2" pending_del="$3" code="" attempt maxtime dcode
             if [ "$fsz" -ge 1048576 ]; then maxtime=420; else maxtime=180; fi
             for attempt in 1 2 3; do
-              # 覆盖写响应体：POST 超时会留下上一个资产的 JSON，旧版据此打印的
-              # 报错内容其实是别的资产，误导排障。
               : > /tmp/g.json
               code="$(curl -sS -o /tmp/g.json -w '%{http_code}' -X POST \
                 --connect-timeout 10 --max-time "$maxtime" \
@@ -519,7 +431,7 @@ jobs:
                 "${API}" -F "file=@${f}" 2>/dev/null)" || code=000
               if [ "$code" = "200" ] || [ "$code" = "201" ]; then break; fi
               if [ "$code" = "401" ] || [ "$code" = "403" ]; then
-                echo "::error::POST ${f} 返回 HTTP ${code}：GITEE_TOKEN 无附件上传权限，请更新仓库 Secret"
+                echo "::error::POST ${f} 返回 HTTP ${code}：镜像凭据无附件上传权限"
                 return 2
               fi
               [ "$attempt" -lt 3 ] && sleep "$((attempt * 5))"
@@ -535,7 +447,7 @@ jobs:
                 --connect-timeout 10 --max-time 120 \
                 -H "Authorization: token ${GITEE_TOKEN}" "${API}/${pending_del}" 2>/dev/null)" || dcode=000
               if [ "$dcode" = "401" ] || [ "$dcode" = "403" ]; then
-                echo "::error::DELETE ${f} 返回 HTTP ${dcode}：GITEE_TOKEN 无附件删除权限，请更新仓库 Secret"
+                echo "::error::DELETE ${f} 返回 HTTP ${dcode}：镜像凭据无附件删除权限"
                 return 2
               fi
               if [ "$dcode" = "200" ] || [ "$dcode" = "201" ] || [ "$dcode" = "204" ] || [ "$dcode" = "404" ]; then
@@ -550,9 +462,7 @@ jobs:
           }
           for f in *; do
             [ "$f" = "SHA256SUMS" ] && continue
-            # 旧名 moxsh-* 是改名前的历史遗留资产，安装脚本与客户端只用
-            # mox-proot-* 新名；其中包含 5MB 旧 installer，逐个 DELETE+POST
-            # 会把整条 job 拖到超时（09:04 实测）。跳过它们不影响国内下载。
+            # 仅同步当前命名的资产。
             case "$f" in mox-proot-*) ;; *) echo "SKIP $f（旧名历史资产，不再同步）"; continue ;; esac
             case "$f" in
               *.sha256)
@@ -568,9 +478,7 @@ jobs:
               meta="$(gmeta "$f")"
               gid="${meta%% *}"; gsz="${meta#* }"
               if [ "$gsz" = "$fsz" ]; then
-                # ⚠️ 同 size ≠ 同内容：滚动 Release 可能产出尺寸相同、字节不同的
-                # 二进制（实测 mox-proot-linux-amd64-musl 同名同 size 却是旧版），
-                # 只比 size 会一直 SKIP，国内用户永远下不到修复版。按内容 sha256 复核。
+                # 大小相同不代表内容一致，按 sha256 复核。
                 l_sum="$(sha256sum "$f" | cut -d' ' -f1)"
                 g_sum=""
                 if [ -s "/tmp/gcheck/$f" ]; then
@@ -582,11 +490,9 @@ jobs:
                   continue
                 fi
                 if [ -z "$g_sum" ]; then
-                  # 拿不到远端内容时**绝不 SKIP**：无法证明一致就按「可能过期」，
-                  # 直接重传本次产物（宁可多传，也不能让国内继续下发旧二进制）。
-                  echo "REFRESH-UNVERIFIED $f（远端内容复核下载失败，保守重传）"
+                  echo "REFRESH-UNVERIFIED $f（远端内容无法验证，保守重传）"
                 else
-                  echo "REFRESH-CONTENT $f（size 相同但 sha256 不同：国内仍是旧二进制）"
+                  echo "REFRESH-CONTENT $f（内容 sha256 不同）"
                 fi
                 pending_del="$gid"
               else
@@ -596,8 +502,7 @@ jobs:
             else
               echo "UPLOAD $f（Gitee 缺失）"
             fi
-            # 【关键】先传新、后删旧：POST 超时/失败时旧附件仍在，绝不会重演
-            # 09:04 那次「DELETE 成功但 POST 超时 → 国内镜像直接缺件」的事故。
+            # 先传新、后删旧，避免上传失败时旧资产丢失。
             post_asset "$f" "$fsz" "$pending_del"
             rc=$?
             [ "$rc" -eq 2 ] && exit 1
@@ -617,11 +522,7 @@ jobs:
             [ $((uploads % 8)) -eq 0 ] && sleep 2
           done
 
-          # 【2026-11-15 真修】补传轮：2026-11-14 run 43600421482 实测
-          # 「40 成功 / 1 失败」——mox-proot-distro-linux-arm64 两次 POST 都
-          # HTTP 000，其余资产全同步完，最后按 fail>0 主动报红。这不是超时，
-          # 也不是全量追赶失败。这里对失败资产再走一遍同一条 post_asset 路径，
-          # 成功才从 fail 扣掉；仍失败就继续报红并列出资产名，绝不把失败藏成绿。
+          # 对失败资产再重试一次，仍失败则保持报红。
           if [ -s /tmp/g_failed.tsv ]; then
             echo "=== 补传轮：$(wc -l < /tmp/g_failed.tsv) 个资产再试一次 ==="
             while IFS=$'\t' read -r f pending_del; do
@@ -653,11 +554,7 @@ jobs:
             done < /tmp/g_failed.tsv
           fi
 
-          # 5) 【2026-11-08 国内镜像上线验收修复】清理 Gitee 上「GitHub 已下架」的
-          #    陈旧附件。镜像 job 历来只做增量上传/刷新、从不删除，GitHub 侧删掉的
-          #    坏资产会永久留在国内：实测 `mox-proot-tui-linux-amd64-musl`（动态
-          #    musl，--version 直接 SIGSEGV rc=139）在 Gitee 仍 HTTP 200 可下载。
-          #    只清理 `mox-proot-*` 前缀；旧名 `moxsh-*` 历史资产不动。
+          # 清理源端已下架的当前命名资产。
           while IFS=$'\t' read -r gname gid gsz gurl; do
             case "$gname" in mox-proot-*) ;; *) continue ;; esac
             [ -z "$gid" ] && continue
@@ -667,10 +564,10 @@ jobs:
               -H "Authorization: token ${GITEE_TOKEN}" "${API}/${gid}" 2>/dev/null || echo 000)"
             if [ "$pcode" = "200" ] || [ "$pcode" = "204" ] || [ "$pcode" = "404" ]; then
               ok=$((ok+1))
-              echo "PURGE $gname（GitHub 已无此资产，已从国内镜像下架）HTTP=${pcode}"
+              echo "PURGE $gname（源端已无此资产，已从镜像下架）HTTP=${pcode}"
             else
               fail=$((fail+1))
-              echo "::error::PURGE $gname 失败 HTTP=${pcode}（坏资产仍可被国内用户下载）"
+              echo "::error::PURGE $gname 失败 HTTP=${pcode}"
             fi
           done < /tmp/gassets.tsv
 
@@ -679,11 +576,8 @@ jobs:
             echo "未同步资产清单："
             sed 's/^/  - /' /tmp/g_still_failed.txt
           fi
-          # 4) 结果诊断：允许「零新增」（资产已齐）通过；有失败则**让 job 变红**，
-          #    绝不静默放行——同名旧二进制会让国内用户下到修复前版本，
-          #    那种「CI 绿但东西没更新」正是要杜绝的假绿。GitHub Release
-          #    本身在独立 job 已完成，重试本 job 即可补齐国内镜像。
+          # 资产已齐可零更新通过；仍有失败则让 job 变红。
           if [ "$fail" -gt 0 ]; then
-            echo "::error::Gitee 仍有 $fail 个资产未同步；请重试本 job 或用本地补传脚本补齐"
+            echo "::error::镜像仍有 $fail 个资产未同步；请重试本 job"
             exit 1
           fi
